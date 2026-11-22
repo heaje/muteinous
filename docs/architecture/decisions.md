@@ -1,4 +1,6 @@
-<!-- Complete snapshot from the canonical ChatGPT Space Architecture Decision Log, captured 2026-11-22. Preserve historical status, including D70 superseded by D71. Space remains canonical until an explicit transition. -->
+> **Repository snapshot notice (2026-11-22).** The text following this notice is the **complete, unchanged D01–D161 source log** from ChatGPT Space, assembled from its Markdown blocks in canonical order. D70 is historically retained but **superseded by D71**; D159 narrows the first release. Historical process/status lines (including the former planning-stage restriction on repository edits) describe when planning occurred and do not prohibit later **authorized** PR implementation. No architectural decision is amended by this notice.
+>
+> **Source-of-truth transition pending:** Until explicitly approved and synchronized, [the Space page](https://chatgpt.com/space/page_35393eb6e1848191ae3624e3148e3dbd) remains canonical. Agents without Space access should use this *complete repository copy* and escalate discrepancies rather than guessing.
 
 # Architecture decision log
 

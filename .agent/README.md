@@ -1,48 +1,58 @@
-# Temporary agent working knowledge
+# Temporary implementation knowledge
 
-This directory is **not an architecture source of truth** and is **not a replacement for GitHub Issues/PRs**. It prevents repeated investigation across agents and sessions.
+This directory is a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Its files are version-controlled so agents without ChatGPT Space or issue-comment access can benefit from earlier work.
 
-## Read order
+## Where information belongs
 
-1. The assigned Issue or PR and current branch/code.
-2. `AGENTS.md`, applicable architecture/release/testing docs.
-3. `current-state.md` and only the relevant topic findings.
+| Kind | Home | Lifetime |
+| --- | --- | --- |
+| Architectural contract and release policy | `docs/architecture/`; `docs/release-scope.md` | Permanent |
+| Live task ownership, progress and acceptance | GitHub Issue / PR | Per task; retained by GitHub |
+| Incomplete implementation handoff | Issue / PR **and optionally a branch-local `handoffs/<task>.md`** | Until work resumes/completes |
+| Reusable, nonobvious technical discovery | `findings/<topic>.md` | Until incorporated, disproved or irrelevant |
+| Cross-task next steps and blockers | `current-state.md` | Reconciled periodically |
+| Enduring setup, tooling or testing procedure | `docs/development.md`; `docs/testing.md` | Permanent |
 
-## What goes where
+Never use these notes to override D01–D161 or infer that an unverified suggestion is implemented. Read only findings relevant to the task and verify against the code.
 
-| Knowledge | Location |
-| --- | --- |
-| Enduring requirement or decision | `docs/architecture/` |
-| Task ownership, progress, acceptance, unfinished branch handoff | GitHub Issue/PR |
-| Cross-task discovery, reproduction, pitfalls, temporary workaround | `.agent/findings/<topic>.md` |
-| Near-term cross-task coordination | `current-state.md` |
-| Enduring developer or test procedure | `docs/development.md` or `docs/testing.md` |
+## Reusable findings
 
-## Finding template
+Create a separate focused Markdown file in [`findings/`](findings/README.md) only when a discovery would save another agent meaningful investigation. Prefer an actionable conclusion and **reproducible evidence** over a transcript of attempts.
 
-Use only when a finding is useful; do not create placeholder files.
+Suggested structure:
 
-```md
-# Topic
+```markdown
+# Short topic
 Status: active | resolved | superseded
-Relevant: Issue/PR links, decision IDs
 Last verified: YYYY-MM-DD
-Retire or promote when: <specific condition>
+Related: issue/PR, decision IDs, code or test paths
+Retire/promote when: a concrete fix, verification, or date/event occurs
 
-## Finding and scope
-<what is actually known; where it applies>
+## Finding and limitations
+What is known; where it applies; what is still uncertain.
 
-## Evidence / reproduction
-<commands, logs, code paths, measurements, or links>
+## Reproduction / evidence
+Commands, conditions, measurements, failure text, and links as appropriate.
 
-## Implications / recommended next step
-<actionable guidance, caveats, unknowns>
+## Recommendation
+The next investigation or implementation step.
 ```
 
-Do not store credentials, personal information, huge logs, or speculation presented as fact. Validate old findings against current code. Promote durable knowledge into permanent docs, then delete the temporary finding. Prefer short, topic-specific notes over agent diaries.
+Do not commit passwords, keys, personal details, machine-specific confidential paths, private game assets, or giant logs. A finding can be unverified, but label it **hypothesis**, not conclusion.
 
-## End-of-session handoff for unfinished work
+## Unfinished-work handoffs
 
-Post to the Issue or PR: current branch and commit, what changed, next concrete steps, tests run/results, blockers, and links to relevant findings. Do this even if the work is not PR-ready. Git history and Issue/PR comments preserve history; do not create a permanent journal.
+When pausing incomplete work, write a short handoff on the related Issue or PR. For repository-only agents, commit a **task-specific branch-local file** in [`handoffs/`](handoffs/README.md) so the next agent can recover without needing the original chat or GitHub comments. Prefer an Issue/PR comment when available; the branch note is a portability fallback, **not a competing global status source**.
 
-`current-state.md` is coordinated after significant merges or milestone reviews to avoid concurrent-agent merge conflicts.
+Include:
+- Task/Issue and PR link (if present); **exact branch and last pushed commit**.
+- Implemented changes and files touched; decisions or acceptance criteria already addressed.
+- Remaining concrete steps, known blockers and unresolved risks.
+- Reproduction commands, test outputs and tests **not** run.
+- Relevant findings and any assumptions that still need verification.
+
+Before handing off, push a checkpoint commit if safe and possible; uncommitted local work is not transferable. Do not claim that a handoff file on another branch is visible on `main`. Point the incoming agent to the right branch/PR. Remove obsolete branch-local handoffs before merge or when the task is completed; Git history preserves them.
+
+## Coordination and cleanup
+
+The coordinator updates `current-state.md` after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the directory small; **a discovery is valuable, not its chronological investigation log**.

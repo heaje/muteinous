@@ -1,19 +1,17 @@
 # Muteinous v2
 
-Muteinous v2 is a Windows-first desktop application for reviewing and safely applying profanity censorship to supported video-game content. This repository is the new implementation, not a port of the legacy game-specific implementation.
+Muteinous v2 is the new Windows-first desktop application for source-aware profanity censorship of supported video-game content. Its architecture avoids maintained game-specific knowledge and prioritizes preserving original data and native asset fidelity.
 
-**Status:** architecture reviewed through D161; implementation readiness: **ready with nonblocking open items**. Initial release scope is reduced by D159. There is not yet an application implementation.
+**Current state:** architecture decisions D01–D161 agreed; implementation-readiness review concluded **ready with nonblocking open items**. This branch contains **documentation handoff only**; no runnable v2 application or CI has been established.
 
-## Start here
+## For coding agents and contributors
 
-- [Initial-release scope](docs/release-scope.md)
-- [Architecture decisions D01–D161](docs/architecture/decisions.md)
-- [Code organization](docs/architecture/code-organization.md)
-- [Testing requirements](docs/testing.md)
-- [Development and PR workflow](docs/development.md)
-- [Decision coverage tracker](docs/architecture/decision-coverage.md)
-- [Agent instructions](AGENTS.md) and [temporary handoffs](.agent/README.md)
+1. Read [`AGENTS.md`](AGENTS.md), then the [initial-release scope](docs/release-scope.md) and the applicable **full architecture decisions**.
+2. Use [code organization](docs/architecture/code-organization.md) and [test policy](docs/testing.md) when implementing.
+3. Check [implementation/development workflow](docs/development.md), [decision coverage](docs/architecture/decision-coverage.md) and [temporary handoffs/findings](.agent/README.md) before repeating investigations.
 
-The original architecture decision log is at https://chatgpt.com/space/page_35393eb6e1848191ae3624e3148e3dbd. The committed decision log is a complete snapshot at documentation handoff. **Until an explicit source-of-truth transition is agreed, the Space page remains canonical.** Do not silently change or reinterpret decisions in either location.
+## Architecture decision history
 
-No game-specific maintained adapters, title lists, or fixtures should be introduced; discover capabilities from actual content evidence (D132–D133).
+[`docs/architecture/decisions.md`](docs/architecture/decisions.md) contains the complete D01–D161 historical text, with D70 superseded by D71 and the D159 initial-release reduction preserved. The source [ChatGPT Space Architecture Decision Log](https://chatgpt.com/space/page_35393eb6e1848191ae3624e3148e3dbd) remains canonical **until an explicit repository transition is approved**. The committed snapshot is intentionally usable by coding agents who cannot read ChatGPT Space.
+
+Do not import old game's title-specific Hushpatch adapter logic or fixtures: any supported native format/engine capability must be established through reusable evidence-driven mechanisms (D132–D133).

@@ -1,167 +1,175 @@
-# Architecture decision implementation coverage
+# Architecture decision implementation and verification coverage
 
-This is an implementation/evidence tracker, not a second architecture log. Every decision is documented in [decisions.md](decisions.md); **documented does not mean implemented or verified**. Update phase, status, Issue/PR and test evidence as real work lands. D70 is superseded by D71.
+**Source:** complete original [D01–D161 decision history](decisions.md); **tracked as of:** 2026-11-22. This is an evidence ledger, not a new architecture or a task board. Every numbered decision is already **documented**; documentation alone is **not implementation or verification**.
 
-| Decision | Implementation status | Issue / PR | Verification evidence |
-| --- | --- | --- | --- |
-| D01 | Not implemented | — | — |
-| D02 | Not implemented | — | — |
-| D03 | Not implemented | — | — |
-| D04 | Not implemented | — | — |
-| D05 | Not implemented | — | — |
-| D06 | Not implemented | — | — |
-| D07 | Not implemented | — | — |
-| D08 | Not implemented | — | — |
-| D09 | Not implemented | — | — |
-| D10 | Not implemented | — | — |
-| D11 | Not implemented | — | — |
-| D12 | Not implemented | — | — |
-| D13 | Not implemented | — | — |
-| D14 | Not implemented | — | — |
-| D15 | Not implemented | — | — |
-| D16 | Not implemented | — | — |
-| D17 | Not implemented | — | — |
-| D18 | Not implemented | — | — |
-| D19 | Not implemented | — | — |
-| D20 | Not implemented | — | — |
-| D21 | Not implemented | — | — |
-| D22 | Not implemented | — | — |
-| D23 | Not implemented | — | — |
-| D24 | Not implemented | — | — |
-| D25 | Not implemented | — | — |
-| D26 | Not implemented | — | — |
-| D27 | Not implemented | — | — |
-| D28 | Not implemented | — | — |
-| D29 | Not implemented | — | — |
-| D30 | Not implemented | — | — |
-| D31 | Not implemented | — | — |
-| D32 | Not implemented | — | — |
-| D33 | Not implemented | — | — |
-| D34 | Not implemented | — | — |
-| D35 | Not implemented | — | — |
-| D36 | Not implemented | — | — |
-| D37 | Not implemented | — | — |
-| D38 | Not implemented | — | — |
-| D39 | Not implemented | — | — |
-| D40 | Not implemented | — | — |
-| D41 | Not implemented | — | — |
-| D42 | Not implemented | — | — |
-| D43 | Not implemented | — | — |
-| D44 | Not implemented | — | — |
-| D45 | Not implemented | — | — |
-| D46 | Not implemented | — | — |
-| D47 | Not implemented | — | — |
-| D48 | Not implemented | — | — |
-| D49 | Not implemented | — | — |
-| D50 | Not implemented | — | — |
-| D51 | Not implemented | — | — |
-| D52 | Not implemented | — | — |
-| D53 | Not implemented | — | — |
-| D54 | Not implemented | — | — |
-| D55 | Not implemented | — | — |
-| D56 | Not implemented | — | — |
-| D57 | Not implemented | — | — |
-| D58 | Not implemented | — | — |
-| D59 | Not implemented | — | — |
-| D60 | Not implemented | — | — |
-| D61 | Not implemented | — | — |
-| D62 | Not implemented | — | — |
-| D63 | Not implemented | — | — |
-| D64 | Not implemented | — | — |
-| D65 | Not implemented | — | — |
-| D66 | Not implemented | — | — |
-| D67 | Not implemented | — | — |
-| D68 | Not implemented | — | — |
-| D69 | Not implemented | — | — |
-| D70 | Superseded by D71 | — | — |
-| D71 | Not implemented | — | — |
-| D72 | Not implemented | — | — |
-| D73 | Not implemented | — | — |
-| D74 | Not implemented | — | — |
-| D75 | Not implemented | — | — |
-| D76 | Not implemented | — | — |
-| D77 | Not implemented | — | — |
-| D78 | Not implemented | — | — |
-| D79 | Not implemented | — | — |
-| D80 | Not implemented | — | — |
-| D81 | Not implemented | — | — |
-| D82 | Not implemented | — | — |
-| D83 | Not implemented | — | — |
-| D84 | Not implemented | — | — |
-| D85 | Not implemented | — | — |
-| D86 | Not implemented | — | — |
-| D87 | Not implemented | — | — |
-| D88 | Not implemented | — | — |
-| D89 | Not implemented | — | — |
-| D90 | Not implemented | — | — |
-| D91 | Not implemented | — | — |
-| D92 | Not implemented | — | — |
-| D93 | Not implemented | — | — |
-| D94 | Not implemented | — | — |
-| D95 | Not implemented | — | — |
-| D96 | Not implemented | — | — |
-| D97 | Not implemented | — | — |
-| D98 | Not implemented | — | — |
-| D99 | Not implemented | — | — |
-| D100 | Not implemented | — | — |
-| D101 | Not implemented | — | — |
-| D102 | Not implemented | — | — |
-| D103 | Not implemented | — | — |
-| D104 | Not implemented | — | — |
-| D105 | Not implemented | — | — |
-| D106 | Not implemented | — | — |
-| D107 | Not implemented | — | — |
-| D108 | Not implemented | — | — |
-| D109 | Not implemented | — | — |
-| D110 | Not implemented | — | — |
-| D111 | Not implemented | — | — |
-| D112 | Not implemented | — | — |
-| D113 | Not implemented | — | — |
-| D114 | Not implemented | — | — |
-| D115 | Not implemented | — | — |
-| D116 | Not implemented | — | — |
-| D117 | Not implemented | — | — |
-| D118 | Not implemented | — | — |
-| D119 | Not implemented | — | — |
-| D120 | Not implemented | — | — |
-| D121 | Not implemented | — | — |
-| D122 | Not implemented | — | — |
-| D123 | Not implemented | — | — |
-| D124 | Not implemented | — | — |
-| D125 | Not implemented | — | — |
-| D126 | Not implemented | — | — |
-| D127 | Not implemented | — | — |
-| D128 | Not implemented | — | — |
-| D129 | Not implemented | — | — |
-| D130 | Not implemented | — | — |
-| D131 | Not implemented | — | — |
-| D132 | Not implemented | — | — |
-| D133 | Not implemented | — | — |
-| D134 | Not implemented | — | — |
-| D135 | Not implemented | — | — |
-| D136 | Not implemented | — | — |
-| D137 | Not implemented | — | — |
-| D138 | Not implemented | — | — |
-| D139 | Not implemented | — | — |
-| D140 | Not implemented | — | — |
-| D141 | Not implemented | — | — |
-| D142 | Not implemented | — | — |
-| D143 | Not implemented | — | — |
-| D144 | Not implemented | — | — |
-| D145 | Not implemented | — | — |
-| D146 | Not implemented | — | — |
-| D147 | Not implemented | — | — |
-| D148 | Not implemented | — | — |
-| D149 | Not implemented | — | — |
-| D150 | Not implemented | — | — |
-| D151 | Not implemented | — | — |
-| D152 | Not implemented | — | — |
-| D153 | Not implemented | — | — |
-| D154 | Not implemented | — | — |
-| D155 | Not implemented | — | — |
-| D156 | Not implemented | — | — |
-| D157 | Not implemented | — | — |
-| D158 | Not implemented | — | — |
-| D159 | Not implemented | — | — |
-| D160 | Not implemented | — | — |
-| D161 | Not implemented | — | — |
+**Phase:** `Initial / as applicable` covers the active release and its mandatory safety constraints **when their capability/path applies**; it does *not* demand implementation of every optional/conditional mechanism (e.g., D134–D136/D140). `Later (D159)` features are expressly deferred; don't scaffold them into the first release. `Superseded` is historical. D159–D161 provide release and implementation policies.
+
+**Implementation status:** `No implementation evidence`, `In progress`, `Implemented / unverified`, `Verified`, `Deferred` or `Superseded`. Change a row only with linked Issue/PR and relevant test/inspection proof; do not treat PR merge alone as safety verification. For multi-requirement decisions, retain clear partial evidence rather than declaring them wholly verified.
+
+| Decision | Phase | Implementation status | Issue / PR evidence | Verification evidence |
+| --- | --- | --- | --- | --- |
+| D01 | Initial / as applicable | No implementation evidence | — | — |
+| D02 | Initial / as applicable | No implementation evidence | — | — |
+| D03 | Initial / as applicable | No implementation evidence | — | — |
+| D04 | Initial / as applicable | No implementation evidence | — | — |
+| D05 | Initial / as applicable | No implementation evidence | — | — |
+| D06 | Initial / as applicable | No implementation evidence | — | — |
+| D07 | Initial / as applicable | No implementation evidence | — | — |
+| D08 | Initial / as applicable | No implementation evidence | — | — |
+| D09 | Initial / as applicable | No implementation evidence | — | — |
+| D10 | Initial / as applicable | No implementation evidence | — | — |
+| D11 | Initial / as applicable | No implementation evidence | — | — |
+| D12 | Initial / as applicable | No implementation evidence | — | — |
+| D13 | Initial / as applicable | No implementation evidence | — | — |
+| D14 | Initial / as applicable | No implementation evidence | — | — |
+| D15 | Initial / as applicable | No implementation evidence | — | — |
+| D16 | Initial / as applicable | No implementation evidence | — | — |
+| D17 | Initial / as applicable | No implementation evidence | — | — |
+| D18 | Initial / as applicable | No implementation evidence | — | — |
+| D19 | Initial / as applicable | No implementation evidence | — | — |
+| D20 | Initial / as applicable | No implementation evidence | — | — |
+| D21 | Initial / as applicable | No implementation evidence | — | — |
+| D22 | Initial / as applicable | No implementation evidence | — | — |
+| D23 | Initial / as applicable | No implementation evidence | — | — |
+| D24 | Initial / as applicable | No implementation evidence | — | — |
+| D25 | Initial / as applicable | No implementation evidence | — | — |
+| D26 | Initial / as applicable | No implementation evidence | — | — |
+| D27 | Initial / as applicable | No implementation evidence | — | — |
+| D28 | Initial / as applicable | No implementation evidence | — | — |
+| D29 | Initial / as applicable | No implementation evidence | — | — |
+| D30 | Initial / as applicable | No implementation evidence | — | — |
+| D31 | Initial / as applicable | No implementation evidence | — | — |
+| D32 | Initial / as applicable | No implementation evidence | — | — |
+| D33 | Initial / as applicable | No implementation evidence | — | — |
+| D34 | Initial / as applicable | No implementation evidence | — | — |
+| D35 | Initial / as applicable | No implementation evidence | — | — |
+| D36 | Initial / as applicable | No implementation evidence | — | — |
+| D37 | Initial / as applicable | No implementation evidence | — | — |
+| D38 | Initial / as applicable | No implementation evidence | — | — |
+| D39 | Initial / as applicable | No implementation evidence | — | — |
+| D40 | Initial / as applicable | No implementation evidence | — | — |
+| D41 | Initial / as applicable | No implementation evidence | — | — |
+| D42 | Initial / as applicable | No implementation evidence | — | — |
+| D43 | Initial / as applicable | No implementation evidence | — | — |
+| D44 | Initial / as applicable | No implementation evidence | — | — |
+| D45 | Initial / as applicable | No implementation evidence | — | — |
+| D46 | Initial / as applicable | No implementation evidence | — | — |
+| D47 | Initial / as applicable | No implementation evidence | — | — |
+| D48 | Initial / as applicable | No implementation evidence | — | — |
+| D49 | Initial / as applicable | No implementation evidence | — | — |
+| D50 | Initial / as applicable | No implementation evidence | — | — |
+| D51 | Initial / as applicable | No implementation evidence | — | — |
+| D52 | Initial / as applicable | No implementation evidence | — | — |
+| D53 | Initial / as applicable | No implementation evidence | — | — |
+| D54 | Initial / as applicable | No implementation evidence | — | — |
+| D55 | Initial / as applicable | No implementation evidence | — | — |
+| D56 | Initial / as applicable | No implementation evidence | — | — |
+| D57 | Initial / as applicable | No implementation evidence | — | — |
+| D58 | Initial / as applicable | No implementation evidence | — | — |
+| D59 | Initial / as applicable | No implementation evidence | — | — |
+| D60 | Initial / as applicable | No implementation evidence | — | — |
+| D61 | Initial / as applicable | No implementation evidence | — | — |
+| D62 | Initial / as applicable | No implementation evidence | — | — |
+| D63 | Initial / as applicable | No implementation evidence | — | — |
+| D64 | Initial / as applicable | No implementation evidence | — | — |
+| D65 | Initial / as applicable | No implementation evidence | — | — |
+| D66 | Initial / as applicable | No implementation evidence | — | — |
+| D67 | Initial / as applicable | No implementation evidence | — | — |
+| D68 | Initial / as applicable | No implementation evidence | — | — |
+| D69 | Initial / as applicable | No implementation evidence | — | — |
+| D70 | Superseded | Superseded by D71 | — | — |
+| D71 | Initial / as applicable | No implementation evidence | — | — |
+| D72 | Initial / as applicable | No implementation evidence | — | — |
+| D73 | Initial / as applicable | No implementation evidence | — | — |
+| D74 | Initial / as applicable | No implementation evidence | — | — |
+| D75 | Initial / as applicable | No implementation evidence | — | — |
+| D76 | Initial / as applicable | No implementation evidence | — | — |
+| D77 | Initial / as applicable | No implementation evidence | — | — |
+| D78 | Initial / as applicable | No implementation evidence | — | — |
+| D79 | Initial / as applicable | No implementation evidence | — | — |
+| D80 | Initial / as applicable | No implementation evidence | — | — |
+| D81 | Initial / as applicable | No implementation evidence | — | — |
+| D82 | Initial / as applicable | No implementation evidence | — | — |
+| D83 | Initial / as applicable | No implementation evidence | — | — |
+| D84 | Initial / as applicable | No implementation evidence | — | — |
+| D85 | Initial / as applicable | No implementation evidence | — | — |
+| D86 | Initial / as applicable | No implementation evidence | — | — |
+| D87 | Initial / as applicable | No implementation evidence | — | — |
+| D88 | Initial / as applicable | No implementation evidence | — | — |
+| D89 | Initial / as applicable | No implementation evidence | — | — |
+| D90 | Initial / as applicable | No implementation evidence | — | — |
+| D91 | Initial / as applicable | No implementation evidence | — | — |
+| D92 | Initial / as applicable | No implementation evidence | — | — |
+| D93 | Initial / as applicable | No implementation evidence | — | — |
+| D94 | Initial / as applicable | No implementation evidence | — | — |
+| D95 | Initial / as applicable | No implementation evidence | — | — |
+| D96 | Initial / as applicable | No implementation evidence | — | — |
+| D97 | Initial / as applicable | No implementation evidence | — | — |
+| D98 | Initial / as applicable | No implementation evidence | — | — |
+| D99 | Initial / as applicable | No implementation evidence | — | — |
+| D100 | Initial / as applicable | No implementation evidence | — | — |
+| D101 | Initial / as applicable | No implementation evidence | — | — |
+| D102 | Initial / as applicable | No implementation evidence | — | — |
+| D103 | Initial / as applicable | No implementation evidence | — | — |
+| D104 | Initial / as applicable | No implementation evidence | — | — |
+| D105 | Initial / as applicable | No implementation evidence | — | — |
+| D106 | Initial / as applicable | No implementation evidence | — | — |
+| D107 | Initial / as applicable | No implementation evidence | — | — |
+| D108 | Initial / as applicable | No implementation evidence | — | — |
+| D109 | Initial / as applicable | No implementation evidence | — | — |
+| D110 | Initial / as applicable | No implementation evidence | — | — |
+| D111 | Initial / as applicable | No implementation evidence | — | — |
+| D112 | Initial / as applicable | No implementation evidence | — | — |
+| D113 | Initial / as applicable | No implementation evidence | — | — |
+| D114 | Initial / as applicable | No implementation evidence | — | — |
+| D115 | Initial / as applicable | No implementation evidence | — | — |
+| D116 | Initial / as applicable | No implementation evidence | — | — |
+| D117 | Initial / as applicable | No implementation evidence | — | — |
+| D118 | Initial / as applicable | No implementation evidence | — | — |
+| D119 | Initial / as applicable | No implementation evidence | — | — |
+| D120 | Initial / as applicable | No implementation evidence | — | — |
+| D121 | Initial / as applicable | No implementation evidence | — | — |
+| D122 | Initial / as applicable | No implementation evidence | — | — |
+| D123 | Initial / as applicable | No implementation evidence | — | — |
+| D124 | Initial / as applicable | No implementation evidence | — | — |
+| D125 | Initial / as applicable | No implementation evidence | — | — |
+| D126 | Initial / as applicable | No implementation evidence | — | — |
+| D127 | Initial / as applicable | No implementation evidence | — | — |
+| D128 | Initial / as applicable | No implementation evidence | — | — |
+| D129 | Initial / as applicable | No implementation evidence | — | — |
+| D130 | Initial / as applicable | No implementation evidence | — | — |
+| D131 | Initial / as applicable | No implementation evidence | — | — |
+| D132 | Initial / as applicable | No implementation evidence | — | — |
+| D133 | Initial / as applicable | No implementation evidence | — | — |
+| D134 | Initial / as applicable | No implementation evidence | — | — |
+| D135 | Initial / as applicable | No implementation evidence | — | — |
+| D136 | Initial / as applicable | No implementation evidence | — | — |
+| D137 | Initial / as applicable | No implementation evidence | — | — |
+| D138 | Initial / as applicable | No implementation evidence | — | — |
+| D139 | Initial / as applicable | No implementation evidence | — | — |
+| D140 | Initial / as applicable | No implementation evidence | — | — |
+| D141 | Initial / as applicable | No implementation evidence | — | — |
+| D142 | Initial / as applicable | No implementation evidence | — | — |
+| D143 | Initial / as applicable | No implementation evidence | — | — |
+| D144 | Initial / as applicable | No implementation evidence | — | — |
+| D145 | Initial / as applicable | No implementation evidence | — | — |
+| D146 | Initial | No implementation evidence | — | — |
+| D147 | Later (D159) | Deferred (D159) | — | — |
+| D148 | Later (D159) | Deferred (D159) | — | — |
+| D149 | Later (D159) | Deferred (D159) | — | — |
+| D150 | Later (D159) | Deferred (D159) | — | — |
+| D151 | Later (D159) | Deferred (D159) | — | — |
+| D152 | Later (D159) | Deferred (D159) | — | — |
+| D153 | Later (D159) | Deferred (D159) | — | — |
+| D154 | Later (D159) | Deferred (D159) | — | — |
+| D155 | Later (D159) | Deferred (D159) | — | — |
+| D156 | Later (D159) | Deferred (D159) | — | — |
+| D157 | Later (D159) | Deferred (D159) | — | — |
+| D158 | Later (D159) | Deferred (D159) | — | — |
+| D159 | Cross-cutting | No implementation evidence | — | — |
+| D160 | Cross-cutting | No implementation evidence | — | — |
+| D161 | Cross-cutting | No implementation evidence | — | — |
+
+## Updating this tracker
+
+On each relevant implementation PR, add Issue/PR and test evidence for the affected decision rows. Use a single row per **D01–D161** (including D70) and retain the historical supersession and release phase. If evidence covers only part of a decision, describe that limit instead of treating all safeguards as verified. When CI exists, add a deterministic check that IDs appear **once each**, D70 stays marked superseded, and D147–D158 remain deferred unless explicitly rephased by a new approved decision.

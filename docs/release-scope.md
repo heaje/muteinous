@@ -1,22 +1,26 @@
-# Initial-release scope (D159)
+# Initial-release scope — D159
 
-This summary is subordinate to the full [Architecture Decision Log](architecture/decisions.md).
+This summary explains what to implement first. **The full [D01–D161 decisions](architecture/decisions.md), especially D159, control detailed requirements.** Permission to support an optional capability is not a promise that every such path must ship in the first release.
 
-## Included
+## Initial-release user flow
 
-- Conservative discovery/probing of candidate game installations and actual supported content capabilities, without maintained title-specific logic.
-- User-initiated, source-valid comprehensive scanning and speech analysis, with clear evidence, coverage, uncertainty, and distinction between source-backed text and inferred transcripts.
-- Read-only review of detected content and safe original-versus-censored audio previews.
-- Word lists/presets and effective censorship settings, including re-evaluation when settings change.
-- Explicit **Apply**, with validation of the complete selected required-edit scope, safe native asset preparation, installation ownership, verified originals, backups/recovery, and fidelity safeguards.
-- Honest reporting of unsupported/unresolved content; only explicitly selected, independently safe partial scope may proceed under the relevant decisions.
+1. **Discover candidates** from generic launcher/OS evidence or a user-selected folder. Automatic bounded **read-only lightweight probes** may indicate provisional capabilities; neither startup nor merely choosing a game launches a comprehensive scan (D132–D133, D137–D138).
+2. **User explicitly requests a comprehensive scan.** Inspect supported assets, preserve source identities/validity, assess likely speech using proportional generic methods and analyze speech where warranted. Do **not** indiscriminately run ASR on every audio file, infer absent native subtitles or claim complete coverage from incomplete evidence (D10–D15, D21, D30–D31, D138–D140).
+3. **Show read-only results.** Distinguish exact source-backed native text, inferred speech transcripts, valid timed detections, unknown/unaligned words, unsupported/uninspected content, language-coverage limitations and uncertain speech roles/links. Searching/filtering and selecting an occurrence to **preview** is not a per-occurrence censorship override.
+4. **Preview verified audio safely.** Offer user-selected and a small set of suggested actual scanned dialogue examples, with original and temporarily censored versions produced using the shared core PCM path for **verified, applicable intervals**. Preview never changes the game and does not prove format rebuilding, loader acceptance or Apply safety (D146).
+5. **Edit global/appropriate per-content word lists, presets and effective censorship settings.** Reevaluate relevant outcomes/invalidation as decisions require; saving settings and previewing are independent of Apply (D40–D46).
+6. **Explicit Apply** to an independently supported, **user-selected scope** after validating all required edits, native reconstruction, freshness, audio/text fidelity and installation authority. Every requested required edit in that scope must succeed before the plan is accepted; no automatic post-failure scope reduction. Maintain verified originals, ownership, backup/restore, game-running and game-update protection (D01–D02, D05, D10–D19, D24, D141–D143).
 
-Scanning, review, preview, and settings changes must not write game-facing files. Never silently shrink selected scope after a preparation failure, infer missing word timings or native subtitles, or claim full-game coverage without evidence.
+## Refuse rather than fabricate
 
-## Deferred beyond initial release
+An unresolved required censorship edit, missing valid word timing, unsupported or ambiguous audio/text role, uncertain relationship needed for the proposed edit, stale evidence, unsupported native reconstruction or unsafe install destination **blocks the affected selected scope**. The initial release must not silently bypass these cases because advanced source-bound user approvals are deferred. A separately supported, independently safe partial scope can be **explicitly selected before preparation**, with clear non-censored/unknown coverage reporting (D72–D76, D133, D143, D159).
 
-Per-occurrence Censor/Don't Censor editing; manual audio-range authoring; corrected transcripts; bulk review changes; import/export; review Undo/Redo. Their architecture decisions remain preserved but do not authorize implementing them in the initial release.
+Nonblocking **language-coverage exclusions** remain separately governed by D51–D57; do not relabel a missing required edit as a language warning. Optional D134 key entry, D135 reversible experimental loader tests, and D136/D140 source-bound confirmations have independent safeguards **if offered**, and do not waive native validation or install safety. Large model downloads and updates require the separate approvals and integrity checks of D144–D145.
 
-## Definition of safe release
+## Deferred features — preserve the decisions, do not build them yet
 
-The initial release must pass applicable source-validity, edit-completeness, PCM timing/fidelity, storage-integrity, installation ownership, backup/recovery, game-running/update-safety, and conservative-error requirements. See D159 and all cross-referenced decisions for the normative detail.
+D147 manual censor ranges; D148–D151 import/export and import Undo; D152–D155 transcript corrections and their dependent workflows; D156/D158 current-session review Undo/Redo; D157 bulk review changes; and **per-occurrence Censor/Don't Censor overrides and related custom editing** described by D159. These are later-phase designs, not rescinded requirements; do not add speculative initial-release UI, state stores, history mechanisms or plugin methods for them.
+
+## Release evidence
+
+Required representative PR safety tests and complete applicable release checks must substantiate source validity, required-edit completeness, PCM/native fidelity, cache/result integrity, native rebuilding, ownership/recovery and Apply restrictions (D160–D161). Never claim automatic game compatibility or full-game censorship from a successful scan/preview alone.

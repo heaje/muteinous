@@ -1,23 +1,31 @@
 # Development and implementation workflow
 
-The repository is currently documentation-first; actual environment setup commands and dependencies will be established in scaffolding/CI PR 2. Do not assume a Python toolchain, test command, or UI framework is already configured.
+**State:** documentation handoff in PR #1; Python tooling and CI have **not** been established yet. Do not assume that setup commands, scripts, CI checks, branch protection, milestones or GitHub Projects already exist.
 
-## Proposed PR sequence
+## Work unit and review policy
 
-1. **Documentation PR 1**: complete D01–D161 snapshot, scope, organization, testing, agent guidance, and temporary knowledge conventions.
-2. **Scaffolding/CI PR 2**: minimal installable Python package, project metadata, import smoke test, and Windows two-vCPU CI with a hard test-execution timeout.
-3. Cohesive, testable implementation slices; investigate native-format reconstruction and safe installation risks early.
+- Prefer 12–18 initial **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goal, relevant D-number decisions, expected acceptance/verification, dependencies, and excluded/deferred features.
+- Suggested milestones (not created): **M0** repository foundation; **M1** shared core and safety; **M2** discovery and scanning; **M3** filtering, preview and desktop review; **M4** safe Apply and initial release. Investigate native-format and installation viability early rather than waiting until M4.
+- Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
+- PR descriptions: purpose and Issue, D-number decisions, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
 
-## GitHub conventions
+## PR 1 — documentation handoff
 
-Use GitHub Issues for actionable deliverables and acceptance criteria; reference applicable D-number decisions and tests. Suggested milestones: M0 Foundation, M1 Shared Core and Safety, M2 Discovery and Scanning, M3 Filtering/Preview/Desktop Review, M4 Safe Apply/Initial Release. Keep PRs reviewable and cohesive; local checkpoint commits are fine, with squash merging preferred. PR descriptions should state purpose, decisions, included/excluded scope, test evidence, and safety impact.
+- Complete, source-faithful **D01–D161** snapshot including D70 supersession and D159 deferrals.
+- Usable, offline agent onboarding: `AGENTS.md`, release scope, code/test organization, development instructions, [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agent/README.md).
+- Task-specific handoff and cross-task finding lifecycle, including cleanup and promotion to permanent docs.
+- Documentation-only: no code/test infrastructure or new architectural decisions. Review the snapshot and references; **merging does not itself declare a canonical-source transition**.
 
-Use a decision-coverage table to link requirements to implementation and verification; documentation alone does not mean implemented. Do not copy legacy game-specific adapters or fixtures. Check licensing and provenance before any code reuse.
+## PR 2 — minimal package and Windows CI
+
+After PR 1 review, add `pyproject.toml`, `src/muteinous/__init__.py`, minimal `tests/unit/` smoke test, and Windows two-vCPU GitHub Actions workflow, with ordinary lint/type checking only as justified. Validate editable/installable package and test discovery. Enforce a **failing ~600-second test-process timeout** separate from setup/job timeouts and measure test runtime/slow tests. Do not download models in mandatory PR checks. Include representative deterministic safety integration tests **as each actual feature is implemented** (D160–D161), not invented during empty scaffolding.
+
+## Architecture documentation governance
+
+[Decision log](architecture/decisions.md) contains a complete snapshot of the Space page as read on 2026-11-22. The Space page remains formally canonical until an **explicitly approved and synchronized** transition; do not assume that merging PR 1 performs it. Agents without Space should implement from the repository copy, escalate apparent conflicts/missing requirements, and **not guess or silently revise agreed decisions**. While Space is canonical, a change to decision text must be agreed there first and synchronized through a reviewed Git PR. Once Git becomes authoritative, adopt a separately agreed decision-amendment workflow.
+
+[Decision coverage](architecture/decision-coverage.md) tracks implementation **and verification**, not merely documentation or work started. Keep Issue/PR/test evidence current.
 
 ## Agent continuity
 
-Read [AGENTS.md](../AGENTS.md) and [.agent/README.md](../.agent/README.md). Put unfinished-branch handoffs on Issues/PRs, reusable temporary findings in `.agent/findings/`, and enduring facts in permanent documentation. Do not treat stale notes as authoritative.
-
-## Architecture source-of-truth transition
-
-The Space log remains canonical until explicit approval of a Git-based source-of-truth transition. Proposed amendments require review; do not silently rewrite agreed decisions.
+Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agent/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under `.agent/findings/`, and enduring knowledge in permanent docs. Reconcile `.agent/current-state.md` periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
