@@ -45,7 +45,7 @@ Do not commit passwords, keys, personal details, machine-specific confidential p
 When pausing incomplete work, write a short handoff on the related Issue or PR. For repository-only agents, commit a **task-specific branch-local file** in [`handoffs/`](handoffs/README.md) so the next agent can recover without needing the original chat or GitHub comments. Prefer an Issue/PR comment when available; the branch note is a portability fallback, **not a competing global status source**.
 
 Include:
-- Task/Issue and PR link (if present); **exact branch and last pushed commit**.
+- Task/Issue and PR link (if present); **exact branch name**, and the last **tested or predecessor** commit SHA when useful. A committed handoff file cannot know the SHA of the commit containing itself: verify actual branch HEAD with `git rev-parse HEAD` after checkout, and put the final pushed SHA in the Issue/PR comment after pushing.
 - Implemented changes and files touched; decisions or acceptance criteria already addressed.
 - Remaining concrete steps, known blockers and unresolved risks.
 - Reproduction commands, test outputs and tests **not** run.
