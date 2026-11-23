@@ -11,8 +11,9 @@
 ## Next
 
 1. Review the completeness of the [repository decision log](../docs/architecture/decisions.md) and handoff conventions; publish any approved corrections through the [documentation review process](../docs/development.md#architecture-documentation-governance).
-2. Once PR #1 is accepted, implement minimal package/scaffolding/Windows CI in a separate PR following the [development plan](../docs/development.md#pr-2--minimal-package-and-windows-ci).
-3. Investigate reusable native-format reconstruction, fidelity and safe installation viability **early**, not only at final Apply integration.
+2. Once PR #1 is accepted, use a separate bootstrap PR for `pyproject.toml`, `src/muteinous/__init__.py`, a minimal `tests/unit/` smoke test, and Windows two-vCPU CI. Validate package installation and test discovery, and enforce an independently failing ~600-second test-process timeout following the [CI introduction policy](../docs/testing.md#introducing-ci-and-early-coverage). This is a proposal, not an existing workflow or passing check.
+3. Plan roughly 12–18 cohesive feature/safety Issues rather than one Issue per decision; possible milestones are M0 repository foundation, M1 shared core/safety, M2 discovery/scanning, M3 filtering/preview/desktop review, and M4 safe Apply/release. These Issues/milestones are **not yet created**; verify GitHub before treating them as live.
+4. Investigate reusable native-format reconstruction, fidelity and safe installation viability **early**, not only at final Apply integration.
 
 ## Cross-task risks
 
