@@ -2,7 +2,7 @@
 
 **Source:** [architecture decision log](decisions.md). This is an implementation-and-verification evidence ledger, **not** a second copy of the requirements or a task board. The rows below reflect the decisions recorded when this ledger was created; whenever the decision log changes, reconcile the row set and affected statuses against the current source. Documentation alone is **not implementation or verification**.
 
-**Phase:** `Initial / as applicable` covers the applicable release and its mandatory safety constraints **when their capability/path applies**, not every optional/conditional mechanism. `Later` denotes an approved deferral and `Superseded` a historical decision. Phase labels are tracking metadata; validate them against the [current scope](../release-scope.md) and decision log rather than treating these initial labels as permanent policy. A qualified label marks a decision whose safety/refusal obligations apply now while its user-approval or override features are deferred under D159. Labels marked `open` await maintainer decision and must not be treated as settled scope.
+**Phase:** `Initial / as applicable` covers the applicable release and its mandatory safety constraints **when their capability/path applies**, not every optional/conditional mechanism. `Later` denotes an approved deferral and `Superseded` a historical decision. Phase labels are tracking metadata; validate them against the [current scope](../release-scope.md) and decision log rather than treating these initial labels as permanent policy. A qualified label marks a decision whose safety/refusal obligations apply now while its user-approval or override features are deferred under D159.
 
 **Implementation status:** `No implementation evidence`, `In progress`, `Implemented / unverified`, `Verified`, `Deferred` or `Superseded`. Change a row only with linked Issue/PR and relevant test/inspection proof; do not treat PR merge alone as safety verification. For multi-requirement decisions, retain clear partial evidence rather than declaring them wholly verified.
 
@@ -145,11 +145,11 @@
 | D133 | Initial / as applicable | No implementation evidence | — | — |
 | D134 | Initial / as applicable | No implementation evidence | — | — |
 | D135 | Initial / as applicable | No implementation evidence | — | — |
-| D136 | Initial: refusal required; whether confirmation ships is open (D159) | No implementation evidence | — | — |
+| D136 | Initial: automatic speech assessment/refusal; manual confirmation later (D162) | No implementation evidence | — | — |
 | D137 | Initial / as applicable | No implementation evidence | — | — |
 | D138 | Initial / as applicable | No implementation evidence | — | — |
 | D139 | Initial / as applicable | No implementation evidence | — | — |
-| D140 | Initial: refusal required; whether confirmation ships is open (D159) | No implementation evidence | — | — |
+| D140 | Initial: automatic association/refusal; manual confirmation later (D162) | No implementation evidence | — | — |
 | D141 | Initial / as applicable | No implementation evidence | — | — |
 | D142 | Initial / as applicable | No implementation evidence | — | — |
 | D143 | Initial / as applicable | No implementation evidence | — | — |
@@ -171,6 +171,7 @@
 | D159 | Cross-cutting | No implementation evidence | — | — |
 | D160 | Cross-cutting | No implementation evidence | — | — |
 | D161 | Cross-cutting | No implementation evidence | — | — |
+| D162 | Cross-cutting (release phasing) | No implementation evidence | — | — |
 
 ## Updating this tracker
 

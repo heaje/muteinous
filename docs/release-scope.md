@@ -1,6 +1,6 @@
 # Initial-release scope — D159
 
-This summary explains what to implement first. The [architecture decision log](architecture/decisions.md), especially the release-phasing decision D159, controls detailed requirements. Permission to support an optional capability is not a promise that every such path must ship in the first release.
+This summary explains what to implement first. The [architecture decision log](architecture/decisions.md), including the release-phasing decision D159 and its D162 clarification, controls detailed requirements. Permission to support an optional capability is not a promise that every such path must ship in the first release.
 
 ## Initial-release user flow
 
@@ -19,11 +19,11 @@ The initial release officially supports **English-language filtering only** (D51
 
 An unresolved required censorship edit, missing valid word timing, unsupported or ambiguous audio/text role, uncertain relationship needed for the proposed edit, stale evidence, unsupported native reconstruction or unsafe install destination **blocks the affected selected scope**. The initial release must not silently bypass these cases because advanced source-bound user approvals are deferred. A separately supported, independently safe partial scope can be **explicitly selected before preparation**, with clear non-censored/unknown coverage reporting (D72–D76, D133, D143, D159).
 
-Nonblocking **language-coverage exclusions** remain separately governed by D51–D57; do not relabel a missing required edit as a language warning. Optional D134 key entry and D135 reversible experimental loader tests have independent safeguards **if offered** and do not waive native validation or install safety. For D136/D140, D159's refusal obligations apply now; whether the first release offers these source-bound confirmations is an **open question pending [maintainer review](development.md#architecture-documentation-governance)**. Until decided, do not build the confirmations and refuse any affected requested scope. Large model downloads and updates require the separate approvals and integrity checks of D144–D145.
+Nonblocking **language-coverage exclusions** remain separately governed by D51–D57; do not relabel a missing required edit as a language warning. Optional D134 key entry and D135 reversible experimental loader tests have independent safeguards **if offered** and do not waive native validation or install safety. Under D162, **D136/D140 manual confirmations are deferred**; retain automatic speech-candidate assessment (D139), generic evidence-based audio/subtitle relationship discovery (D140), and honest read-only reporting of uncertain roles and links. Independently supported audio and actual source-backed text may be edited separately without a confirmed relationship. Do not assume an uncertain speech role or inferred link is verified: refuse the selected scope **when that unresolved evidence is needed for a required safe edit**, not merely because a relationship is absent. Large model downloads and updates require the separate approvals and integrity checks of D144–D145.
 
 ## Deferred features — preserve the decisions, do not build them yet
 
-Per-occurrence censorship overrides, manual censor ranges, import/export, transcript corrections, bulk review changes and review Undo/Redo are later-phase capabilities under D159, not rescinded requirements. Do not scaffold their UI, state stores, history mechanisms or plugin methods for the initial release. Consult the [decision log](architecture/decisions.md) for each deferred capability's precise scope and dependencies.
+Per-occurrence censorship overrides, manual censor ranges, import/export, transcript corrections, bulk review changes and review Undo/Redo (D159), together with manual speech-role and voice/subtitle-link confirmations (D162), are later-phase capabilities, not rescinded requirements. Do not scaffold their UI, state stores, history mechanisms or plugin methods for the initial release. Consult the [decision log](architecture/decisions.md) for each deferred capability's precise scope and dependencies.
 
 ## Release evidence
 
