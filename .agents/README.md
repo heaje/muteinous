@@ -2,6 +2,15 @@
 
 This directory is a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Notes are version-controlled and shared through discoverable branches and task handoffs, without depending on an individual agent's conversation history.
 
+## Task-start discovery
+
+Tools do not necessarily discover Markdown files in `.agents/` automatically. On **every new or resumed task**, after opening [`AGENTS.md`](../AGENTS.md):
+
+1. Read the [coordination snapshot](current-state.md), then verify potentially stale status against the assigned Issue/PR and checked-out code.
+2. **Enumerate the files** under [`findings/`](findings/README.md), not just its README, and read findings relevant to the assigned work. Verify their evidence against the current implementation before using them.
+3. If resuming unfinished work, use the task's provided branch/ref and handoff path to locate the relevant note under [`handoffs/`](handoffs/README.md). If the pointer is absent, obtain it from the coordinator; a note on another branch is not visible automatically.
+4. Before pausing or completing work, consult the [finding lifecycle](#reusable-findings), [handoff rules](#unfinished-work-handoffs) and [cleanup guidance](#coordination-and-cleanup) as applicable.
+
 ## Where information belongs
 
 | Kind | Home | Lifetime |

@@ -12,7 +12,7 @@
 ## PR 1 — documentation handoff
 
 - A source-faithful version-controlled [architecture decision log](architecture/decisions.md), preserving the complete history and approved release phasing.
-- Usable, offline agent onboarding: [`AGENTS.md`](../AGENTS.md), [release scope](release-scope.md), [code organization](architecture/code-organization.md), [test policy](testing.md), [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agent/README.md).
+- Usable, offline agent onboarding: [`AGENTS.md`](../AGENTS.md), [release scope](release-scope.md), [code organization](architecture/code-organization.md), [test policy](testing.md), [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agents/README.md).
 - Task-specific handoff and cross-task finding lifecycle, including cleanup and promotion to permanent docs.
 - Documentation-only: no code/test infrastructure or new architectural decisions. Review the decision-record completeness and repository links.
 
@@ -30,4 +30,4 @@ The version-controlled [architecture decision log](architecture/decisions.md) is
 
 ## Agent continuity
 
-Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agent/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under [`.agent/findings/`](../.agent/findings/README.md), and enduring knowledge in permanent docs. Reconcile [`.agent/current-state.md`](../.agent/current-state.md) periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
+Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agents/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under [`.agents/findings/`](../.agents/findings/README.md), and enduring knowledge in permanent docs. Reconcile [`.agents/current-state.md`](../.agents/current-state.md) periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
