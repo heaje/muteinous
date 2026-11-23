@@ -40,7 +40,7 @@ Create directories and modules only as functionality arrives; this tree is illus
 
 ## Dependency direction and ownership
 
-- **`models/`** owns simple shared representations (`Segment` is identity-only; `SpeechAnalysisResult` and recognized-word sequence are immutable). No OS, game, plugin or UI code. **D70's separate unaligned-word mapping is superseded by D71.**
+- **`models/`** owns simple shared representations (`Segment` is identity-only; `SpeechAnalysisResult` and recognized-word sequence are immutable). No OS, game, plugin or UI code.
 - **`core/`** owns reusable policy and user-workflow coordination: scan/results, filtering, language, speech alignment, safe PCM editing, preview, effective settings and Apply orchestration. Do not move generic censorship algorithms into native adapters.
 - **`plugins/video_games/`** discovers actual installations and source capabilities, identifies assets/occurrences/dependencies, extracts/decodes/reconstructs/validates native formats and **proposes staged declarative installation changes**. Its adapter knowledge is format/engine-capability based, not game-title based. Plugin-native code never claims installation authorization.
 - **`infrastructure/`** implements verified originals, job scheduling, immutable results/caches, local inference, persistence and the **only shared installer authorized to write/replace/remove game-facing files**. Not all infrastructure is OS-specific: isolate Windows/Linux/macOS divergences under `platform/` only when necessary (D02, D17–D19).
@@ -56,4 +56,4 @@ No curated game list, per-title exception, hardcoded mod path, real-game fixture
 
 ## Testing boundaries
 
-Unit tests can mirror component responsibilities; contract tests validate actual public contracts; deterministic integration tests protect source validity, edit completeness, PCM fidelity, storage, jobs and installation; e2e tests cover the initial-release user flow. Tests need not duplicate the exact code folder hierarchy. See [testing policy](../testing.md). Keep later-phase D147–D158 editing/import/Undo infrastructure out of initial scaffolding.
+Unit tests can mirror component responsibilities; contract tests validate actual public contracts; deterministic integration tests protect source validity, edit completeness, PCM fidelity, storage, jobs and installation; e2e tests cover the initial-release user flow. Tests need not duplicate the exact code folder hierarchy. See [testing policy](../testing.md). Do not scaffold [deferred capabilities](../release-scope.md) in the initial release.

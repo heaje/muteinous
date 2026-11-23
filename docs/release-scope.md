@@ -1,6 +1,6 @@
 # Initial-release scope — D159
 
-This summary explains what to implement first. **The full [D01–D161 decisions](architecture/decisions.md), especially D159, control detailed requirements.** Permission to support an optional capability is not a promise that every such path must ship in the first release.
+This summary explains what to implement first. The [architecture decision log](architecture/decisions.md), especially the release-phasing decision D159, controls detailed requirements. Permission to support an optional capability is not a promise that every such path must ship in the first release.
 
 ## Initial-release user flow
 
@@ -23,7 +23,7 @@ Nonblocking **language-coverage exclusions** remain separately governed by D51�
 
 ## Deferred features — preserve the decisions, do not build them yet
 
-D147 manual censor ranges; D148–D151 import/export and import Undo; D152–D155 transcript corrections and their dependent workflows; D156/D158 current-session review Undo/Redo; D157 bulk review changes; and **per-occurrence Censor/Don't Censor overrides and related custom editing** described by D159. These are later-phase designs, not rescinded requirements; do not add speculative initial-release UI, state stores, history mechanisms or plugin methods for them.
+Per-occurrence censorship overrides, manual censor ranges, import/export, transcript corrections, bulk review changes and review Undo/Redo are later-phase capabilities under D159, not rescinded requirements. Do not scaffold their UI, state stores, history mechanisms or plugin methods for the initial release. Consult the [decision log](architecture/decisions.md) for each deferred capability's precise scope and dependencies.
 
 ## Release evidence
 

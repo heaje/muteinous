@@ -10,6 +10,4 @@ Muteinous v2 is the new Windows-first desktop application for source-aware profa
 
 ## Architecture decision history
 
-[`docs/architecture/decisions.md`](docs/architecture/decisions.md) contains the complete D01–D161 historical text, with D70 superseded by D71 and the D159 initial-release reduction preserved. The source [ChatGPT Space Architecture Decision Log](https://chatgpt.com/space/page_35393eb6e1848191ae3624e3148e3dbd) remains canonical **until an explicit repository transition is approved**. The committed snapshot is intentionally usable by coding agents who cannot read ChatGPT Space.
-
-Do not import old game's title-specific Hushpatch adapter logic or fixtures: any supported native format/engine capability must be established through reusable evidence-driven mechanisms (D132–D133).
+The [architecture decision log](docs/architecture/decisions.md) is available in the repository for contributors and agents without ChatGPT Space access. See [architecture documentation governance](docs/development.md#architecture-documentation-governance) for the authoritative source and synchronization rules.

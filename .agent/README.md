@@ -13,7 +13,7 @@ This directory is a **time-limited knowledge exchange between coding agents**, n
 | Cross-task next steps and blockers | [`current-state.md`](current-state.md) | Reconciled periodically |
 | Enduring setup, tooling or testing procedure | [`docs/development.md`](../docs/development.md); [`docs/testing.md`](../docs/testing.md) | Permanent |
 
-Never use these notes to override D01–D161 or infer that an unverified suggestion is implemented. Read only findings relevant to the task and verify against the code.
+Never use these notes to override the [architecture decision log](../docs/architecture/decisions.md) or infer that an unverified suggestion is implemented. Read only findings relevant to the task and verify against the code.
 
 ## Reusable findings
 
