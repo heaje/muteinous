@@ -1,24 +1,17 @@
 # Development and implementation workflow
 
-**State:** documentation handoff in PR #1; Python tooling and CI have **not** been established yet. Do not assume that setup commands, scripts, CI checks, branch protection, milestones or GitHub Projects already exist.
+This guide records enduring contribution and review practices. Consult the [coordination snapshot](../.agents/current-state.md) and linked GitHub Issues/PRs for current work, proposed milestones, setup status and unfinished tasks; do not infer their existence from this guide.
 
 ## Work unit and review policy
 
-- Prefer 12–18 initial **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goal, relevant D-number decisions, expected acceptance/verification, dependencies, and excluded/deferred features.
-- Suggested milestones (not created): **M0** repository foundation; **M1** shared core and safety; **M2** discovery and scanning; **M3** filtering, preview and desktop review; **M4** safe Apply and initial release. Investigate native-format and installation viability early rather than waiting until M4.
+- Prefer **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goals, relevant decisions, acceptance/verification evidence, dependencies, and excluded/deferred features.
+- Organize milestones in GitHub as useful for the actual implementation. Investigate reusable native-format reconstruction and safe installation viability early, not only during final Apply integration.
 - Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
 - PR descriptions: purpose and Issue, affected D-number decisions with actual implementation/verification evidence and unverified parts, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. The merger/coordinator reconciles the shared [decision-coverage ledger](architecture/decision-coverage.md) from accepted PR evidence at merge time or promptly afterward; parallel feature branches should not separately maintain the same table. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
 
-## PR 1 — documentation handoff
+## Repository foundation
 
-- A source-faithful version-controlled [architecture decision log](architecture/decisions.md), preserving the complete history and approved release phasing.
-- Usable, offline agent onboarding: [`AGENTS.md`](../AGENTS.md), [release scope](release-scope.md), [code organization](architecture/code-organization.md), [test policy](testing.md), [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agents/README.md).
-- Task-specific handoff and cross-task finding lifecycle, including cleanup and promotion to permanent docs.
-- Documentation-only: no code/test infrastructure or new architectural decisions. Review the decision-record completeness and repository links.
-
-## PR 2 — minimal package and Windows CI
-
-After PR 1 review, add `pyproject.toml`, `src/muteinous/__init__.py`, minimal `tests/unit/` smoke test, and Windows two-vCPU GitHub Actions workflow, with ordinary lint/type checking only as justified. Validate editable/installable package and test discovery. Enforce a **failing ~600-second test-process timeout** separate from setup/job timeouts and measure test runtime/slow tests. Do not download models in mandatory PR checks. Include representative deterministic safety integration tests **as each actual feature is implemented** (D160–D161), not invented during empty scaffolding.
+When adding initial packaging and CI, follow the [code organization](architecture/code-organization.md) and [CI introduction and early coverage requirements](testing.md#introducing-ci-and-early-coverage). Track bootstrap work in live Issues/PRs and the [temporary coordination snapshot](../.agents/current-state.md), not as permanent progress assertions in this guide.
 
 ## Architecture documentation governance
 
