@@ -52,7 +52,7 @@ In general, models must not import infrastructure, UI or game adapters; core mus
 
 Start flat. Split into `discovery/` (launcher candidates), `scanning/` (source evidence, identities and links), `native/` (reusable format detection/extraction/rebuilding/validation), and `reconstruction/` (group required native edits, stage/validate, propose plan) only when real complexity justifies it. Native adapters are internal implementation pieces, **not** independent content plugins or second SDKs.
 
-No curated game list, per-title exception, hardcoded mod path, real-game fixture or copied Hushpatch game adapter (D132–D133). A real-world validation target may inform generic support but must not become a runtime dependency.
+No curated game list, per-title exception, hardcoded mod path, real-game fixture or game adapter copied from the earlier [Hushpatch implementation](https://github.com/heaje/hushpatch) (D132–D133). A real-world validation target may inform generic support but must not become a runtime dependency.
 
 ## Testing boundaries
 
