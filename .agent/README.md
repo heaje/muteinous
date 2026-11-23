@@ -40,9 +40,11 @@ The next investigation or implementation step.
 
 Do not commit passwords, keys, personal details, machine-specific confidential paths, private game assets, or giant logs. A finding can be unverified, but label it **hypothesis**, not conclusion.
 
+**Cross-branch visibility:** A finding committed only on one feature branch is not visible on other branches. When a discovery may affect other active work, promptly post a short notice in an existing relevant shared Issue/PR discussion: symptom, reproduction/evidence, affected tasks, and the branch/commit containing the detailed finding. If another agent cannot access those discussions, the coordinator must pass the notice and the relevant ref in that agent's task assignment. Do not open a new tracking Issue for every small observation.
+
 ## Unfinished-work handoffs
 
-When pausing incomplete work, write a short handoff on the related Issue or PR. For repository-only agents, commit a **task-specific branch-local file** in [`handoffs/`](handoffs/README.md) so the next agent can recover without needing the original chat or GitHub comments. Prefer an Issue/PR comment when available; the branch note is a portability fallback, **not a competing global status source**.
+When pausing incomplete work, write a short handoff on the related Issue or PR. For repository-only agents, commit a **task-specific branch-local file** in [`handoffs/`](handoffs/README.md) so the next agent can recover without needing the original chat or GitHub comments. A branch-local file cannot be found merely by inspecting `main`: **the incoming agent must receive the exact pushed branch/ref and handoff path** through an accessible Issue/PR or its task assignment. When GitHub discussions are inaccessible, the coordinator supplies this pointer directly. The branch note is a portability fallback, **not a competing global status source**.
 
 Include:
 - Task/Issue and PR link (if present); **exact branch name**, and the last **tested or predecessor** commit SHA when useful. A committed handoff file cannot know the SHA of the commit containing itself: verify actual branch HEAD with `git rev-parse HEAD` after checkout, and put the final pushed SHA in the Issue/PR comment after pushing.
@@ -51,8 +53,8 @@ Include:
 - Reproduction commands, test outputs and tests **not** run.
 - Relevant findings and any assumptions that still need verification.
 
-Before handing off, push a checkpoint commit if safe and possible; uncommitted local work is not transferable. Do not claim that a handoff file on another branch is visible on `main`. Point the incoming agent to the right branch/PR. Remove obsolete branch-local handoffs before merge or when the task is completed; Git history preserves them.
+Before handing off, push a checkpoint commit if safe and possible; uncommitted local work is not transferable. Verify that the branch/ref was pushed and that the incoming agent has its pointer; do not claim that a handoff file on another branch is visible on `main`. Remove obsolete branch-local handoffs before merge or when the task is completed; Git history preserves them.
 
 ## Coordination and cleanup
 
-The coordinator updates `current-state.md` after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the directory small; **a discovery is valuable, not its chronological investigation log**.
+The coordinator updates `current-state.md` after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. A PR that fixes a documented workaround should retire/delete its temporary finding, or mark it resolved/superseded with a link to the fix, so stale advice is not left active. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the directory small; **a discovery is valuable, not its chronological investigation log**.

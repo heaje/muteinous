@@ -11,6 +11,10 @@ This summary explains what to implement first. **The full [D01–D161 decisions]
 5. **Edit global/appropriate per-content word lists, presets and effective censorship settings.** Reevaluate relevant outcomes/invalidation as decisions require; saving settings and previewing are independent of Apply (D40–D46).
 6. **Explicit Apply** to an independently supported, **user-selected scope** after validating all required edits, native reconstruction, freshness, audio/text fidelity and installation authority. Every requested required edit in that scope must succeed before the plan is accepted; no automatic post-failure scope reduction. Maintain verified originals, ownership, backup/restore, game-running and game-update protection (D01–D02, D05, D10–D19, D24, D141–D143).
 
+## Initial language support — D51–D57
+
+The initial release officially supports **English-language filtering only** (D51). Skip known unsupported-language occurrences and report the exclusion; for unknown-language occurrences, attempt English filtering with **unverified language coverage**, not a claim that the content is English (D52–D54). Assess independently filterable occurrences separately when an asset contains multiple languages (D53). Within a single known mixed-language occurrence, filter only reliably isolated English portions; otherwise skip it and report incomplete coverage (D55). Language-coverage limitations produce **nonblocking warnings** for an otherwise safe Apply (D56–D57), not exemptions from required edits or other safety gates.
+
 ## Refuse rather than fabricate
 
 An unresolved required censorship edit, missing valid word timing, unsupported or ambiguous audio/text role, uncertain relationship needed for the proposed edit, stale evidence, unsupported native reconstruction or unsafe install destination **blocks the affected selected scope**. The initial release must not silently bypass these cases because advanced source-bound user approvals are deferred. A separately supported, independently safe partial scope can be **explicitly selected before preparation**, with clear non-censored/unknown coverage reporting (D72–D76, D133, D143, D159).

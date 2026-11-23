@@ -7,7 +7,7 @@
 - Prefer 12–18 initial **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goal, relevant D-number decisions, expected acceptance/verification, dependencies, and excluded/deferred features.
 - Suggested milestones (not created): **M0** repository foundation; **M1** shared core and safety; **M2** discovery and scanning; **M3** filtering, preview and desktop review; **M4** safe Apply and initial release. Investigate native-format and installation viability early rather than waiting until M4.
 - Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
-- PR descriptions: purpose and Issue, D-number decisions, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
+- PR descriptions: purpose and Issue, affected D-number decisions with actual implementation/verification evidence and unverified parts, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. The merger/coordinator reconciles the shared [decision-coverage ledger](architecture/decision-coverage.md) from accepted PR evidence at merge time or promptly afterward; parallel feature branches should not separately maintain the same table. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
 
 ## PR 1 — documentation handoff
 
@@ -24,7 +24,7 @@ After PR 1 review, add `pyproject.toml`, `src/muteinous/__init__.py`, minimal `t
 
 [Decision log](architecture/decisions.md) contains a complete snapshot of the Space page as read on 2026-11-22. The Space page remains formally canonical until an **explicitly approved and synchronized** transition; do not assume that merging PR 1 performs it. Agents without Space should implement from the repository copy, escalate apparent conflicts/missing requirements, and **not guess or silently revise agreed decisions**. While Space is canonical, a change to decision text must be agreed there first and synchronized through a reviewed Git PR. Once Git becomes authoritative, adopt a separately agreed decision-amendment workflow.
 
-[Decision coverage](architecture/decision-coverage.md) tracks implementation **and verification**, not merely documentation or work started. Keep Issue/PR/test evidence current.
+[Decision coverage](architecture/decision-coverage.md) tracks implementation **and verification**, not merely documentation or work started. Implementation PRs carry current Issue/PR/test evidence; the merger/coordinator reconciles the ledger from accepted evidence rather than asking parallel agents to edit shared rows.
 
 ## Agent continuity
 

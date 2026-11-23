@@ -6,6 +6,8 @@
 
 **Implementation status:** `No implementation evidence`, `In progress`, `Implemented / unverified`, `Verified`, `Deferred` or `Superseded`. Change a row only with linked Issue/PR and relevant test/inspection proof; do not treat PR merge alone as safety verification. For multi-requirement decisions, retain clear partial evidence rather than declaring them wholly verified.
 
+**Update ownership:** Each implementation PR records affected D-numbers and evidence in its own description. The merging agent/coordinator reconciles this shared table from accepted evidence at merge time or promptly afterward, rather than having concurrent feature branches edit the same rows.
+
 | Decision | Phase | Implementation status | Issue / PR evidence | Verification evidence |
 | --- | --- | --- | --- | --- |
 | D01 | Initial / as applicable | No implementation evidence | — | — |
@@ -172,4 +174,4 @@
 
 ## Updating this tracker
 
-On each relevant implementation PR, add Issue/PR and test evidence for the affected decision rows. Use a single row per **D01–D161** (including D70) and retain the historical supersession and release phase. If evidence covers only part of a decision, describe that limit instead of treating all safeguards as verified. When CI exists, add a deterministic check that IDs appear **once each**, D70 stays marked superseded, and D147–D158 remain deferred unless explicitly rephased by a new approved decision.
+For each implementation PR, report affected decision IDs, Issue/PR references, and test/inspection results (including remaining unverified requirements) in the PR description. Once accepted, the merger/coordinator updates affected rows as a single merge-time reconciliation or prompt follow-up, rather than maintaining competing ledger edits across active branches. Use a single row per **D01–D161** (including D70) and retain historical supersession and release phase. If evidence covers only part of a decision, describe that limit instead of treating all safeguards as verified. When CI exists, add a deterministic check that IDs appear **once each**, D70 stays marked superseded, and D147–D158 remain deferred unless explicitly rephased by a new approved decision.
