@@ -2,8 +2,6 @@
 
 Muteinous v2 is the new Windows-first desktop application for source-aware profanity censorship of supported video-game content. Its architecture avoids maintained game-specific knowledge and prioritizes preserving original data and native asset fidelity.
 
-**Current state:** architecture decisions D01–D161 agreed; implementation-readiness review concluded **ready with nonblocking open items**. This branch contains **documentation handoff only**; no runnable v2 application or CI has been established.
-
 ## For coding agents and contributors
 
 1. Read [`AGENTS.md`](AGENTS.md), then the [initial-release scope](docs/release-scope.md) and the applicable **full architecture decisions**.
