@@ -10,13 +10,13 @@
 
 ## Next
 
-1. Review documentation fidelity and handoff conventions; decide explicitly when repository decisions replace ChatGPT Space as canonical.
+1. Review the completeness of the [repository decision log](../docs/architecture/decisions.md) and handoff conventions; publish any approved corrections through the [documentation review process](../docs/development.md#architecture-documentation-governance).
 2. Once PR #1 is accepted, implement minimal package/scaffolding/Windows CI in a separate PR following the [development plan](../docs/development.md#pr-2--minimal-package-and-windows-ci).
 3. Investigate reusable native-format reconstruction, fidelity and safe installation viability **early**, not only at final Apply integration.
 
 ## Cross-task risks
 
-- Agent-only Space access is unreliable: keep all implementation-relevant requirements available in Git.
+- Keep implementation requirements and contributor instructions self-contained in version-controlled repository documentation.
 - Supported native editing and loader/installation safety require actual verified capability evidence; do not assume an earlier game-specific implementation provides it.
 
 This file is a short coordination aid. **Live status belongs in Issues/PRs**; verify before choosing work. Do not update it for every branch checkpoint.

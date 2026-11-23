@@ -14,7 +14,7 @@
 - A source-faithful version-controlled [architecture decision log](architecture/decisions.md), preserving the complete history and approved release phasing.
 - Usable, offline agent onboarding: [`AGENTS.md`](../AGENTS.md), [release scope](release-scope.md), [code organization](architecture/code-organization.md), [test policy](testing.md), [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agent/README.md).
 - Task-specific handoff and cross-task finding lifecycle, including cleanup and promotion to permanent docs.
-- Documentation-only: no code/test infrastructure or new architectural decisions. Review the snapshot and references; **merging does not itself declare a canonical-source transition**.
+- Documentation-only: no code/test infrastructure or new architectural decisions. Review the decision-record completeness and repository links.
 
 ## PR 2 — minimal package and Windows CI
 
@@ -22,7 +22,7 @@ After PR 1 review, add `pyproject.toml`, `src/muteinous/__init__.py`, minimal `t
 
 ## Architecture documentation governance
 
-The version-controlled [decision log](architecture/decisions.md) provides the implementation-readable copy of the [ChatGPT Space Architecture Decision Log](https://chatgpt.com/space/page_35393eb6e1848191ae3624e3148e3dbd). Space remains formally canonical until an **explicitly approved and synchronized** transition; merging PR 1 does not itself perform that transition. Agents without Space should implement from the repository copy, escalate apparent conflicts or missing requirements, and **not guess or silently revise agreed decisions**. While Space is canonical, approve decision-text changes there first and synchronize them through a reviewed Git PR. Once Git becomes authoritative, adopt a separately agreed amendment workflow.
+The version-controlled [architecture decision log](architecture/decisions.md) is the **self-contained implementation reference for this repository**. Contributors should be able to implement, test, review, and propose changes without access to private planning discussions or other external workspaces. If the recorded requirements are missing, ambiguous or contradictory, raise the issue for maintainer review rather than guessing or silently changing a decision. Approved amendments and supersessions must be recorded in the decision log through a reviewed PR, with affected implementation guidance and evidence tracking synchronized. Maintainers are responsible for reconciling earlier planning records; contributors do not need those records.
 
 **Avoid stale copies:** Do not repeat a fixed decision count/range, historical decision statuses or detailed architecture rules in onboarding files, project overviews or coordination notes. Cite the [decision log](architecture/decisions.md) (specific D-numbers only when useful for traceability). Keep [release scope](release-scope.md), [code organization](architecture/code-organization.md) and [testing](testing.md) as focused implementation guidance, not alternative authorities. When a decision changes, review and update only its affected derived guidance and [coverage rows](architecture/decision-coverage.md) in the same documentation synchronization; compare coverage IDs with the current log instead of assuming a permanent last ID.
 

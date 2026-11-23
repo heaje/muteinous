@@ -1,6 +1,6 @@
 # Temporary implementation knowledge
 
-This directory is a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Its files are version-controlled so agents without ChatGPT Space or issue-comment access can benefit from earlier work.
+This directory is a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Notes are version-controlled and shared through discoverable branches and task handoffs, without depending on an individual agent's conversation history.
 
 ## Where information belongs
 

@@ -10,4 +10,4 @@ Muteinous v2 is the new Windows-first desktop application for source-aware profa
 
 ## Architecture decision history
 
-The [architecture decision log](docs/architecture/decisions.md) is available in the repository for contributors and agents without ChatGPT Space access. See [architecture documentation governance](docs/development.md#architecture-documentation-governance) for the authoritative source and synchronization rules.
+The [architecture decision log](docs/architecture/decisions.md) is available in this repository as the complete implementation reference. See [architecture documentation governance](docs/development.md#architecture-documentation-governance) for how proposed changes are reviewed and recorded.
