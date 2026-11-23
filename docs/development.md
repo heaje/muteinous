@@ -1,0 +1,26 @@
+# Development and implementation workflow
+
+This guide records enduring contribution and review practices. Consult the [coordination snapshot](../.agents/current-state.md) and linked GitHub Issues/PRs for current work, proposed milestones, setup status and unfinished tasks; do not infer their existence from this guide.
+
+## Work unit and review policy
+
+- Prefer **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goals, relevant decisions, acceptance/verification evidence, dependencies, and excluded/deferred features.
+- Organize milestones in GitHub as useful for the actual implementation. Investigate reusable native-format reconstruction and safe installation viability early, not only during final Apply integration.
+- Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
+- PR descriptions: purpose and Issue, affected D-number decisions with actual implementation/verification evidence and unverified parts, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. The merger/coordinator reconciles the shared [decision-coverage ledger](architecture/decision-coverage.md) from accepted PR evidence at merge time or promptly afterward; parallel feature branches should not separately maintain the same table. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
+
+## Repository foundation
+
+When adding initial packaging and CI, follow the [code organization](architecture/code-organization.md) and [CI introduction and early coverage requirements](testing.md#introducing-ci-and-early-coverage). Track bootstrap work in live Issues/PRs and the [temporary coordination snapshot](../.agents/current-state.md), not as permanent progress assertions in this guide.
+
+## Architecture documentation governance
+
+The version-controlled [architecture decision log](architecture/decisions.md) is the **self-contained implementation reference for this repository** (adopted as canonical by the merge of PR #1). Contributors should be able to implement, test, review, and propose changes without access to private planning discussions or other external workspaces. If the recorded requirements are missing, ambiguous or contradictory, raise the issue for maintainer review rather than guessing or silently changing a decision. Approved amendments and supersessions must be recorded in the decision log through a reviewed PR, with affected implementation guidance and evidence tracking synchronized. Maintainers are responsible for reconciling earlier planning records; contributors do not need those records.
+
+**Avoid stale copies:** Do not repeat a fixed decision count/range, historical decision statuses or detailed architecture rules in onboarding files, project overviews or coordination notes. Cite the [decision log](architecture/decisions.md) (specific D-numbers only when useful for traceability). Keep [release scope](release-scope.md), [code organization](architecture/code-organization.md) and [testing](testing.md) as focused implementation guidance, not alternative authorities. When a decision changes, review and update only its affected derived guidance and [coverage rows](architecture/decision-coverage.md) in the same documentation synchronization; compare coverage IDs with the current log instead of assuming a permanent last ID.
+
+[Decision coverage](architecture/decision-coverage.md) tracks implementation **and verification**, not merely documentation or work started. Implementation PRs carry current Issue/PR/test evidence; the merger/coordinator reconciles the ledger from accepted evidence rather than asking parallel agents to edit shared rows.
+
+## Agent continuity
+
+Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agents/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under [`.agents/findings/`](../.agents/findings/README.md), and enduring knowledge in permanent docs. Reconcile [`.agents/current-state.md`](../.agents/current-state.md) periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
