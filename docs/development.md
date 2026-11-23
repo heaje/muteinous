@@ -12,7 +12,7 @@
 ## PR 1 — documentation handoff
 
 - Complete, source-faithful **D01–D161** snapshot including D70 supersession and D159 deferrals.
-- Usable, offline agent onboarding: `AGENTS.md`, release scope, code/test organization, development instructions, [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agent/README.md).
+- Usable, offline agent onboarding: [`AGENTS.md`](../AGENTS.md), [release scope](release-scope.md), [code organization](architecture/code-organization.md), [test policy](testing.md), [decision coverage](architecture/decision-coverage.md), and [temporary continuity](../.agent/README.md).
 - Task-specific handoff and cross-task finding lifecycle, including cleanup and promotion to permanent docs.
 - Documentation-only: no code/test infrastructure or new architectural decisions. Review the snapshot and references; **merging does not itself declare a canonical-source transition**.
 
@@ -28,4 +28,4 @@ After PR 1 review, add `pyproject.toml`, `src/muteinous/__init__.py`, minimal `t
 
 ## Agent continuity
 
-Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agent/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under `.agent/findings/`, and enduring knowledge in permanent docs. Reconcile `.agent/current-state.md` periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
+Follow [`AGENTS.md`](../AGENTS.md) and [temporary-knowledge instructions](../.agent/README.md): unfinished branch handoffs in Issues/PRs (with a committed branch-local note for repo-only agents), cross-task verified findings under [`.agent/findings/`](../.agent/findings/README.md), and enduring knowledge in permanent docs. Reconcile [`.agent/current-state.md`](../.agent/current-state.md) periodically, not per commit. Never commit proprietary game assets, keys, or unreviewed game-specific compatibility assumptions.
