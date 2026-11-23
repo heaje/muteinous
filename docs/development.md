@@ -13,6 +13,19 @@ This guide records enduring contribution and review practices. Consult the [coor
 
 When adding initial packaging and CI, follow the [code organization](architecture/code-organization.md) and [CI introduction and early coverage requirements](testing.md#introducing-ci-and-early-coverage). Track bootstrap work in live Issues/PRs and the [temporary coordination snapshot](../.agents/current-state.md), not as permanent progress assertions in this guide.
 
+### Local Python bootstrap
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. Use Python 3.12 for parity with the [Windows PR workflow](../.github/workflows/pr.yml) (the distribution requires Python 3.11+). From the repository root, create `.venv` and install the package and development extras with uv:
+
+~~~powershell
+uv venv --python 3.12 .venv
+uv pip install --python .venv/Scripts/python.exe -e '.[dev]'
+.\.venv\Scripts\python.exe -c 'import muteinous; print(muteinous.__file__)'
+uv build --wheel --out-dir dist
+~~~
+
+Run the [local checks](testing.md#local-validation-commands) before opening a PR. Those commands explicitly use `.venv`'s interpreter; activation is not needed. This bootstrap uses uv's pip-compatible environment workflow with bounded tool versions in `pyproject.toml` and no lockfile. The current bootstrap package has no production API and no runtime dependencies. Package subdirectories are added only when justified by [D160](architecture/decisions.md), not as placeholders.
+
 ## Architecture documentation governance
 
 The version-controlled [architecture decision log](architecture/decisions.md) is the **self-contained implementation reference for this repository** (adopted as canonical by the merge of PR #1). Contributors should be able to implement, test, review, and propose changes without access to private planning discussions or other external workspaces. If the recorded requirements are missing, ambiguous or contradictory, raise the issue for maintainer review rather than guessing or silently changing a decision. Approved amendments and supersessions must be recorded in the decision log through a reviewed PR, with affected implementation guidance and evidence tracking synchronized. Maintainers are responsible for reconciling earlier planning records; contributors do not need those records.

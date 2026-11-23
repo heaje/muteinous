@@ -1,0 +1,85 @@
+name: Pull request checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows package and tests
+    runs-on: windows-2025
+    timeout-minutes: 30 # Safety net; pytest has its own 10-minute step timeout.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: '0.13.9'
+
+      - name: Confirm two-vCPU baseline
+        shell: pwsh
+        run: |
+          $logical = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
+          Write-Host "Windows runner logical CPUs: $logical"
+          if ($logical -ne 2) {
+            throw 'Benchmark baseline changed; expected two-vCPU Windows runner.'
+          }
+
+      - name: Create uv environment and install editable package
+        shell: pwsh
+        run: |
+          uv venv --python 3.12 .venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip install --python .venv/Scripts/python.exe -e '.[dev]'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Validate editable import and built wheel
+        shell: pwsh
+        run: |
+          & .\.venv\Scripts\python.exe -c "import muteinous; print(muteinous.__file__)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv build --wheel --out-dir dist
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv venv --python 3.12 .ci/wheel-venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $wheel = (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName
+          uv pip install --python .ci/wheel-venv/Scripts/python.exe $wheel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & "$env:GITHUB_WORKSPACE/.ci/wheel-venv/Scripts/python.exe" -c "import muteinous; from importlib.metadata import version; assert version('muteinous'); print(muteinous.__file__)"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          finally { Pop-Location }
+
+      - name: Ruff lint
+        run: .\.venv\Scripts\python.exe -m ruff check src scripts tests
+
+      - name: Ruff format
+        run: .\.venv\Scripts\python.exe -m ruff format --check src scripts tests
+
+      - name: Strict type check
+        run: .\.venv\Scripts\python.exe -m mypy src scripts tests
+
+      - name: Verify decision ID synchronization
+        run: .\.venv\Scripts\python.exe scripts/check_decision_ids.py
+
+      - name: Pytest (logical CPUs, independent 10-minute timeout)
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          & .\.venv\Scripts\python.exe -m pytest -n logical --durations=10
+          $testExitCode = $LASTEXITCODE
+          $stopwatch.Stop()
+          $elapsed = '{0:F3}' -f $stopwatch.Elapsed.TotalSeconds
+          Write-Host "pytest test-only elapsed: $elapsed seconds; exit: $testExitCode"
+          if ($env:GITHUB_STEP_SUMMARY) {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "Pytest (-n logical): $elapsed seconds; exit: $testExitCode"
+          }
+          exit $testExitCode

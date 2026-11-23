@@ -1,30 +1,42 @@
-# Test architecture and runtime policy — D160–D161
+# Testing policy — D160–D161
 
 ## Required pull-request validation
 
-On a baseline **two-vCPU Windows GitHub Actions runner**, target **at most five minutes of test execution** for the required PR suite. This excludes provisioning, dependency setup and packaging. Five minutes is a target/investigation threshold, **not** permission to cut test coverage.
+On the baseline **two-vCPU Windows runner**, target **five minutes or less of test execution**, excluding setup and packaging. Investigate overruns without weakening or skipping coverage. Enforce an independent **approximately ten-minute test-step timeout** that fails CI on timeout, test failure, or an incomplete run; a whole-job timeout is not a substitute. Report test-only elapsed time separately from setup, track slow tests with `pytest --durations`, and benchmark serial against modest parallelism when selecting or revisiting worker counts.
 
-Enforce a **hard, approximately ten-minute timeout around the test-execution process itself**. The check **must fail** on timeout or incomplete tests; a workflow job timeout alone includes setup and does not satisfy D161. Clearly separate setup duration from actual test duration and preserve readable failure output. Benchmark a serial run against modest parallelism (e.g. two workers) on the baseline runner and track slow tests with `pytest --durations`.
+Run fast unit and plugin-contract tests plus representative **deterministic safety-critical integration tests** for implemented capabilities, covering as applicable:
+- Source identity/freshness and stale-edit/configuration rejection.
+- Required-edit completeness and selected-scope or deferred-manual-resolution refusals (D24/D143/D159).
+- PCM sample/timing/fade fidelity outside intended edits.
+- Shared installation ownership, backup, replacement/removal, and recovery safeguards.
+- Result-bundle integrity, invalidation, and protected cleanup.
 
-Every PR should run fast unit and plugin-contract tests plus deterministic **representative safety-critical integration coverage** as implemented, including:
-- Original source identity/freshness, stale scan/edit rejection and changed configuration.
-- Required-edit completeness, D24/D143 selected-scope refusal and D159 deferred-manual-resolution blockers.
-- Actual PCM sample/timing/fades and fidelity preservation outside edit regions.
-- Shared installer ownership, backup, safe replacement/removal, recovery and update/running-game protection.
-- Result bundle publication, integrity, invalidation and protected cleanup.
+Use small generic synthetic fixtures and controlled inference fakes; required PR checks must not depend on heavy model downloads, GPUs, or real game installations. Do not claim skipped, timed-out, unrun, or unimplemented coverage as passed.
 
-Use small generic **synthetic** fixtures and controlled inference fakes. Required checks must not silently download heavy speech models or rely on GPU/real game installations. **Do not report skipped, timed-out or unrun required coverage as passed.**
+**Timeout failure-path verification:** A configured test-step timeout is not, by itself, proof that a timeout fails the required CI check. In a separately scheduled negative-control run, deliberately overrun the test step, verify that the step and job fail independently of the whole-job timeout, and record the run URL and diagnostic logs in the relevant Issue/PR. Keep this deliberately failing check out of routine PR validation. Until the negative-control evidence exists, report timeout behavior as configured but **not verified**; do not claim the acceptance criterion is met.
+
+## Local validation commands
+
+After [installing development dependencies with uv](development.md#local-python-bootstrap), run from the repository root on Windows (no virtual-environment activation required):
+
+~~~powershell
+.\.venv\Scripts\python.exe -m ruff check src scripts tests
+.\.venv\Scripts\python.exe -m ruff format --check src scripts tests
+.\.venv\Scripts\python.exe -m mypy src scripts tests
+.\.venv\Scripts\python.exe scripts/check_decision_ids.py
+.\.venv\Scripts\python.exe -m pytest -n logical --durations=10
+~~~
+
+`-n logical` uses the `pytest-xdist[psutil]` development dependency to select logical CPU workers; use `-n 2` locally if the machine has more cores than the tests need. The [PR workflow](../.github/workflows/pr.yml) also validates editable installation and an isolated wheel import, enforces the test-step timeout, and reports test-only timing. The [decision-ID checker](../scripts/check_decision_ids.py) rejects mismatched, duplicate, or malformed decision identifiers.
 
 ## Other validation tiers
 
-Hardware/model downloads, native-format/codec tools, real inference, larger failures and end-to-end tests may be separately provisioned and gated on main, schedule or release candidates as appropriate. **Complete release validation** must exercise all applicable supported behavior even if it exceeds the PR runtime budget. Do not defer *all* safety coverage to longer suites.
+Longer native-format, hardware, real-model, recovery/failure-injection, and end-to-end tests may run on main, scheduled, or release workflows when appropriate. **Release validation must cover all applicable supported behavior**; do not defer all safety coverage outside PR checks.
 
 ## Test layout
 
-Tests live in `tests/unit/`, `tests/contracts/`, `tests/integration/`, `tests/e2e/`, plus `tests/fixtures/` and `tests/support/`. Mirror code ownership where it aids discovery, not through compulsory one-test-per-file mirroring.
+Use `tests/unit/`, `tests/contracts/`, `tests/integration/`, `tests/e2e/`, `tests/fixtures/`, and `tests/support/` as needed. Mirror production modules only when helpful.
 
 ## Introducing CI and early coverage
 
-When establishing packaging and Windows CI, begin with a minimal import/smoke test; do **not** fabricate safety-test coverage before functionality exists. Validate installation, test discovery, and appropriate lint/type checks. Use a Windows two-vCPU baseline runner and enforce an independently failing ~600-second test-process limit; report test-only execution time, slow tests, and failed/incomplete runs separately from setup. Required checks must not implicitly download speech models.
-
-Add representative deterministic safety integration checks alongside each implementation slice that introduces a relevant capability. Never claim a not-yet-implemented safeguard is tested. Do not silently increase budgets, re-tier, or skip tests to hide a regression; a justified change requires review and evidence. Full normative policy: [D161](architecture/decisions.md).
+Bootstrap with meaningful package-install/import smoke tests, not fabricated safety tests. Add representative deterministic integration coverage with each new safety-critical capability. Keep CI failures and incomplete runs visible; changes to runtime budgets or required checks need explicit review under [D161](architecture/decisions.md).
