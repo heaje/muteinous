@@ -23,8 +23,8 @@ Hardware/model downloads, native-format/codec tools, real inference, larger fail
 
 Tests live in `tests/unit/`, `tests/contracts/`, `tests/integration/`, `tests/e2e/`, plus `tests/fixtures/` and `tests/support/`. Mirror code ownership where it aids discovery, not through compulsory one-test-per-file mirroring.
 
-## CI implementation status and PR 2 acceptance
+## Introducing CI and early coverage
 
-**No test tooling or CI is configured by documentation PR 1.** Scaffolding/CI PR 2 should add only a minimal import/smoke test initially (do **not** fabricate meaningful safety-test coverage before functionality exists), install/type/lint validation as justified, and Windows two-vCPU CI. The PR test command must have its own ~600-second enforced time budget; collect and surface test execution timings, check failures, and explain which essential integration coverage is expected to arrive alongside implementation slices.
+When establishing packaging and Windows CI, begin with a minimal import/smoke test; do **not** fabricate safety-test coverage before functionality exists. Validate installation, test discovery, and appropriate lint/type checks. Use a Windows two-vCPU baseline runner and enforce an independently failing ~600-second test-process limit; report test-only execution time, slow tests, and failed/incomplete runs separately from setup. Required checks must not implicitly download speech models.
 
-Do not quietly raise budgets or re-tier/skip tests to hide a regression. A justified change requires explicit review and evidence. Full normative policy: [D161](architecture/decisions.md).
+Add representative deterministic safety integration checks alongside each implementation slice that introduces a relevant capability. Never claim a not-yet-implemented safeguard is tested. Do not silently increase budgets, re-tier, or skip tests to hide a regression; a justified change requires review and evidence. Full normative policy: [D161](architecture/decisions.md).
