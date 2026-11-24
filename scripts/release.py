@@ -19,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 CHANNELS = {"alpha": "a", "beta": "b", "rc": "rc", "stable": None}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 BOOTSTRAP = "922b92ec08f6f711be2b5734000304459b13ba62"
-RECOVERY_DOC = "docs/development.md#recover-a-failed-unpublished-release"
 
 if TYPE_CHECKING:
     from packaging.version import Version
@@ -149,21 +148,17 @@ def check_release_inventory(tags: list[str], existing: list[dict[str, Any]]) -> 
     names = [str(item["tag_name"]) for item in existing]
     if len(names) != len(set(names)) or set(names) != set(tags):
         raise RuntimeError(
-            "Git tag and GitHub Release inventory differs; investigate orphan tags or "
-            f"drafts before continuing. See {RECOVERY_DOC}"
+            "Git tag and published GitHub Release inventory differs; investigate before "
+            "continuing"
         )
 
 
-def refuse_other_drafts(existing: list[dict[str, Any]], tag: str) -> None:
-    drafts = sorted(
-        str(item["tag_name"])
-        for item in existing
-        if item["draft"] and item["tag_name"] != tag
-    )
+def refuse_drafts(existing: list[dict[str, Any]]) -> None:
+    drafts = [str(item["tag_name"]) for item in existing if item["draft"]]
     if drafts:
         raise RuntimeError(
-            f"Other draft release(s) already exist: {', '.join(drafts)}. "
-            f"Resolve them before retrying; see {RECOVERY_DOC}"
+            "Draft release(s) already exist: "
+            f"{', '.join(sorted(drafts))}. Delete or publish them before retrying"
         )
 
 
@@ -345,70 +340,47 @@ def validate_artifacts(
     return tag, source_tags
 
 
-def settled_releases(
-    expected_tags: list[str], tag: str, asset_count: int
-) -> list[dict[str, Any]]:
+def settled_releases(tag: str, asset_count: int) -> list[dict[str, Any]]:
     """Read releases after creation, tolerating GitHub's read-after-write lag.
 
     Only the read is retried, never the creation. Persistent disagreement still
-    fails closed through the normal inventory check.
+    fails closed through draft validation.
     """
     for delay in (0, 1, 2, 4, 8, 15):
         time.sleep(delay)
         current = releases()
         match = [r for r in current if r["tag_name"] == tag]
-        if (
-            {r["tag_name"] for r in current} == set(expected_tags)
-            and len(match) == 1
-            and len(match[0]["assets"]) == asset_count
-            and all(a.get("digest") for a in match[0]["assets"])
-        ):
+        if len(match) == 1 and len(match[0]["assets"]) == asset_count:
             return current
-    check_release_inventory(expected_tags, current)
-    return current
+    raise RuntimeError("Draft release or uploaded assets did not settle in GitHub")
 
 
 def publish_draft(sha: str, channel: str, output: Path) -> None:
     validate_source(sha)
     tag, tags = validate_artifacts(output, sha, channel)
-    if local_tags() != tags or remote_tags() != tags:
+    if local_tags() != tags:
+        raise RuntimeError("Local tags changed after preparation; start a fresh run")
+    remote = remote_tags()
+    if tag in remote:
         raise RuntimeError(
-            "Remote tags changed after preparation; investigate before retrying. "
-            f"See {RECOVERY_DOC}"
+            f"Tag already exists remotely: {tag}; never reuse or move it"
         )
+    if remote != tags:
+        raise RuntimeError("Remote tags changed after preparation; start a fresh run")
     existing = releases()
+    refuse_drafts(existing)
     check_release_inventory(list(tags), existing)
-    refuse_other_drafts(existing, tag)
-    if remote_tags() != tags:
-        raise RuntimeError(
-            "Remote tags changed during draft checks; investigate before retrying. "
-            f"See {RECOVERY_DOC}"
-        )
-    # Atomic creation; GitHub refuses a pre-existing ref. No force/update.
-    print(
-        f"Creating {tag} at {sha}; if a later operation fails use documented recovery",
-        flush=True,
-    )
-    run(
-        "gh",
-        "api",
-        "--method",
-        "POST",
-        "repos/{owner}/{repo}/git/refs",
-        "-f",
-        f"ref=refs/tags/{tag}",
-        "-f",
-        f"sha={sha}",
-    )
-    if remote_tags() != {**tags, tag: sha}:
-        raise RuntimeError("Remote tags changed during tag creation; investigate")
+    remote = remote_tags()
+    if remote != tags:
+        raise RuntimeError("Remote tags changed during draft checks; start a fresh run")
     args = [
         "gh",
         "release",
         "create",
         tag,
-        "--verify-tag",
         "--draft",
+        "--target",
+        sha,
         "--title",
         tag,
         "--notes-file",
@@ -419,8 +391,7 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
     args += [str(p) for p in sorted(output.iterdir()) if p.name != "release-notes.md"]
     print(run(*args), flush=True)
     count = sum(p.name != "release-notes.md" for p in output.iterdir())
-    current_releases = settled_releases([*tags, tag], tag, count)
-    refuse_other_drafts(current_releases, tag)
+    current_releases = settled_releases(tag, count)
     matches = [item for item in current_releases if item["tag_name"] == tag]
     if (
         len(matches) != 1
@@ -428,9 +399,10 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         or matches[0]["published_at"] is not None
         or matches[0].get("immutable")
         or matches[0]["prerelease"] != (channel != "stable")
+        or matches[0].get("target_commitish") != sha
     ):
         raise RuntimeError(
-            "Expected exactly one correctly classified draft; inspect before publishing"
+            "Expected exactly one correctly classified draft targeting the validated SHA"
         )
     assets = {p.name: p for p in output.iterdir() if p.name != "release-notes.md"}
     uploaded = {asset["name"]: asset for asset in matches[0]["assets"]}
@@ -442,64 +414,9 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
             raise RuntimeError(f"Incomplete draft asset: {name}")
         if asset.get("digest") != f"sha256:{digest(path)}":
             raise RuntimeError(f"GitHub asset digest missing or mismatched: {name}")
-    if remote_tags() != {**tags, tag: sha}:
-        raise RuntimeError("Remote tags no longer match validated source and inventory")
+    if remote_tags() != tags:
+        raise RuntimeError("Draft creation unexpectedly changed remote tags")
     print(f"Draft {tag} created; review and publish manually.", flush=True)
-
-
-def recovery_target(
-    tag: str, sha: str, tags: dict[str, str], existing: list[dict[str, Any]]
-) -> int | None:
-    version_for_tag(tag)
-    if not SHA.fullmatch(sha) or tags.get(tag) != sha:
-        raise RuntimeError(
-            "Tag is missing or does not match the explicitly supplied original SHA"
-        )
-    if tag != max(tags, key=version_for_tag):
-        raise RuntimeError("Only the newest failed release can be reset")
-    matches = [item for item in existing if item["tag_name"] == tag]
-    if not matches:
-        # Orphan tag: requires independent operator evidence.
-        return None
-    if (
-        len(matches) != 1
-        or not matches[0]["draft"]
-        or matches[0]["published_at"] is not None
-        or matches[0].get("immutable")
-    ):
-        raise RuntimeError("Refusing to reset a published or ambiguous release")
-    return int(matches[0]["id"])
-
-
-def recover(tag: str, sha: str, confirmation: str, evidence: str) -> None:
-    if confirmation != f"NEVER PUBLISHED {tag} {sha}" or not evidence.strip():
-        raise RuntimeError(
-            "Supply exact never-published confirmation and failure evidence"
-        )
-    print(
-        f"Recovery requested: {tag} {sha}; operator evidence: {evidence!r}",
-        flush=True,
-    )
-    release_id = recovery_target(tag, sha, remote_tags(), releases())
-    # Recheck the exact tag and release state immediately before deletion.
-    if recovery_target(tag, sha, remote_tags(), releases()) != release_id:
-        raise RuntimeError("Recovery target changed; refusing deletion")
-    if release_id is not None:
-        run(
-            "gh",
-            "api",
-            "--method",
-            "DELETE",
-            f"repos/{{owner}}/{{repo}}/releases/{release_id}",
-        )
-    # Lease protects against deleting a tag moved since confirmation.
-    ref = f"refs/tags/{tag}"
-    git("push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}")
-    print(
-        "Reset complete. Fix through PR, then dispatch a fresh release. "
-        "Previously fetched tags may remain.",
-        flush=True,
-    )
 
 
 def main() -> None:
@@ -511,23 +428,16 @@ def main() -> None:
         p.add_argument("--output", required=True, type=Path)
         if command != "dev":
             p.add_argument("--channel", choices=CHANNELS, required=True)
-    p = sub.add_parser("recover")
-    p.add_argument("--tag", required=True)
-    p.add_argument("--sha", required=True)
-    p.add_argument("--confirmation", required=True)
-    p.add_argument("--evidence", required=True)
     args = parser.parse_args()
-    if args.command in {"draft", "recover"} and os.getenv("GITHUB_ACTIONS") != "true":
+    if args.command == "draft" and os.getenv("GITHUB_ACTIONS") != "true":
         # Writes must come from the audited, concurrency-controlled workflows.
-        raise SystemExit(f"{args.command} may only run inside its GitHub workflow")
+        raise SystemExit("draft may only run inside its GitHub workflow")
     if args.command == "dev":
         build(args.sha, args.output)
     elif args.command == "prepare":
         prepare(args.sha, args.channel, args.output)
     elif args.command == "draft":
         publish_draft(args.sha, args.channel, args.output)
-    else:
-        recover(args.tag, args.sha, args.confirmation, args.evidence)
 
 
 if __name__ == "__main__":

@@ -78,7 +78,7 @@ jobs:
           if-no-files-found: error
 
   draft:
-    name: Create immutable-source tag and draft release
+    name: Create draft release for validated source
     needs: prepare
     runs-on: ubuntu-26.04
     timeout-minutes: 10

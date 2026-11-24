@@ -89,18 +89,10 @@ def test_only_draft_is_created(
 
     def gh(*args: str) -> str:
         calls.append(args)
-        if args[:4] == ("gh", "api", "--method", "POST"):
-            assert args[4:] == (
-                "repos/{owner}/{repo}/git/refs",
-                "-f",
-                f"ref=refs/tags/{tag}",
-                "-f",
-                f"sha={SHA}",
-            )
-            tags[tag] = SHA
-            return "{}"
         assert args[:4] == ("gh", "release", "create", tag)
-        assert "--verify-tag" in args and "--draft" in args
+        assert "--draft" in args and "--target" in args
+        assert args[args.index("--target") + 1] == SHA
+        assert "--verify-tag" not in args
         assert ("--prerelease" in args) == (channel != "stable")
         assert args[args.index("--notes-file") + 1] == str(output / "release-notes.md")
         assets = [p for p in output.iterdir() if p.name != "release-notes.md"]
@@ -110,6 +102,7 @@ def test_only_draft_is_created(
                 "tag_name": tag,
                 "draft": True,
                 "prerelease": channel != "stable",
+                "target_commitish": SHA,
                 "published_at": None,
                 "assets": [
                     {
@@ -141,9 +134,9 @@ def test_only_draft_is_created(
             RuntimeError, match="GitHub asset digest missing or mismatched"
         ):
             release.publish_draft(SHA, channel, output)
-    # Writes create one tag and one draft; publication is never attempted.
-    assert len(calls) == 2
-    assert "--draft" in calls[1]
+    # A single gh release create makes the draft; GitHub creates no tag yet.
+    assert len(calls) == 1
+    assert tags == {}
     assert not any("release" in call and "edit" in call for call in calls)
 
 
@@ -174,7 +167,85 @@ def test_remote_tag_drift_prevents_draft(
     monkeypatch.setattr(release, "local_tags", dict)
     monkeypatch.setattr(release, "remote_tags", lambda: {TAG: SHA})
     monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
-    with pytest.raises(RuntimeError, match="Remote tags changed"):
+    with pytest.raises(RuntimeError, match="Tag already exists remotely"):
+        release.publish_draft(SHA, "alpha", output)
+
+
+@pytest.mark.parametrize("target", [OTHER_SHA, None])
+def test_draft_target_must_match_validated_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str | None
+) -> None:
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG, "alpha")
+    records: list[dict[str, Any]] = []
+
+    def gh(*args: str) -> str:
+        assets = [p for p in output.iterdir() if p.name != "release-notes.md"]
+        records.append(
+            {
+                "tag_name": TAG,
+                "draft": True,
+                "prerelease": True,
+                "published_at": None,
+                "target_commitish": target,
+                "assets": [
+                    {
+                        "name": p.name,
+                        "size": p.stat().st_size,
+                        "state": "uploaded",
+                        "digest": f"sha256:{release.digest(p)}",
+                    }
+                    for p in assets
+                ],
+            }
+        )
+        return "draft URL"
+
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "local_tags", dict)
+    monkeypatch.setattr(release, "remote_tags", dict)
+    monkeypatch.setattr(release, "releases", lambda: list(records))
+    monkeypatch.setattr(release, "run", gh)
+    with pytest.raises(RuntimeError, match="targeting the validated SHA"):
+        release.publish_draft(SHA, "alpha", output)
+
+
+def test_duplicate_same_tag_drafts_fail_settled_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG, "alpha")
+    records: list[dict[str, Any]] = []
+
+    def gh(*args: str) -> str:
+        assets = [p for p in output.iterdir() if p.name != "release-notes.md"]
+        record = {
+            "tag_name": TAG,
+            "draft": True,
+            "prerelease": True,
+            "published_at": None,
+            "target_commitish": SHA,
+            "assets": [
+                {
+                    "name": p.name,
+                    "size": p.stat().st_size,
+                    "state": "uploaded",
+                    "digest": f"sha256:{release.digest(p)}",
+                }
+                for p in assets
+            ],
+        }
+        records.extend([record, dict(record)])
+        return "draft URL"
+
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "local_tags", dict)
+    monkeypatch.setattr(release, "remote_tags", dict)
+    monkeypatch.setattr(release, "releases", lambda: list(records))
+    monkeypatch.setattr(release, "run", gh)
+    with pytest.raises(RuntimeError, match="did not settle"):
         release.publish_draft(SHA, "alpha", output)
 
 
@@ -195,147 +266,76 @@ def test_tag_drift_during_draft_preflight_prevents_write(
     monkeypatch.setattr(release, "remote_tags", lambda: next(remote))
     monkeypatch.setattr(release, "releases", list)
     monkeypatch.setattr(release, "run", track_write)
-    with pytest.raises(RuntimeError, match="Remote tags changed.*docs/development.md"):
+    with pytest.raises(RuntimeError, match="Remote tags changed"):
         release.publish_draft(SHA, "alpha", output)
     assert not writes
 
 
-def test_orphan_tag_and_other_draft_refuse_new_release(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("draft_tag", [TAG, "v0.1.0"])
+def test_any_existing_draft_refuses_new_release(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    draft_tag: str,
 ) -> None:
     output = tmp_path / "artifacts"
-    artifacts(output, TAG, "alpha")
-    orphan = {"v0.1.0": OTHER_SHA}
-    monkeypatch.setattr(release, "validate_source", lambda _: None)
-    monkeypatch.setattr(release, "local_tags", lambda: {})
-    monkeypatch.setattr(release, "remote_tags", lambda: orphan)
-    monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
-    with pytest.raises(RuntimeError, match="Remote tags changed.*docs/development.md"):
-        release.publish_draft(SHA, "alpha", output)
-
     prior_tags = {"v0.1.0": OTHER_SHA}
-    artifacts(tmp_path / "with-draft", TAG, "alpha", prior_tags)
+    artifacts(output, TAG, "alpha", prior_tags)
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
     monkeypatch.setattr(release, "local_tags", lambda: prior_tags)
     monkeypatch.setattr(release, "remote_tags", lambda: prior_tags)
     monkeypatch.setattr(
         release,
         "releases",
-        lambda: [{"tag_name": "v0.1.0", "draft": True}],
+        lambda: [{"tag_name": draft_tag, "draft": True}],
     )
-    with pytest.raises(RuntimeError, match="Other draft release.*docs/development.md"):
-        release.publish_draft(SHA, "alpha", tmp_path / "with-draft")
+    monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
+    with pytest.raises(RuntimeError, match="Draft release"):
+        release.publish_draft(SHA, "alpha", output)
+
+
+def test_remote_tag_mismatch_refuses_new_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG, "alpha")
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "local_tags", lambda: {})
+    monkeypatch.setattr(release, "remote_tags", lambda: {"v0.1.0": OTHER_SHA})
+    monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
+    with pytest.raises(RuntimeError, match="Remote tags changed"):
+        release.publish_draft(SHA, "alpha", output)
+
+
+def test_existing_release_tag_refuses_new_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG, "alpha")
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "local_tags", lambda: {})
+    monkeypatch.setattr(release, "remote_tags", lambda: {TAG: SHA})
+    monkeypatch.setattr(release, "releases", list)
+    monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
+    with pytest.raises(RuntimeError, match="Tag already exists remotely"):
+        release.publish_draft(SHA, "alpha", output)
 
 
 def test_release_tag_inventory_must_match_releases() -> None:
     release.check_release_inventory([], [])
-    with pytest.raises(RuntimeError, match="inventory differs.*docs/development.md"):
+    with pytest.raises(RuntimeError, match="inventory differs"):
         release.check_release_inventory(["v0.1.0"], [])
-    with pytest.raises(RuntimeError, match="inventory differs.*docs/development.md"):
+    with pytest.raises(RuntimeError, match="inventory differs"):
         release.check_release_inventory([], [{"tag_name": "v0.1.0"}])
-
-
-def record(
-    tag: str = TAG,
-    *,
-    draft: bool = True,
-    published_at: str | None = None,
-    immutable: bool = False,
-) -> dict[str, Any]:
-    return {
-        "id": 7,
-        "tag_name": tag,
-        "draft": draft,
-        "published_at": published_at,
-        "immutable": immutable,
-    }
-
-
-def test_recovery_refuses_published_ambiguous_old_or_mismatched_targets() -> None:
-    tags = {TAG: SHA}
-    assert release.recovery_target(TAG, SHA, tags, []) is None
-    assert release.recovery_target(TAG, SHA, tags, [record()]) == 7
-    for existing in (
-        [record(draft=False, published_at="2026-11-24")],
-        [record(draft=True, published_at="2026-11-24")],
-        [record(immutable=True)],
-        [record(), record()],
-    ):
-        with pytest.raises(RuntimeError, match="published or ambiguous"):
-            release.recovery_target(TAG, SHA, tags, existing)
-    with pytest.raises(RuntimeError, match="explicitly supplied original SHA"):
-        release.recovery_target(TAG, OTHER_SHA, tags, [record()])
-    with pytest.raises(RuntimeError, match="newest"):
-        release.recovery_target(TAG, SHA, {**tags, "v0.2.0": SHA}, [record()])
-
-
-@pytest.mark.parametrize("has_draft", [True, False])
-def test_recovery_requires_confirmation_and_uses_lease(
-    monkeypatch: pytest.MonkeyPatch, has_draft: bool
-) -> None:
-    tags = {TAG: SHA}
-    records = [record()] if has_draft else []
-    calls: list[tuple[str, ...]] = []
-
-    def gh(*args: str) -> str:
-        calls.append(args)
-        assert args == (
-            "gh",
-            "api",
-            "--method",
-            "DELETE",
-            "repos/{owner}/{repo}/releases/7",
-        )
-        assert has_draft
-        records.clear()
-        return ""
-
-    def git(*args: str) -> str:
-        assert args == (
-            "push",
-            f"--force-with-lease=refs/tags/{TAG}:{SHA}",
-            "origin",
-            f":refs/tags/{TAG}",
-        )
-        assert not records
-        tags.clear()
-        return ""
-
-    monkeypatch.setattr(release, "remote_tags", lambda: dict(tags))
-    monkeypatch.setattr(release, "releases", lambda: list(records))
-    monkeypatch.setattr(release, "run", gh)
-    monkeypatch.setattr(release, "git", git)
-    with pytest.raises(RuntimeError, match="confirmation"):
-        release.recover(TAG, SHA, "wrong", "operator checked the history")
-    assert not calls
-
-    release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "operator evidence")
-    assert not tags
-    assert not records
-    assert len(calls) == int(has_draft)
-
-
-def test_recovery_rechecks_before_any_delete(monkeypatch: pytest.MonkeyPatch) -> None:
-    tag_states = iter([{TAG: SHA}, {TAG: OTHER_SHA}])
-    monkeypatch.setattr(release, "remote_tags", lambda: next(tag_states))
-    monkeypatch.setattr(release, "releases", lambda: [record()])
-    monkeypatch.setattr(
-        release, "run", lambda *_: pytest.fail("unexpected release delete")
-    )
-    monkeypatch.setattr(release, "git", lambda *_: pytest.fail("unexpected tag delete"))
-    with pytest.raises(RuntimeError, match="explicitly supplied original SHA"):
-        release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "operator evidence")
 
 
 def test_workflow_contracts() -> None:
     root = Path(__file__).resolve().parents[2] / ".github/workflows"
     workflows = {path.name: path.read_text("utf-8") for path in root.glob("*.yml")}
-    for name in ("development-build.yml", "release.yml", "recover-release.yml"):
+    for name in ("development-build.yml", "release.yml"):
         assert "workflow_dispatch" in workflows[name]
         assert "pull_request" not in workflows[name] and "push:" not in workflows[name]
-    for name in ("release.yml", "recover-release.yml"):
-        assert "muteinous-official-release" in workflows[name]
-        assert "actions: read" not in workflows[name]
-    assert "run_id" not in workflows["recover-release.yml"]
+    assert "muteinous-official-release" in workflows["release.yml"]
+    assert "actions: read" not in workflows["release.yml"]
     assert "--draft" in (root.parent.parent / "scripts/release.py").read_text("utf-8")
     assert "--cleanup-tag" not in "".join(workflows.values())
     assert "gh release edit" not in "".join(workflows.values())
@@ -348,20 +348,7 @@ def test_write_commands_refuse_to_run_outside_actions(
 ) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
-    for argv in (
-        ["draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],
-        [
-            "recover",
-            "--tag",
-            TAG,
-            "--sha",
-            SHA,
-            "--confirmation",
-            "confirmation",
-            "--evidence",
-            "evidence",
-        ],
-    ):
+    for argv in (["draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],):
         monkeypatch.setattr("sys.argv", ["release.py", *argv])
         with pytest.raises(SystemExit, match="only run inside"):
             release.main()
@@ -375,11 +362,11 @@ def test_settled_releases_tolerates_github_read_after_write_lag(
     done = {"tag_name": TAG, "assets": [{"digest": f"sha256:{'0' * 64}"}]}
     reads = iter([[], [{"tag_name": TAG, "assets": []}], [done]])
     monkeypatch.setattr(release, "releases", lambda: next(reads))
-    assert release.settled_releases([TAG], TAG, 1) == [done]
+    assert release.settled_releases(TAG, 1) == [done]
     assert sleeps == [0, 1, 2]
 
     sleeps.clear()
     monkeypatch.setattr(release, "releases", lambda: [])
-    with pytest.raises(RuntimeError, match="inventory differs"):
-        release.settled_releases([TAG], TAG, 1)
+    with pytest.raises(RuntimeError, match="did not settle"):
+        release.settled_releases(TAG, 1)
     assert len(sleeps) == 6
