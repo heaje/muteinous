@@ -30,7 +30,7 @@ Individual commands: `task lint`, `task format-check`, `task typecheck`, `task d
 
 D166 uses Git tags of the form `v0.2.0` (PEP 440 prerelease tags such as `v0.2.0a1`), setuptools-scm for package metadata, and Commitizen for the next release proposal. No manually maintained project version or changelog. Use Conventional Commits for all new commits and the PR title; e.g. `fix: correct sample boundaries`. The Windows PR workflow validates the full PR commit range and title with Commitizen, not just the squash title. To check a message locally, run `uv run --no-sync cz check --message "fix: correct sample boundaries"` after setup.
 
-`task version-preview` shows the current SCM development version and Commitizen's proposed next version without changing files or tags. No eligible increment is a normal result for documentation/build-only changes. Before 1.0, breaking changes normally bump minor (e.g. v0.2.0 followed by a breaking feature proposes 0.3.0; the development package may be 0.2.1.devN+gSHA). Do not run a mutating bump/tag command to preview versions. Graduation to 1.0 requires a reviewed policy change.
+`task version-preview` shows the current SCM development version and Commitizen's proposed next version without changing files or tags. The preview explicitly answers Commitizen's first-tag prompt without creating a tag. No eligible increment is a normal result for documentation/build-only changes. Before 1.0, breaking changes normally bump minor (e.g. v0.2.0 followed by a breaking feature proposes 0.3.0; the development package may be 0.2.1.devN+gSHA). Do not run a mutating bump/tag command to preview versions. Graduation to 1.0 requires a reviewed policy change.
 
 ### Python compatibility
 

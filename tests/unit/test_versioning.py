@@ -49,6 +49,11 @@ def test_git_versions_and_pre_one_breaking_bump(tmp_path: Path) -> None:
     run(repo, "git", "add", ".")
     run(repo, "git", "commit", "-m", "feat: initial package")
     assert ".dev" in package_version(repo, tmp_path / "untagged")
+    initial = run(
+        repo, sys.executable, "-m", "commitizen", "bump", "--get-next", "--yes"
+    )
+    assert initial == "0.1.0"
+    assert run(repo, "git", "tag", "--list") == ""
     run(repo, "git", "tag", "v0.2.0")
     assert package_version(repo, tmp_path / "tagged") == "0.2.0"
 

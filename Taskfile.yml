@@ -55,7 +55,7 @@ tasks:
     deps: [ready]
     cmds:
       - '"{{.PYTHON}}" -m setuptools_scm'
-      - '"{{.PYTHON}}" -m commitizen --no-raise NO_INCREMENT bump --get-next'
+      - '"{{.PYTHON}}" -m commitizen --no-raise NO_INCREMENT bump --get-next --yes'
   check:
     desc: Run comprehensive routine local validation
     cmds:
