@@ -1,0 +1,81 @@
+version: '3'
+
+vars:
+  PYTHON: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
+
+tasks:
+  setup:
+    desc: Explicitly install the locked development environment
+    cmds:
+      - uv python install
+      - UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --managed-python --no-install-project
+      - UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --managed-python --no-build-isolation-package muteinous
+  ready:
+    internal: true
+    preconditions:
+      - sh: test -f "{{.PYTHON}}"
+        msg: Run task setup first to prepare the locked .venv.
+      - sh: >-
+          "{{.PYTHON}}" -I -c "import sys; from pathlib import Path;
+          sys.exit(0 if sys.prefix != sys.base_prefix and Path(sys.prefix).resolve() == Path('.venv').resolve()
+          and '.'.join(map(str, sys.version_info[:3])) == Path('.python-version').read_text().strip() else 1)"
+        msg: Incorrect .venv interpreter; run task setup to use the pinned Python version.
+      - sh: 'UV_PROJECT_ENVIRONMENT=.venv uv sync --check --locked --offline --no-python-downloads --python "{{.PYTHON}}" --no-build-isolation-package muteinous'
+        msg: The locked environment is not synchronized; run task setup (or update the lock intentionally).
+    cmds: []
+  lint:
+    desc: Check Ruff lint rules
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" -m ruff check src scripts tests'
+  format-check:
+    desc: Check formatting without editing files
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" -m ruff format --check src scripts tests'
+  typecheck:
+    desc: Run strict mypy
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" -m mypy src scripts tests'
+  decisions:
+    desc: Verify architecture decision IDs
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" scripts/check_decision_ids.py'
+  test:
+    desc: Run all required tests
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" -m pytest -n logical --durations=10 {{.CLI_ARGS}}'
+  build:
+    desc: Build and validate wheel and source distribution
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" scripts/check_package.py'
+  version-preview:
+    desc: Preview SCM package version and proposed release without tagging
+    deps: [ready]
+    cmds:
+      - '"{{.PYTHON}}" -m setuptools_scm'
+      - '"{{.PYTHON}}" -m commitizen --no-raise NO_INCREMENT,NO_COMMITS_FOUND bump --get-next --yes'
+  check:
+    desc: Run comprehensive routine local validation
+    deps: [ready]
+    cmds:
+      - task: lint
+      - task: format-check
+      - task: typecheck
+      - task: decisions
+      - task: test
+      - task: build
+      - task: version-preview
+  clean:
+    desc: Remove only reproducible Python tool caches
+    cmds:
+      - |
+        for cache in .pytest_cache .mypy_cache .ruff_cache; do
+          if test -d "$cache" || test -L "$cache"; then
+            rm -rf -- "$cache"
+          fi
+        done

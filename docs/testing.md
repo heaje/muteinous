@@ -19,21 +19,17 @@ Use small generic synthetic fixtures and controlled inference fakes; required PR
 
 Once the CI phase is implemented, PRs must pass the D161 Windows comprehensive suite **and** lightweight, required Linux/macOS checks on explicit versioned runner images. Linux/macOS scope is Go Task and uv environment setup, locked installation, wheel/sdist build/import and selected portability-sensitive tests registered as `@pytest.mark.portable`. Keep portable tests alongside their functional tests; only mark cases whose real dependencies and behavior work on all supported CI platforms. A skipped or failing case must not be quietly hidden to satisfy the gate. Windows retains linting, typing and all required tests; Linux/macOS do not duplicate Windows lint/type checks.
 
-The current Windows-only workflow and local Python 3.12 commands below remain the **existing implementation** until the relevant PRs are merged. D161's independently failing test-step timeout and five-minute test execution target remain mandatory; the intentional timeout-overrun negative-control is **deferred and unverified** pending a separately approved test (see the [Issue #2 deferral](https://github.com/heaje/muteinous/issues/2#issuecomment-7113969758)).
+The current required workflow is Windows-only; the Taskfile and portable marker are ready for the separate CI phase. D161's independently failing test-step timeout and five-minute test execution target remain mandatory; the intentional timeout-overrun negative-control is **deferred and unverified** pending a separately approved test (see the [Issue #2 deferral](https://github.com/heaje/muteinous/issues/2#issuecomment-7113969758)).
 
 ## Local validation commands
 
-After [installing development dependencies with uv](development.md#local-python-bootstrap), run from the repository root on Windows (no virtual-environment activation required):
+After [explicit setup](development.md#local-python-bootstrap), run from the repository root on Windows, Linux or macOS (no activation required):
 
-~~~powershell
-.\.venv\Scripts\python.exe -m ruff check src scripts tests
-.\.venv\Scripts\python.exe -m ruff format --check src scripts tests
-.\.venv\Scripts\python.exe -m mypy src scripts tests
-.\.venv\Scripts\python.exe scripts/check_decision_ids.py
-.\.venv\Scripts\python.exe -m pytest -n logical --durations=10
+~~~shell
+task check
 ~~~
 
-`-n logical` uses the `pytest-xdist[psutil]` development dependency to select logical CPU workers; use `-n 2` locally if the machine has more cores than the tests need. The [PR workflow](../.github/workflows/pr.yml) also validates editable installation and an isolated wheel import, enforces the test-step timeout, and reports test-only timing. The [decision-ID checker](../scripts/check_decision_ids.py) rejects mismatched, duplicate, or malformed decision identifiers.
+For focused checks use `task lint`, `task format-check`, `task typecheck`, `task decisions`, `task test`, `task build`, or `task version-preview`. Use `task test -- -m portable` for portability-sensitive tests. The default `-n logical` uses pytest-xdist with psutil to select logical CPU workers; override with `task test -- -n 2` for a modest local worker count. The [Windows PR workflow](../.github/workflows/pr.yml) validates the editable import, wheel/sdist build and isolated wheel import, commit range and PR title, and runs individual checks with separate test-only timing and an independent ten-minute test-step timeout. The [decision-ID checker](../scripts/check_decision_ids.py) rejects mismatched, duplicate or malformed decision identifiers. Versioning tests use isolated temporary Git repositories and the real configured providers.
 
 ## Other validation tiers
 

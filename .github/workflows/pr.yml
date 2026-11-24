@@ -2,6 +2,7 @@ name: Pull request checks
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   workflow_dispatch:
 
 permissions:
@@ -14,12 +15,12 @@ jobs:
     timeout-minutes: 30 # Safety net; pytest has its own 10-minute step timeout.
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           version: '0.13.9'
+      - uses: go-task/setup-task@v2
 
       - name: Confirm two-vCPU baseline
         shell: pwsh
@@ -30,51 +31,48 @@ jobs:
             throw 'Benchmark baseline changed; expected two-vCPU Windows runner.'
           }
 
-      - name: Create uv environment and install editable package
-        shell: pwsh
+      - name: Set up locked environment
+        run: task setup
+      - name: Validate editable import and built distributions
         run: |
-          uv venv --python 3.12 .venv
+          .\.venv\Scripts\python.exe -c "import muteinous; print(muteinous.__file__)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv pip install --python .venv/Scripts/python.exe -e '.[dev]'
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Validate editable import and built wheel
-        shell: pwsh
-        run: |
-          & .\.venv\Scripts\python.exe -c "import muteinous; print(muteinous.__file__)"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv build --wheel --out-dir dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv venv --python 3.12 .ci/wheel-venv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $wheel = (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName
-          uv pip install --python .ci/wheel-venv/Scripts/python.exe $wheel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Push-Location $env:RUNNER_TEMP
-          try {
-            & "$env:GITHUB_WORKSPACE/.ci/wheel-venv/Scripts/python.exe" -c "import muteinous; from importlib.metadata import version; assert version('muteinous'); print(muteinous.__file__)"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          finally { Pop-Location }
+          task build
 
       - name: Ruff lint
-        run: .\.venv\Scripts\python.exe -m ruff check src scripts tests
+        run: task lint
 
       - name: Ruff format
-        run: .\.venv\Scripts\python.exe -m ruff format --check src scripts tests
+        run: task format-check
 
       - name: Strict type check
-        run: .\.venv\Scripts\python.exe -m mypy src scripts tests
+        run: task typecheck
 
       - name: Verify decision ID synchronization
-        run: .\.venv\Scripts\python.exe scripts/check_decision_ids.py
+        run: task decisions
+
+      - name: Conventional Commits and PR title
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        shell: pwsh
+        run: |
+          & .\.venv\Scripts\python.exe -m commitizen check --rev-range "$env:BASE_SHA..${env:HEAD_SHA}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv\Scripts\python.exe -m commitizen check --message "$env:PR_TITLE"
+          exit $LASTEXITCODE
+
+      - name: Version preview
+        run: task version-preview
 
       - name: Pytest (logical CPUs, independent 10-minute timeout)
         shell: pwsh
         timeout-minutes: 10
         run: |
           $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-          & .\.venv\Scripts\python.exe -m pytest -n logical --durations=10
+          task test
           $testExitCode = $LASTEXITCODE
           $stopwatch.Stop()
           $elapsed = '{0:F3}' -f $stopwatch.Elapsed.TotalSeconds

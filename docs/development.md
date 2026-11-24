@@ -15,22 +15,30 @@ When adding initial packaging and CI, follow the [code organization](architectur
 
 ### Local Python bootstrap
 
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first. Use Python 3.12 for parity with the [Windows PR workflow](../.github/workflows/pr.yml) (the distribution requires Python 3.11+). From the repository root, create `.venv` and install the package and development extras with uv:
+Install [Go Task](https://taskfile.dev/docs/installation), Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.6 or newer; 0.13.6 added the pinned managed CPython 3.14.10 (CI uses uv 0.13.9). Use a full Git checkout including tags. On Windows, Linux or macOS, run from the repository root:
 
-~~~powershell
-uv venv --python 3.12 .venv
-uv pip install --python .venv/Scripts/python.exe -e '.[dev]'
-.\.venv\Scripts\python.exe -c 'import muteinous; print(muteinous.__file__)'
-uv build --wheel --out-dir dist
+~~~shell
+task setup
+task check
 ~~~
 
-Run the [local checks](testing.md#local-validation-commands) before opening a PR. Those commands explicitly use `.venv`'s interpreter; activation is not needed. This bootstrap uses uv's pip-compatible environment workflow with bounded tool versions in `pyproject.toml` and no lockfile. The current bootstrap package has no production API and no runtime dependencies. Package subdirectories are added only when justified by [D160](architecture/decisions.md), not as placeholders.
+The [Taskfile](../Taskfile.yml) explicitly installs the managed Python patch pinned in [`.python-version`](../.python-version), synchronizes the committed [universal lock](../uv.lock), and installs the editable package using the locked build dependencies. Use only the 3.14 minor series; the verified Windows patch is 3.14.10. Update the patch pin deliberately after verifying a newer compatible patch. Routine tasks use the repository-local .venv interpreter directly, never activate a shell, and never install dependencies. Routine checks refuse a missing, incorrect-patch or unsynchronized environment without installing anything; run setup again after switching branches or updating dependencies. For intentional dependency changes, update the constraints in [pyproject.toml](../pyproject.toml), run `uv lock`, review the lock diff and run setup and checks. Do not regenerate the lock as part of routine CI.
 
-## Approved development and release direction (implementation pending)
+Individual commands: `task lint`, `task format-check`, `task typecheck`, `task decisions`, `task test`, `task build`, and `task version-preview`. The build command creates wheel and sdist from a fresh temporary output directory, checks the SCM, sdist, wheel and installed metadata versions, validates an isolated wheel import, and copies the distributions to dist/. Older distributions remain in dist/; use only artifacts from the current build, not a glob over accumulated versions. The clean task removes only reproducible pytest, Ruff and mypy cache directories and does not require setup; it leaves .venv, distributions and unrelated files intact. See [testing policy](testing.md#local-validation-commands).
 
-Decisions [D163–D166](architecture/decisions.md) specify future Go Task commands, a verified newest-stable Python series and committed uv lock, Conventional Commits/Commitizen and setuptools-scm, Windows-primary and required Linux/macOS portable CI, Dependabot, and manually initiated draft GitHub Releases. These are **planned changes**, tracked in [parent issue #4](https://github.com/heaje/muteinous/issues/4) and phase issues [#5 (architecture)](https://github.com/heaje/muteinous/issues/5), [#6 (tooling/versioning)](https://github.com/heaje/muteinous/issues/6), [#7 (CI/dependencies)](https://github.com/heaje/muteinous/issues/7), and [#8 (builds/releases)](https://github.com/heaje/muteinous/issues/8); they are **not yet the commands or settings of this repository**.
+### Git versions and commits
 
-Until the respective phase PRs merge, the explicit Python 3.12 uv commands above and the current [PR workflow](../.github/workflows/pr.yml) describe the actual bootstrap. After adoption, `task setup` must explicitly prepare the locked `.venv`; other Task commands must use it without shell activation and must not silently provision it. `task check` runs routine checks while individual tasks remain available for focused validation and CI reporting. Cross-platform developer commands are distinct from claims of Linux/macOS application support.
+D166 uses Git tags of the form `v0.2.0` (PEP 440 prerelease tags such as `v0.2.0a1`), setuptools-scm for package metadata, and Commitizen for the next release proposal. No manually maintained project version or changelog. Use Conventional Commits for all new commits and the PR title; e.g. `fix: correct sample boundaries`. The Windows PR workflow validates the full PR commit range and title with Commitizen, not just the squash title. Commitizen’s default nonconventional prefix exemptions are disabled. Merge commits from GitHub’s “Update branch” button and default `git revert` subjects fail commit validation; rebase, and use a `revert: ...` subject. After setup, check a message locally with `.venv/bin/python -m commitizen check --message "fix: correct sample boundaries"` (Linux/macOS) or `.\.venv\Scripts\python.exe -m commitizen check --message "fix: correct sample boundaries"` (Windows PowerShell).
+
+`task version-preview` shows the current SCM development version and Commitizen's proposed next version without changing files or tags. The preview explicitly answers Commitizen's first-tag prompt without creating a tag, and treats both no eligible increment and no commits since the latest tag as normal results without suppressing other failures. PR CI builds the synthetic merge checkout, so its development version may identify that merge SHA rather than the PR head; official releases must build from their own tag. No eligible increment is a normal result for documentation/build-only changes. Before 1.0, breaking changes normally bump minor (e.g. v0.2.0 followed by a breaking feature proposes 0.3.0; the development package may be 0.2.1.devN+gSHA). Do not run a mutating bump/tag command to preview versions. Graduation to 1.0 requires a reviewed policy change.
+
+### Python compatibility
+
+See [Python compatibility evidence](python-compatibility.md) for the Windows 3.14 selection, the specific 3.15 blockers and remaining runtime validation. The bootstrap has no runtime dependencies; candidate Hushpatch libraries are investigated separately and are not adopted automatically. Tooling portability is not application support.
+
+## Development and release direction
+
+D163–D166 define the work tracked by [parent issue #4](https://github.com/heaje/muteinous/issues/4) and phase issues [#5 (architecture)](https://github.com/heaje/muteinous/issues/5), [#6 (tooling/versioning)](https://github.com/heaje/muteinous/issues/6), [#7 (CI/dependencies)](https://github.com/heaje/muteinous/issues/7), and [#8 (builds/releases)](https://github.com/heaje/muteinous/issues/8). The Windows workflow uses locked Task commands; mandatory Linux/macOS CI, Dependabot, branch protection and release automation are separate phases.
 
 The future official release workflow will be manual, build wheels and sdists from each release tag and record source/build metadata and SHA-256 checksums, and produce draft GitHub Releases with Commitizen notes for human review before publication. It will not publish to PyPI or write `CHANGELOG.md`. Development artifacts will also be built and retained only on manual request, using repository-default retention. Refer to [D166](architecture/decisions.md) for prerelease and recovery rules; do not represent any planned mechanism as implemented until verified in its respective PR.
 
