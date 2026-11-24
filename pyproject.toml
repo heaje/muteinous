@@ -5,20 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "muteinous"
 dynamic = ["version"]
-description = "Muteinous v2 (implementation bootstrap)"
+description = "Muteinous"
 requires-python = ">=3.14,<3.15"
 dependencies = []
 
 [dependency-groups]
 dev = [
-    "pytest>=8.3,<10",
-    "pytest-xdist[psutil]>=3.6,<4",
-    "ruff>=0.12,<1",
-    "mypy>=1.15,<2",
-    "commitizen>=4,<5",
-    "setuptools>=75,<83",
-    "setuptools-scm>=8,<10",
-    "wheel>=0.45,<1",
+    "commitizen",
+    "mypy",
+    "pytest",
+    "pytest-xdist[psutil]",
+    "ruff",
+    "setuptools",
+    "setuptools-scm",
+    "wheel",
 ]
 
 [tool.setuptools.packages.find]
