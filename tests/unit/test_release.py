@@ -23,6 +23,7 @@ pytestmark = pytest.mark.portable
         ("v0.2.0a1", "alpha", ["v0.2.0b1"], "Non-increasing"),
         ("v0.2.0b1", "alpha", [], "not the requested"),
         ("v0.02.0", "stable", [], "Noncanonical"),
+        ("v0.1١.0", "stable", [], "Noncanonical"),
         ("v0.2.0.dev1", "stable", [], "Noncanonical"),
     ],
 )
@@ -44,11 +45,15 @@ def artifacts(output: Path, tag: str) -> None:
     notes = output / "release-notes.md"
     notes.write_text("# Release notes", encoding="utf-8")
     metadata = {
+        "package": "muteinous",
         "sha": SHA,
         "tag": tag,
         "version": tag[1:],
         "source_tags": {},
-        "environment": release.workflow_provenance(),
+        "environment": {
+            **release.workflow_provenance(),
+            "lock_sha256": release.digest(Path("uv.lock")),
+        },
         "notes_sha256": release.digest(notes),
         "artifacts": {p.name: release.digest(p) for p in (wheel, sdist)},
     }
@@ -207,6 +212,21 @@ def test_recovery_requires_evidence_and_lease(
                     "conclusion": "failure",
                 }
             )
+        if "/jobs?" in args[-1]:
+            return json.dumps(
+                [
+                    {
+                        "jobs": [
+                            {
+                                "name": "Create immutable-source tag and draft release",
+                                "id": 123,
+                            }
+                        ]
+                    }
+                ]
+            )
+        if args[-1].endswith("/actions/jobs/123/logs"):
+            return f"2026-11-24T00:00:00Z CREATED RELEASE TAG {TAG} {SHA}"
         assert has_draft
         assert args[-1].endswith("/releases/7")
         if "--method" not in args:
@@ -230,7 +250,6 @@ def test_recovery_requires_evidence_and_lease(
     monkeypatch.setattr(release, "releases", lambda: list(records))
     monkeypatch.setattr(release, "run", gh)
     monkeypatch.setattr(release, "git", git)
-    monkeypatch.setattr(release, "verify_creation_log", lambda *_: None)
     with pytest.raises(RuntimeError, match="confirmation"):
         release.recover(TAG, SHA, "yes", "42", "failed upload")
     assert not calls
@@ -253,6 +272,8 @@ def test_reject_stale_run_attempt(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/disposable")
     monkeypatch.setenv("GITHUB_RUN_ID", "42")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
     output = tmp_path / "artifacts"
@@ -260,6 +281,10 @@ def test_reject_stale_run_attempt(
     release.validate_run_provenance(output)
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     with pytest.raises(RuntimeError, match="different run or attempt"):
+        release.validate_run_provenance(output)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setattr(release, "digest", lambda _: "different lock hash")
+    with pytest.raises(RuntimeError, match="dependency lock differs"):
         release.validate_run_provenance(output)
 
 

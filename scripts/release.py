@@ -15,7 +15,8 @@ from typing import Any
 # Pre-1.0 policy is deliberately not an input to workflow dispatch.
 CHANNELS = {"alpha": "a", "beta": "b", "rc": "rc", "stable": None}
 TAG = re.compile(
-    r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:(a|b|rc)(0|[1-9]\d*))?\Z"
+    r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:(a|b|rc)(0|[1-9]\d*))?\Z",
+    re.ASCII,
 )
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 # Exactly these pre-enforcement commits have nonconventional messages.
@@ -323,10 +324,19 @@ def validate_artifacts(
     )
     tag = str(metadata["tag"])
     validate_candidate(tag, channel, [])
-    if metadata["sha"] != sha or metadata["version"] != tag[1:]:
+    if (
+        metadata["package"] != "muteinous"
+        or metadata["sha"] != sha
+        or metadata["version"] != tag[1:]
+    ):
         raise RuntimeError("Artifact provenance does not match requested release")
     (wheel,) = output.glob("*.whl")
     (sdist,) = output.glob("*.tar.gz")
+    if (
+        not wheel.name.startswith(f"muteinous-{tag[1:]}-")
+        or sdist.name != f"muteinous-{tag[1:]}.tar.gz"
+    ):
+        raise RuntimeError("Distribution filenames do not match requested release")
     assets = {wheel.name, sdist.name, "build-metadata.json"}
     expected = assets | {"release-notes.md", "SHA256SUMS"}
     if {p.name for p in output.iterdir()} != expected:
@@ -344,10 +354,14 @@ def validate_artifacts(
 
 
 def workflow_provenance() -> dict[str, str | None]:
+    server = os.getenv("GITHUB_SERVER_URL")
+    repository = os.getenv("GITHUB_REPOSITORY")
+    run_id = os.getenv("GITHUB_RUN_ID")
     return {
         "run_url": (
-            f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}"
-            f"/actions/runs/{os.getenv('GITHUB_RUN_ID')}"
+            f"{server}/{repository}/actions/runs/{run_id}"
+            if server and repository and run_id
+            else None
         ),
         "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
     }
@@ -357,11 +371,15 @@ def validate_run_provenance(output: Path) -> None:
     if os.getenv("GITHUB_ACTIONS") != "true":
         return
     metadata = json.loads((output / "build-metadata.json").read_text("utf-8"))
-    if any(
-        metadata["environment"].get(key) != value
-        for key, value in workflow_provenance().items()
+    provenance = workflow_provenance()
+    if None in provenance.values() or any(
+        metadata["environment"].get(key) != value for key, value in provenance.items()
     ):
-        raise RuntimeError("Artifact is from a different run or attempt; dispatch afresh")
+        raise RuntimeError(
+            "Artifact is from a different run or attempt; dispatch afresh"
+        )
+    if metadata["environment"].get("lock_sha256") != digest(Path("uv.lock")):
+        raise RuntimeError("Artifact dependency lock differs from the source checkout")
 
 
 def publish_draft(sha: str, channel: str, output: Path) -> None:
@@ -410,7 +428,9 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         args.append("--prerelease")
     args += [str(p) for p in sorted(output.iterdir()) if p.name != "release-notes.md"]
     print(run(*args), flush=True)
-    matches = [item for item in releases() if item["tag_name"] == tag]
+    current_releases = releases()
+    check_release_inventory([*tags, tag], current_releases)
+    matches = [item for item in current_releases if item["tag_name"] == tag]
     if (
         len(matches) != 1
         or not matches[0]["draft"]
@@ -428,8 +448,8 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         asset = uploaded[name]
         if asset["state"] != "uploaded" or asset["size"] != path.stat().st_size:
             raise RuntimeError(f"Incomplete draft asset: {name}")
-        if asset.get("digest") and asset["digest"] != f"sha256:{digest(path)}":
-            raise RuntimeError(f"GitHub asset digest mismatch: {name}")
+        if asset.get("digest") != f"sha256:{digest(path)}":
+            raise RuntimeError(f"GitHub asset digest missing or mismatched: {name}")
     if remote_tags() != {**tags, tag: sha}:
         raise RuntimeError("Remote tags no longer match validated source and inventory")
     print(f"Draft {tag} created; review and publish manually.", flush=True)
@@ -518,7 +538,10 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
     if release_id is None and original["conclusion"] == "success":
         raise RuntimeError("Orphan reset requires an unsuccessful original release run")
     if release_id is not None:
-        # Recheck immediately before deleting; never use --cleanup-tag.
+        # Recheck both the tag inventory and the draft immediately before deletion.
+        if recovery_target(tag, sha, remote_tags(), releases()) != release_id:
+            raise RuntimeError("Recovery target changed; refusing draft deletion")
+        # Never use --cleanup-tag.
         item: dict[str, Any] = json.loads(
             run("gh", "api", f"repos/{{owner}}/{{repo}}/releases/{release_id}")
         )
@@ -536,7 +559,7 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
             "DELETE",
             f"repos/{{owner}}/{{repo}}/releases/{release_id}",
         )
-    if any(item["tag_name"] == tag for item in releases()):
+    if recovery_target(tag, sha, remote_tags(), releases()) is not None:
         raise RuntimeError("Release still exists; refusing tag deletion")
     # Lease protects against deleting a tag moved since confirmation.
     ref = f"refs/tags/{tag}"

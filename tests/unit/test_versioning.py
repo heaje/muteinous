@@ -4,10 +4,13 @@ import json
 import shutil
 import subprocess
 import sys
+import tomllib
 from email.parser import Parser
+from importlib.metadata import version
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 from scripts import release
 
@@ -307,3 +310,57 @@ def test_development_artifacts_have_provenance(
     assert not run(repo, "git", "tag", "--list")
     with pytest.raises(RuntimeError, match="fresh output"):
         release.build(sha, output)
+
+
+@pytest.mark.portable
+def test_locked_build_backends_satisfy_declared_requirements() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
+    for spec in config["build-system"]["requires"]:
+        requirement = Requirement(spec)
+        assert requirement.specifier.contains(version(requirement.name)), spec
+
+
+@pytest.mark.portable
+def test_prerelease_version_with_new_commits(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    run(repo, "git", "tag", "v0.2.0")
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
+    assert release.propose("alpha") == "v0.2.1a1"
+    run(repo, "git", "tag", "v0.2.1a1")
+    run(repo, "git", "commit", "--allow-empty", "-m", "feat: add behavior")
+    assert release.propose("alpha") == "v0.3.0a2"
+    run(repo, "git", "tag", "v0.3.0a2")
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct feature")
+    assert release.propose("alpha") == "v0.3.0a3"
+    assert release.propose("beta") == "v0.3.0b1"
+    assert release.propose("stable") == "v0.3.0"
+    assert run(repo, "git", "status", "--porcelain") == ""
+    assert run(repo, "git", "tag", "--list").splitlines() == [
+        "v0.2.0",
+        "v0.2.1a1",
+        "v0.3.0a2",
+    ]
+
+
+@pytest.mark.portable
+def test_actual_commitizen_one_point_zero_guard(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    run(repo, "git", "tag", "v0.2.0")
+    config = repo / "pyproject.toml"
+    config.write_text(
+        config.read_text("utf-8").replace(
+            "major_version_zero = true", "major_version_zero = false"
+        ),
+        encoding="utf-8",
+    )
+    run(repo, "git", "add", "pyproject.toml")
+    run(repo, "git", "commit", "-m", "feat!: change release policy in test")
+    for channel in ("alpha", "stable"):
+        with pytest.raises(RuntimeError, match="reviewed policy"):
+            release.propose(channel)
+    assert run(repo, "git", "tag", "--list") == "v0.2.0"
