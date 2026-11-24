@@ -331,17 +331,18 @@ def test_prerelease_version_with_new_commits(
     assert release.propose("alpha") == "v0.2.1a1"
     run(repo, "git", "tag", "v0.2.1a1")
     run(repo, "git", "commit", "--allow-empty", "-m", "feat: add behavior")
-    assert release.propose("alpha") == "v0.3.0a2"
-    run(repo, "git", "tag", "v0.3.0a2")
+    # A higher target version starts a new prerelease sequence.
+    assert release.propose("alpha") == "v0.3.0a1"
+    run(repo, "git", "tag", "v0.3.0a1")
     run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct feature")
-    assert release.propose("alpha") == "v0.3.0a3"
+    assert release.propose("alpha") == "v0.3.0a2"
     assert release.propose("beta") == "v0.3.0b1"
     assert release.propose("stable") == "v0.3.0"
     assert run(repo, "git", "status", "--porcelain") == ""
     assert run(repo, "git", "tag", "--list").splitlines() == [
         "v0.2.0",
         "v0.2.1a1",
-        "v0.3.0a2",
+        "v0.3.0a1",
     ]
 
 

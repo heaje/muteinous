@@ -70,8 +70,13 @@ def artifacts(output: Path, tag: str) -> None:
         ("stable", "v0.2.0"),
     ],
 )
+@pytest.mark.parametrize("digest_state", ["valid", "missing", "wrong"])
 def test_only_draft_is_created(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, channel: str, tag: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    tag: str,
+    digest_state: str,
 ) -> None:
     output = tmp_path / "artifacts"
     artifacts(output, tag)
@@ -110,7 +115,11 @@ def test_only_draft_is_created(
                         "name": p.name,
                         "size": p.stat().st_size,
                         "state": "uploaded",
-                        "digest": f"sha256:{release.digest(p)}",
+                        "digest": {
+                            "valid": f"sha256:{release.digest(p)}",
+                            "missing": None,
+                            "wrong": f"sha256:{'0' * 64}",
+                        }[digest_state],
                     }
                     for p in assets
                 ],
@@ -123,9 +132,13 @@ def test_only_draft_is_created(
     monkeypatch.setattr(release, "local_tags", dict)
     monkeypatch.setattr(release, "releases", lambda: list(records))
     monkeypatch.setattr(release, "run", gh)
-    release.publish_draft(SHA, channel, output)
+    if digest_state == "valid":
+        release.publish_draft(SHA, channel, output)
+        release.check_existing_drafts(records)
+    else:
+        with pytest.raises(RuntimeError, match="digest missing or mismatched"):
+            release.publish_draft(SHA, channel, output)
     assert len(calls) == 2
-    release.check_existing_drafts(records)
     # The only writes are a new tag and a draft. No publication/edit operation.
     assert records[0]["draft"] is True
 
@@ -316,3 +329,30 @@ def test_recovery_requires_exact_tag_creation_log(
         release.verify_creation_log("42", "v0.2.0b1", SHA)
     with pytest.raises(RuntimeError, match="did not prove creation"):
         release.verify_creation_log("42", TAG, OTHER_SHA)
+
+
+def test_recovery_refuses_tag_moved_before_draft_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tags = iter([{TAG: SHA}, {TAG: OTHER_SHA}])
+
+    def gh(*args: str) -> str:
+        if args[-1].endswith("/actions/runs/42"):
+            return json.dumps(
+                {
+                    "head_sha": SHA,
+                    "event": "workflow_dispatch",
+                    "path": ".github/workflows/release.yml",
+                    "status": "completed",
+                    "conclusion": "failure",
+                }
+            )
+        pytest.fail("Unexpected release deletion or API call")
+
+    monkeypatch.setattr(release, "run", gh)
+    monkeypatch.setattr(release, "verify_creation_log", lambda *_: None)
+    monkeypatch.setattr(release, "remote_tags", lambda: next(tags))
+    monkeypatch.setattr(release, "releases", lambda: [record()])
+    monkeypatch.setattr(release, "git", lambda *_: pytest.fail("Unexpected tag write"))
+    with pytest.raises(RuntimeError, match="explicitly supplied original SHA"):
+        release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "42", "failed upload")
