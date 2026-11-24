@@ -15,7 +15,7 @@ When adding initial packaging and CI, follow the [code organization](architectur
 
 ### Local Python bootstrap
 
-Install [Go Task](https://taskfile.dev/docs/installation), Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) (CI uses uv 0.13.9). Use a full Git checkout including tags. On Windows, Linux or macOS, run from the repository root:
+Install [Go Task](https://taskfile.dev/docs/installation), Git and [uv](https://docs.astral.sh/uv/getting-started/installation/) 0.13.6 or newer; 0.13.6 added the pinned managed CPython 3.14.10 (CI uses uv 0.13.9). Use a full Git checkout including tags. On Windows, Linux or macOS, run from the repository root:
 
 ~~~shell
 task setup
@@ -28,7 +28,7 @@ Individual commands: `task lint`, `task format-check`, `task typecheck`, `task d
 
 ### Git versions and commits
 
-D166 uses Git tags of the form `v0.2.0` (PEP 440 prerelease tags such as `v0.2.0a1`), setuptools-scm for package metadata, and Commitizen for the next release proposal. No manually maintained project version or changelog. Use Conventional Commits for all new commits and the PR title; e.g. `fix: correct sample boundaries`. The Windows PR workflow validates the full PR commit range and title with Commitizen, not just the squash title. Commitizen’s default nonconventional prefix exemptions are disabled. After setup, check a message locally with `.venv/bin/python -m commitizen check --message "fix: correct sample boundaries"` (Linux/macOS) or `.\\.venv\\Scripts\\python.exe -m commitizen check --message "fix: correct sample boundaries"` (Windows PowerShell).
+D166 uses Git tags of the form `v0.2.0` (PEP 440 prerelease tags such as `v0.2.0a1`), setuptools-scm for package metadata, and Commitizen for the next release proposal. No manually maintained project version or changelog. Use Conventional Commits for all new commits and the PR title; e.g. `fix: correct sample boundaries`. The Windows PR workflow validates the full PR commit range and title with Commitizen, not just the squash title. Commitizen’s default nonconventional prefix exemptions are disabled. Merge commits from GitHub’s “Update branch” button and default `git revert` subjects fail commit validation; rebase, and use a `revert: ...` subject. After setup, check a message locally with `.venv/bin/python -m commitizen check --message "fix: correct sample boundaries"` (Linux/macOS) or `.\.venv\Scripts\python.exe -m commitizen check --message "fix: correct sample boundaries"` (Windows PowerShell).
 
 `task version-preview` shows the current SCM development version and Commitizen's proposed next version without changing files or tags. The preview explicitly answers Commitizen's first-tag prompt without creating a tag, and treats both no eligible increment and no commits since the latest tag as normal results without suppressing other failures. PR CI builds the synthetic merge checkout, so its development version may identify that merge SHA rather than the PR head; official releases must build from their own tag. No eligible increment is a normal result for documentation/build-only changes. Before 1.0, breaking changes normally bump minor (e.g. v0.2.0 followed by a breaking feature proposes 0.3.0; the development package may be 0.2.1.devN+gSHA). Do not run a mutating bump/tag command to preview versions. Graduation to 1.0 requires a reviewed policy change.
 
