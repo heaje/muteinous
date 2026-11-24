@@ -74,9 +74,13 @@ def validate_candidate(tag: str, channel: str, tags: list[str]) -> None:
     match = TAG.fullmatch(tag)
     assert match is not None
     if match.group(4) != CHANNELS[channel]:
-        raise RuntimeError(f"Commitizen proposed {tag}, not the requested {channel} channel")
+        raise RuntimeError(
+            f"Commitizen proposed {tag}, not the requested {channel} channel"
+        )
     if tag in tags:
-        raise RuntimeError(f"Tag already exists: {tag}; never overwrite or silently reuse")
+        raise RuntimeError(
+            f"Tag already exists: {tag}; never overwrite or silently reuse"
+        )
     if tags and key <= max(map(tag_key, tags)):
         raise RuntimeError(f"Non-increasing release version: {tag}")
 
@@ -131,7 +135,10 @@ def releases() -> list[dict[str, Any]]:
     # Explicit pagination includes drafts visible to the repository token.
     pages: list[list[dict[str, Any]]] = json.loads(
         run(
-            "gh", "api", "--paginate", "--slurp",
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
             "repos/{owner}/{repo}/releases?per_page=100",
         )
     )
@@ -149,7 +156,10 @@ def check_release_inventory(tags: list[str], existing: list[dict[str, Any]]) -> 
 def remote_tags() -> dict[str, str]:
     pages: list[list[dict[str, Any]]] = json.loads(
         run(
-            "gh", "api", "--paginate", "--slurp",
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
             "repos/{owner}/{repo}/git/matching-refs/tags/?per_page=100",
         )
     )
@@ -194,7 +204,9 @@ def build(
 ) -> None:
     validate_source(sha)
     if output.exists() or Path("dist").exists():
-        raise RuntimeError("Build requires fresh output directories (use a disposable checkout)")
+        raise RuntimeError(
+            "Build requires fresh output directories (use a disposable checkout)"
+        )
     if tag is not None and git("rev-parse", f"{tag}^{{commit}}") != sha:
         raise RuntimeError("Release tag does not resolve to the build source")
     version = run(sys.executable, "-m", "setuptools_scm")
@@ -235,11 +247,11 @@ def build(
         if source_tags is None or release_notes is None:
             raise RuntimeError("Release build requires version history and notes")
         notes_path = output / "release-notes.md"
-        notes_path.write_text(release_notes + "\n", encoding="utf-8")
+        notes_path.write_text(release_notes + "\n", encoding="utf-8", newline="\n")
         metadata["source_tags"] = source_tags
         metadata["notes_sha256"] = digest(notes_path)
     (output / "build-metadata.json").write_text(
-        json.dumps(metadata, indent=2) + "\n", encoding="utf-8"
+        json.dumps(metadata, indent=2) + "\n", encoding="utf-8", newline="\n"
     )
     write_checksums(output)
     print(json.dumps(metadata, indent=2), flush=True)
@@ -250,7 +262,9 @@ def write_checksums(output: Path) -> None:
         p for p in output.iterdir() if p.name not in {"SHA256SUMS", "release-notes.md"}
     )
     (output / "SHA256SUMS").write_text(
-        "".join(f"{digest(p)}  {p.name}\n" for p in files), encoding="utf-8"
+        "".join(f"{digest(p)}  {p.name}\n" for p in files),
+        encoding="utf-8",
+        newline="\n",
     )
 
 
@@ -309,14 +323,32 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
     # Only the write-enabled job can reliably enumerate private draft releases.
     check_release_inventory(list(tags), releases())
     # Atomic creation; GitHub refuses a pre-existing ref. No force/update.
-    print(f"Creating {tag} at {sha}; if a later operation fails use documented recovery", flush=True)
+    print(
+        f"Creating {tag} at {sha}; if a later operation fails use documented recovery",
+        flush=True,
+    )
     run(
-        "gh", "api", "--method", "POST", "repos/{owner}/{repo}/git/refs",
-        "-f", f"ref=refs/tags/{tag}", "-f", f"sha={sha}",
+        "gh",
+        "api",
+        "--method",
+        "POST",
+        "repos/{owner}/{repo}/git/refs",
+        "-f",
+        f"ref=refs/tags/{tag}",
+        "-f",
+        f"sha={sha}",
     )
     args = [
-        "gh", "release", "create", tag, "--verify-tag", "--draft", "--title", tag,
-        "--notes-file", str(output / "release-notes.md"),
+        "gh",
+        "release",
+        "create",
+        tag,
+        "--verify-tag",
+        "--draft",
+        "--title",
+        tag,
+        "--notes-file",
+        str(output / "release-notes.md"),
     ]
     if channel != "stable":
         args.append("--prerelease")
@@ -358,6 +390,10 @@ def recovery_target(
     if tag != max(tags, key=tag_key):
         raise RuntimeError("Only the newest failed release can be reset")
     matches = [item for item in existing if item["tag_name"] == tag]
+    check_release_inventory(
+        [previous for previous in tags if previous != tag],
+        [item for item in existing if item["tag_name"] != tag],
+    )
     if not matches:
         # Orphan tag: requires independent operator evidence/attestation.
         return None
@@ -370,13 +406,11 @@ def recovery_target(
     return int(matches[0]["id"])
 
 
-def recover(
-    tag: str, sha: str, confirmation: str, run_id: str, evidence: str
-) -> None:
+def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -> None:
     if (
         confirmation != f"NEVER PUBLISHED {tag} {sha}"
         or not evidence.strip()
-        or not run_id.isdecimal()
+        or not re.fullmatch(r"[0-9]+", run_id)
     ):
         raise RuntimeError(
             "Supply exact never-published confirmation, original run ID and failure evidence"
@@ -390,7 +424,9 @@ def recover(
         or original["path"].split("@", 1)[0] != ".github/workflows/release.yml"
         or original["status"] != "completed"
     ):
-        raise RuntimeError("Original run is not a completed official release for this SHA")
+        raise RuntimeError(
+            "Original run is not a completed official release for this SHA"
+        )
     print(
         f"Recovery requested: {tag} {sha}; original run: {run_id}; evidence: {evidence!r}",
         flush=True,
@@ -409,7 +445,13 @@ def recover(
             or item["published_at"] is not None
         ):
             raise RuntimeError("Draft changed; refusing recovery")
-        run("gh", "api", "--method", "DELETE", f"repos/{{owner}}/{{repo}}/releases/{release_id}")
+        run(
+            "gh",
+            "api",
+            "--method",
+            "DELETE",
+            f"repos/{{owner}}/{{repo}}/releases/{release_id}",
+        )
     if any(item["tag_name"] == tag for item in releases()):
         raise RuntimeError("Release still exists; refusing tag deletion")
     # Lease protects against deleting a tag moved since confirmation.

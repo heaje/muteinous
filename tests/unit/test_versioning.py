@@ -1,5 +1,6 @@
 """Verify the real Git-tag version providers in an isolated repository."""
 
+import json
 import shutil
 import subprocess
 import sys
@@ -7,6 +8,8 @@ from email.parser import Parser
 from pathlib import Path
 
 import pytest
+
+from scripts import release
 
 
 def run(root: Path, *args: str) -> str:
@@ -38,6 +41,7 @@ def repo(tmp_path: Path) -> Path:
     source = Path(__file__).resolve().parents[2]
     shutil.copy2(source / "pyproject.toml", repo)
     shutil.copy2(source / ".gitignore", repo)
+    shutil.copy2(source / "uv.lock", repo)
     (repo / "scripts").mkdir()
     shutil.copy2(source / "scripts/check_package.py", repo / "scripts")
     shutil.copytree(
@@ -190,3 +194,116 @@ def test_tagged_sdist_rebuild_and_installed_metadata(repo: Path) -> None:
     run(repo, sys.executable, "scripts/check_package.py")
     assert (repo / "dist/muteinous-0.2.0.tar.gz").is_file()
     assert (repo / "dist/muteinous-0.2.0-py3-none-any.whl").is_file()
+
+
+@pytest.mark.portable
+def test_release_channel_proposals(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(repo)
+    release.check_history()
+    for channel, expected in (
+        ("alpha", "v0.1.0a1"),
+        ("alpha", "v0.1.0a2"),
+        ("beta", "v0.1.0b1"),
+        ("rc", "v0.1.0rc1"),
+        ("stable", "v0.1.0"),
+    ):
+        assert release.propose(channel) == expected
+        run(repo, "git", "tag", expected)
+        if channel == "beta":
+            with pytest.raises(RuntimeError, match="not the requested alpha"):
+                release.propose("alpha")
+    with pytest.raises(RuntimeError):
+        release.propose("stable")
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
+    assert release.propose("stable") == "v0.1.1"
+    run(repo, "git", "commit", "--allow-empty", "-m", "feat!: change contract")
+    assert release.propose("stable") == "v0.2.0"
+
+
+@pytest.mark.portable
+def test_release_source_and_history_validation(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    sha = run(repo, "git", "rev-parse", "HEAD")
+    release.validate_source(sha)
+    release.check_history()
+    with pytest.raises(RuntimeError, match="requested source SHA"):
+        release.validate_source("0" * 40)
+    dirty = repo / "untracked.txt"
+    dirty.write_text("not a clean release", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="dirty"):
+        release.validate_source(sha)
+    dirty.unlink()
+    run(repo, "git", "commit", "--allow-empty", "-m", "not conventional")
+    with pytest.raises(RuntimeError, match="commitizen"):
+        release.check_history()
+
+
+@pytest.mark.portable
+def test_release_divergent_tag_is_rejected(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    original = run(repo, "git", "rev-parse", "HEAD")
+    run(repo, "git", "commit", "--allow-empty", "-m", "feat: another revision")
+    run(repo, "git", "tag", "v0.1.0")
+    run(repo, "git", "checkout", "--detach", original)
+    with pytest.raises(RuntimeError, match="merge-base"):
+        release.propose("stable")
+
+
+def test_release_builds_each_channel_from_its_own_tag(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sha = run(repo, "git", "rev-parse", "HEAD")
+    # A separate checkout per channel models the actual workflow. All four
+    # versions deliberately use the same commit, not synthetic version overrides.
+    previous: dict[str, str] = {}
+    for channel, tag in (
+        ("alpha", "v0.1.0a1"),
+        ("beta", "v0.1.0b1"),
+        ("rc", "v0.1.0rc1"),
+        ("stable", "v0.1.0"),
+    ):
+        checkout = tmp_path / f"checkout-{channel}"
+        output = tmp_path / f"artifacts-{channel}"
+        run(tmp_path, "git", "clone", str(repo), str(checkout))
+        run(checkout, "git", "config", "tag.gpgsign", "false")
+        with monkeypatch.context() as context:
+            context.chdir(checkout)
+            release.prepare(sha, channel, output, remote=False)
+            assert release.validate_artifacts(output, sha, channel) == (tag, previous)
+            assert run(checkout, "git", "rev-parse", tag) == sha
+            assert run(checkout, sys.executable, "-m", "setuptools_scm") == tag[1:]
+            assert (output / f"muteinous-{tag[1:]}.tar.gz").is_file()
+            assert (output / f"muteinous-{tag[1:]}-py3-none-any.whl").is_file()
+            notes = (output / "release-notes.md").read_text("utf-8")
+            assert tag in notes
+            assert "initial package" in notes
+            assert not (checkout / "CHANGELOG.md").exists()
+        run(checkout, "git", "push", "origin", f"refs/tags/{tag}")
+        previous[tag] = sha
+    assert set(run(repo, "git", "tag", "--list").splitlines()) == set(previous)
+
+
+def test_development_artifacts_have_provenance(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    sha = run(repo, "git", "rev-parse", "HEAD")
+    output = tmp_path / "dev-artifacts"
+    release.build(sha, output)
+    metadata = json.loads((output / "build-metadata.json").read_text("utf-8"))
+    assert metadata["sha"] == sha
+    assert metadata["tag"] is None
+    assert ".dev" in metadata["version"]
+    assert metadata["environment"]["lock_sha256"] == release.digest(repo / "uv.lock")
+    for name, expected in metadata["artifacts"].items():
+        assert release.digest(output / name) == expected
+    for line in (output / "SHA256SUMS").read_text("utf-8").splitlines():
+        expected, name = line.split("  ", 1)
+        assert release.digest(output / name) == expected
+    assert not run(repo, "git", "tag", "--list")
+    with pytest.raises(RuntimeError, match="fresh output"):
+        release.build(sha, output)

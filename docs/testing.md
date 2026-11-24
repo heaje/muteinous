@@ -43,7 +43,7 @@ For focused checks use `task lint`, `task format-check`, `task typecheck`, `task
 
 ## Other validation tiers
 
-Longer native-format, hardware, real-model, recovery/failure-injection, and end-to-end tests may run on main, scheduled, or release workflows when appropriate. **Release validation must cover all applicable supported behavior**; do not defer all safety coverage outside PR checks.
+Longer native-format, hardware, real-model, recovery/failure-injection, and end-to-end tests may run on main, scheduled, or release workflows when appropriate. **Release validation must cover all applicable supported behavior**; do not defer all safety coverage outside PR checks. The [manual official release workflow](../.github/workflows/release.yml) reuses all three required checks against its triggering SHA, then creates its own validated wheel and sdist from the proposed Git tag. Deterministic release tests exercise the actual Commitizen and setuptools-scm providers in isolated repositories (including same-SHA channel progression, prerelease numbering, pre-1.0 increments, tag conflicts and fresh package builds) and exercise draft-only creation, integrity checks and recovery guards with controlled GitHub API fakes. These tests do not publish to GitHub or move repository tags. Live workflow dispatch, artifact downloads and draft review are separate release acceptance evidence; see [manual release procedures](development.md#manual-builds-and-official-releases).
 
 ## Test layout
 
