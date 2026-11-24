@@ -684,6 +684,9 @@ def main() -> None:
     p.add_argument("--run-id", required=True)
     p.add_argument("--evidence", required=True)
     args = parser.parse_args()
+    if args.command in {"draft", "recover"} and os.getenv("GITHUB_ACTIONS") != "true":
+        # Writes must come from the audited, concurrency-controlled workflows.
+        raise SystemExit(f"{args.command} may only run inside its GitHub workflow")
     if args.command == "dev":
         build(args.sha, args.output)
     elif args.command == "prepare":

@@ -23,7 +23,7 @@ pytestmark = pytest.mark.portable
         ("v0.2.0a1", "alpha", ["v0.2.0b1"], "Non-increasing"),
         ("v0.2.0b1", "alpha", [], "not the requested"),
         ("v0.02.0", "stable", [], "Noncanonical"),
-        ("v0.1١.0", "stable", [], "Noncanonical"),
+        ("v0.1Ù¡.0", "stable", [], "Noncanonical"),
         ("v0.2.0.dev1", "stable", [], "Noncanonical"),
     ],
 )
@@ -208,9 +208,10 @@ def test_recovery_refuses_published_mismatched_or_nonlatest_tags() -> None:
         release.recovery_target(TAG, SHA, {TAG: SHA, "v0.2.0": SHA}, [record()])
 
 
+@pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
 @pytest.mark.parametrize("has_draft", [True, False])
 def test_recovery_requires_evidence_and_lease(
-    monkeypatch: pytest.MonkeyPatch, has_draft: bool
+    monkeypatch: pytest.MonkeyPatch, has_draft: bool, conclusion: str
 ) -> None:
     tags = {TAG: SHA}
     records = [record()] if has_draft else []
@@ -225,7 +226,7 @@ def test_recovery_requires_evidence_and_lease(
                     "event": "workflow_dispatch",
                     "path": ".github/workflows/release.yml",
                     "status": "completed",
-                    "conclusion": "failure",
+                    "conclusion": conclusion,
                 }
             )
         if "/jobs?" in args[-1]:
@@ -534,3 +535,29 @@ def test_workflow_contracts() -> None:
     assert text["recover-release.yml"].count("muteinous-official-release") == 1
     assert "gh release edit" not in "".join(text.values())
     assert "--cleanup-tag" not in "".join(text.values())
+
+
+def test_write_commands_refuse_to_run_outside_actions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
+    for argv in (
+        ["draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],
+        [
+            "recover",
+            "--tag",
+            TAG,
+            "--sha",
+            SHA,
+            "--confirmation",
+            "c",
+            "--run-id",
+            "1",
+            "--evidence",
+            "e",
+        ],
+    ):
+        monkeypatch.setattr("sys.argv", ["release.py", *argv])
+        with pytest.raises(SystemExit, match="only run inside"):
+            release.main()
