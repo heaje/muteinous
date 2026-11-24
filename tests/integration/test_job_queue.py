@@ -139,11 +139,15 @@ def test_failure_releases_capacity_without_retry_and_capacity_changes_apply(
         a = queue.submit(plan("cpu"), first)
         b = queue.submit(plan("cpu"), second)
         assert first.entered.wait(5) and second.entered.wait(5)
+        running_a = queue.snapshot(a)
+        running_b = queue.snapshot(b)
         queue.set_capacity("cpu", 1)
         c = queue.submit(plan("cpu"), third)
         first.release.set()
         eventually(lambda: queue.snapshot(a).state == JobState.FAILED)
         assert queue.snapshot(a).detail == "RuntimeError: controlled failure"
+        failed = queue.poll(a, running_a.revision)
+        assert failed is not None and failed.state == JobState.FAILED
         assert queue.snapshot(c).state == JobState.QUEUED
         assert first.calls == 1
         second.release.set()
@@ -151,6 +155,8 @@ def test_failure_releases_capacity_without_retry_and_capacity_changes_apply(
         third.release.set()
         assert queue.drain(5)
         assert queue.snapshot(b).state == queue.snapshot(c).state == JobState.COMPLETED
+        completed = queue.poll(b, running_b.revision)
+        assert completed is not None and completed.state == JobState.COMPLETED
         assert first.calls == 1
     finally:
         for worker in (first, second, third):
@@ -262,10 +268,12 @@ def test_close_requests_cooperative_stop_and_joins_threads() -> None:
 
     before = set(threading.enumerate())
     queue = JobQueue({"cpu": 1}, lambda _: None)
-    a = queue.submit(plan("cpu"), worker)
-    assert entered.wait(5)
-    b = queue.submit(plan("cpu"), worker)
-    queue.close()
+    try:
+        a = queue.submit(plan("cpu"), worker)
+        assert entered.wait(5)
+        b = queue.submit(plan("cpu"), worker)
+    finally:
+        queue.close()
     assert queue.snapshot(a).state == queue.snapshot(b).state == JobState.CANCELLED
     assert not queue.snapshot(a).physical_running
     assert queue.drain(0)
@@ -357,5 +365,37 @@ def test_capacity_release_during_validation_restarts_fifo(
     finally:
         release_check.set()
         for worker in (owner, older, younger):
+            worker.release.set()
+        queue.close()
+
+
+def test_preference_changes_apply_only_to_new_submissions(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    queue = JobQueue({"gpu": 1, "cpu": 1}, lambda _: None)
+    owner, old_worker, new_worker = (workers() for _ in range(3))
+    try:
+        queue.submit(plan("gpu"), owner)
+        assert owner.entered.wait(5)
+        preference = "gpu"
+        old_plan = JobPlan("fake", preference, (preference,), '{"config":"old"}')
+        old = queue.submit(old_plan, old_worker)
+        eventually(lambda: queue.snapshot(old).detail == "Waiting for: gpu")
+        preference = "cpu"
+        new_plan = JobPlan("fake", preference, (preference,), '{"config":"new"}')
+        new = queue.submit(new_plan, new_worker)
+        assert new_worker.entered.wait(5)
+        assert queue.snapshot(old).plan == old_plan
+        assert queue.snapshot(old).state == JobState.QUEUED
+        assert queue.snapshot(new).plan == new_plan
+        new_worker.release.set()
+        owner.release.set()
+        assert old_worker.entered.wait(5)
+        old_worker.release.set()
+        assert queue.drain(5)
+        assert queue.snapshot(old).result == old_plan.input_json
+        assert queue.snapshot(new).result == new_plan.input_json
+    finally:
+        for worker in (owner, old_worker, new_worker):
             worker.release.set()
         queue.close()
