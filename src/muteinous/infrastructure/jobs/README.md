@@ -1,0 +1,50 @@
+# In-process job execution
+
+This component implements the shared queue foundation from [Issue #21](https://github.com/heaje/muteinous/issues/21).
+The [canonical decisions](../../../../docs/architecture/decisions.md) remain authoritative.
+
+- Construct a queue with named resource capacities and a dispatch-time plan
+  validator. Every job declares at least one distinct resource, and occupies
+  one slot of each until its physical invocation returns. Zero or unknown
+  capacity is unavailable, not ordinary contention. Reducing a positive
+  capacity never revokes occupied slots.
+- Submit an immutable resolved `JobPlan` containing provider/backend identity,
+  resource names and JSON-object input containing the appropriate source and
+  configuration context. Supply the worker separately. A submission has a new
+  stable ID, one execution attempt and no generic retry or expiration.
+- Validation must be quick, read-only, check the original source and resolved
+  plan (including provider safety), and return a useful reason if unusable.
+  Ordinary preference changes must not invalidate otherwise valid plans.
+  Busy plans are rechecked while waiting. Domain-specific freshness checks
+  remain necessary at result acceptance and any irreversible effect.
+- The worker receives a `JobContext` with cooperative cancellation and optional
+  progress reporting. Adapters must ensure all physical work has stopped before
+  returning or raising, including asynchronous provider operations. Queue
+  cancellation rejects late returned results and reports but cannot undo
+  provider side effects; providers must not publish cancelled work.
+- Workers may omit progress. Report full latest stage/activity/count snapshots;
+  mark meaningful forward progress explicitly and use heartbeat for liveness.
+  Only set `WorkCount.reliable` when the denominator is established. Overall
+  counts are optional and must be independently defensible. The timestamps
+  use a monotonic clock for in-process elapsed-time comparisons.
+- Presentation can call `snapshot(id)` for the unthrottled latest state or
+  `poll(id, last_revision)` for coalesced updates. Material changes are
+  available immediately on the next poll; routine updates are coalesced
+  to a configurable interval (default 250 ms). Display logical cancellation
+  separately from `physical_running`; Needs attention requires explicit
+  replanning/resubmission. No event history is retained.
+- The queue owner may use `drain()` to await pending and physical work;
+  an optional caller wait timeout does not expire jobs. `close()` stops
+  submissions, requests cancellation, and joins workers. It can wait
+  indefinitely for a noncooperative provider. Call it from the owning thread,
+  not from a worker or validator. This is not application shutdown policy.
+
+## Remaining integration
+
+Real provider adapters and configuration/source validation, provider/model
+safety limits and hardware-derived defaults (D90), alignment-specific budgets,
+retry and stale-result coordination (D77–D86/D102), stall warnings (D94), UI
+polling and user-facing status/actions, and application shutdown policy
+(D103–D104) remain separate work. Persistence, restart recovery, distributed
+execution and priorities are outside this foundation. The queue does not
+authorize installation or domain-specific effects.
