@@ -19,7 +19,7 @@ tasks:
       - sh: test -f "{{.PYTHON}}"
         msg: Run task setup first to prepare the locked .venv.
     cmds:
-      - '"{{.PYTHON}}" -c "import sys; assert sys.version_info[:2] == (3, 14), ''Run task setup with Python 3.14''"'
+      - '"{{.PYTHON}}" -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 14) else ''Run task setup with Python 3.14'')"'
   lint:
     desc: Check Ruff lint rules
     deps: [ready]
@@ -59,6 +59,7 @@ tasks:
   check:
     desc: Run comprehensive routine local validation
     cmds:
+      - uv lock --check
       - task: lint
       - task: format-check
       - task: typecheck
