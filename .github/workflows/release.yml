@@ -1,0 +1,103 @@
+name: Manual official draft release
+
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel (publication is a separate manual action)
+        type: choice
+        options:
+          - alpha
+          - beta
+          - rc
+          - stable
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: muteinous-official-release
+  cancel-in-progress: false
+
+jobs:
+  source:
+    name: Confirm release source
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+    steps:
+      - name: Require main or an intentional stabilization branch
+        shell: bash
+        run: |
+          case "$GITHUB_REF" in
+            refs/heads/main|refs/heads/release/*) echo "Release source: $GITHUB_REF at $GITHUB_SHA" ;;
+            *) echo "::error::Dispatch from main or a release/* stabilization branch"; exit 1 ;;
+          esac
+
+  validation:
+    name: Required release preflight
+    needs: source
+    uses: ./.github/workflows/pr.yml
+
+  prepare:
+    name: Propose version and build from its tag
+    needs: validation
+    runs-on: windows-2025
+    timeout-minutes: 30
+    outputs:
+      artifact: ${{ steps.artifact-name.outputs.name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: '0.13.9'
+      - uses: go-task/setup-task@v2
+      - name: Set up locked environment
+        run: task setup
+      - name: Validate history, propose tag, build and checksum
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          & .\.venv\Scripts\python.exe scripts/release.py prepare --sha "$env:GITHUB_SHA" --channel "$env:CHANNEL" --output "$env:RUNNER_TEMP/release-artifacts"
+          exit $LASTEXITCODE
+      - name: Select run-attempt-specific artifact name
+        id: artifact-name
+        shell: pwsh
+        run: |
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "name=release-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.artifact-name.outputs.name }}
+          path: ${{ runner.temp }}/release-artifacts/
+          if-no-files-found: error
+
+  draft:
+    name: Create immutable-source tag and draft release
+    needs: prepare
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: ${{ runner.temp }}/release-artifacts
+      - name: Check provenance and create draft only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          python3 scripts/release.py draft --sha "$GITHUB_SHA" --channel "$CHANNEL" --output "$RUNNER_TEMP/release-artifacts"

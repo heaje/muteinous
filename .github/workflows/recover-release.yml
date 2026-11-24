@@ -1,0 +1,65 @@
+name: Recover failed unpublished release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact failed release tag
+        required: true
+        type: string
+      sha:
+        description: Exact original 40-character source SHA
+        required: true
+        type: string
+      run_id:
+        description: Original official release workflow run ID
+        required: true
+        type: string
+      evidence:
+        description: Reason and evidence that this version has never been published
+        required: true
+        type: string
+      confirmation:
+        description: 'Type NEVER PUBLISHED <tag> <sha> after checking the release history'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: muteinous-official-release
+  cancel-in-progress: false
+
+jobs:
+  recover:
+    name: Explicit unpublished-release recovery
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Require main
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" != refs/heads/main ]]; then
+            echo "::error::Dispatch recovery from main only"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          # Git needs this credential for the lease-protected tag deletion.
+          persist-credentials: true
+      - name: Inspect original run, draft and tag before recovery
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ inputs.sha }}
+          ORIGINAL_RUN: ${{ inputs.run_id }}
+          EVIDENCE: ${{ inputs.evidence }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          python3 scripts/release.py recover --tag "$TAG" --sha "$SHA" --run-id "$ORIGINAL_RUN" --evidence "$EVIDENCE" --confirmation "$CONFIRMATION"
