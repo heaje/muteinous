@@ -75,7 +75,7 @@ def validate_candidate(tag: str, channel: str, tags: list[str]) -> None:
     version = version_for_tag(tag)
     if version.release[0] != 0:
         raise RuntimeError(
-            "D166: 1.0 (including prereleases) requires reviewed policy/configuration change"
+            "1.0 (including prereleases) requires a reviewed policy/configuration change"
         )
     if (version.pre[0] if version.pre else None) != CHANNELS[channel]:
         raise RuntimeError(
