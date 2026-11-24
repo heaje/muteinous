@@ -9,9 +9,9 @@ This guide records enduring contribution and review practices. Consult the [coor
 - Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
 - PR descriptions: purpose and Issue, affected D-number decisions with actual implementation/verification evidence and unverified parts, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. The merger/coordinator reconciles the shared [decision-coverage ledger](architecture/decision-coverage.md) from accepted PR evidence at merge time or promptly afterward; parallel feature branches should not separately maintain the same table. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
 
-## Repository foundation
+## Local development
 
-When adding initial packaging and CI, follow the [code organization](architecture/code-organization.md) and [CI introduction and early coverage requirements](testing.md#introducing-ci-and-early-coverage). Track bootstrap work in live Issues/PRs and the [temporary coordination snapshot](../.agents/current-state.md), not as permanent progress assertions in this guide.
+Keep packaging and CI aligned with the [code organization](architecture/code-organization.md) and [testing policy](testing.md). Track implementation progress and verification evidence in Issues/PRs and the [coordination snapshot](../.agents/current-state.md).
 
 ### Local Python bootstrap
 
@@ -34,11 +34,11 @@ D166 uses Git tags of the form `v0.2.0` (PEP 440 prerelease tags such as `v0.2.0
 
 ### Python compatibility
 
-See [Python compatibility evidence](python-compatibility.md) for the Windows 3.14 selection, the specific 3.15 blockers and remaining runtime validation. The bootstrap has no runtime dependencies; candidate Hushpatch libraries are investigated separately and are not adopted automatically. Tooling portability is not application support.
+See [Python compatibility evidence](python-compatibility.md) for the Windows 3.14 selection, the specific 3.15 blockers and remaining runtime validation. Select and validate actual runtime dependencies as features require them; candidate Hushpatch libraries are not adopted automatically. Tooling portability is not application support.
 
-## Development and release direction
+## CI and release procedures
 
-D163–D166 define the work tracked by [parent issue #4](https://github.com/heaje/muteinous/issues/4) and phase issues [#5 (architecture)](https://github.com/heaje/muteinous/issues/5), [#6 (tooling/versioning)](https://github.com/heaje/muteinous/issues/6), [#7 (CI/dependencies)](https://github.com/heaje/muteinous/issues/7), and [#8 (builds/releases)](https://github.com/heaje/muteinous/issues/8). The [PR workflow](../.github/workflows/pr.yml) uses locked Task commands on Windows and focused Linux/macOS portability jobs (see [required checks](testing.md#mandatory-portability-checks--d165)). Pytest session duration is reported separately from workflow test-step wall time; the latter includes Task readiness checks. Release automation is a separate phase.
+D163–D166 govern development, dependencies, CI and release procedures. The [PR workflow](../.github/workflows/pr.yml) uses locked Task commands on Windows and focused Linux/macOS portability jobs (see [required checks](testing.md#mandatory-portability-checks--d165)). Consult the [coverage ledger](architecture/decision-coverage.md) for actual verification evidence.
 
 ### Dependency maintenance and merge gates
 
