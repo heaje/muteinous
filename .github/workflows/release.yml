@@ -84,6 +84,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
+      actions: read # Verify the originating run of any outstanding draft.
     steps:
       - uses: actions/checkout@v7
         with:

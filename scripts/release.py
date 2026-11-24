@@ -180,8 +180,78 @@ def check_existing_drafts(existing: list[dict[str, Any]]) -> None:
             or len(names) != 4
             or set(names) != expected
             or any(a["state"] != "uploaded" or a["size"] <= 0 for a in assets)
+            or any(
+                not re.fullmatch(r"sha256:[0-9a-f]{64}", str(a.get("digest")))
+                for a in assets
+            )
         ):
             raise RuntimeError(f"Incomplete or ambiguous existing draft: {tag}")
+        digests = {asset["name"]: asset["digest"] for asset in assets}
+        manifest = "".join(
+            f"{digests[name].removeprefix('sha256:')}  {name}\n"
+            for name in sorted(digests)
+            if name != "SHA256SUMS"
+        )
+        manifest_digest = hashlib.sha256(manifest.encode()).hexdigest()
+        if digests["SHA256SUMS"] != f"sha256:{manifest_digest}":
+            raise RuntimeError(f"Existing draft checksum manifest mismatch: {tag}")
+
+
+def verify_prior_draft_run(item: dict[str, Any], sha: str) -> None:
+    tag = str(item["tag_name"])
+    asset = next(a for a in item["assets"] if a["name"] == "build-metadata.json")
+    asset_id = int(asset["id"])
+    # The generated metadata has exactly one LF at EOF; run() strips it.
+    metadata_text = (
+        run(
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/octet-stream",
+            f"repos/{{owner}}/{{repo}}/releases/assets/{asset_id}",
+        )
+        + "\n"
+    )
+    metadata_digest = hashlib.sha256(metadata_text.encode()).hexdigest()
+    if asset["digest"] != f"sha256:{metadata_digest}":
+        raise RuntimeError(f"Existing draft metadata checksum mismatch: {tag}")
+    metadata = json.loads(metadata_text)
+    if (
+        metadata["tag"] != tag
+        or metadata["sha"] != sha
+        or metadata["version"] != tag[1:]
+    ):
+        raise RuntimeError(f"Existing draft source provenance mismatch: {tag}")
+    server = os.getenv("GITHUB_SERVER_URL")
+    repository = os.getenv("GITHUB_REPOSITORY")
+    prefix = f"{server}/{repository}/actions/runs/"
+    environment = metadata["environment"]
+    run_id = str(environment["run_url"]).removeprefix(prefix)
+    attempt = str(environment["run_attempt"])
+    if not (
+        server
+        and repository
+        and re.fullmatch(r"[1-9][0-9]*", run_id)
+        and re.fullmatch(r"[1-9][0-9]*", attempt)
+    ):
+        raise RuntimeError(f"Existing draft has invalid workflow provenance: {tag}")
+    original = json.loads(
+        run(
+            "gh",
+            "api",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/attempts/{attempt}",
+        )
+    )
+    if (
+        original["head_sha"] != sha
+        or original["event"] != "workflow_dispatch"
+        or original["path"].split("@", 1)[0] != ".github/workflows/release.yml"
+        or original["status"] != "completed"
+        or original["conclusion"] != "success"
+    ):
+        raise RuntimeError(
+            f"Existing draft has no successful original release run: {tag}"
+        )
 
 
 def remote_tags() -> dict[str, str]:
@@ -392,6 +462,11 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
     existing = releases()
     check_release_inventory(list(tags), existing)
     check_existing_drafts(existing)
+    for item in existing:
+        if item["draft"]:
+            verify_prior_draft_run(item, tags[str(item["tag_name"])])
+    if remote_tags() != tags:
+        raise RuntimeError("Remote tags changed during draft checks; dispatch afresh")
     # Atomic creation; GitHub refuses a pre-existing ref. No force/update.
     print(
         f"Creating {tag} at {sha}; if a later operation fails use documented recovery",

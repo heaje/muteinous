@@ -57,7 +57,9 @@ def artifacts(output: Path, tag: str) -> None:
         "notes_sha256": release.digest(notes),
         "artifacts": {p.name: release.digest(p) for p in (wheel, sdist)},
     }
-    (output / "build-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (output / "build-metadata.json").write_text(
+        json.dumps(metadata) + "\n", encoding="utf-8", newline="\n"
+    )
     release.write_checksums(output)
 
 
@@ -138,6 +140,8 @@ def test_only_draft_is_created(
     else:
         with pytest.raises(RuntimeError, match="digest missing or mismatched"):
             release.publish_draft(SHA, channel, output)
+        with pytest.raises(RuntimeError, match="(?i)existing draft"):
+            release.check_existing_drafts(records)
     assert len(calls) == 2
     # The only writes are a new tag and a draft. No publication/edit operation.
     assert records[0]["draft"] is True
@@ -356,3 +360,47 @@ def test_recovery_refuses_tag_moved_before_draft_deletion(
     monkeypatch.setattr(release, "git", lambda *_: pytest.fail("Unexpected tag write"))
     with pytest.raises(RuntimeError, match="explicitly supplied original SHA"):
         release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "42", "failed upload")
+
+
+@pytest.mark.parametrize("conclusion", ["success", "failure", "cancelled"])
+def test_existing_draft_requires_successful_original_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conclusion: str
+) -> None:
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/disposable")
+    monkeypatch.setenv("GITHUB_RUN_ID", "42")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG)
+    metadata = output / "build-metadata.json"
+    item = {
+        **record(),
+        "assets": [
+            {
+                "id": 12,
+                "name": metadata.name,
+                "digest": f"sha256:{release.digest(metadata)}",
+            }
+        ],
+    }
+
+    def gh(*args: str) -> str:
+        if args[-1].endswith("/releases/assets/12"):
+            return metadata.read_text("utf-8").strip()
+        assert args[-1].endswith("/actions/runs/42/attempts/2")
+        return json.dumps(
+            {
+                "head_sha": SHA,
+                "event": "workflow_dispatch",
+                "path": ".github/workflows/release.yml",
+                "status": "completed",
+                "conclusion": conclusion,
+            }
+        )
+
+    monkeypatch.setattr(release, "run", gh)
+    if conclusion == "success":
+        release.verify_prior_draft_run(item, SHA)
+    else:
+        with pytest.raises(RuntimeError, match="no successful original release run"):
+            release.verify_prior_draft_run(item, SHA)
