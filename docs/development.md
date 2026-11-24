@@ -26,6 +26,14 @@ uv build --wheel --out-dir dist
 
 Run the [local checks](testing.md#local-validation-commands) before opening a PR. Those commands explicitly use `.venv`'s interpreter; activation is not needed. This bootstrap uses uv's pip-compatible environment workflow with bounded tool versions in `pyproject.toml` and no lockfile. The current bootstrap package has no production API and no runtime dependencies. Package subdirectories are added only when justified by [D160](architecture/decisions.md), not as placeholders.
 
+## Approved development and release direction (implementation pending)
+
+Decisions [D163–D166](architecture/decisions.md) specify future Go Task commands, a verified newest-stable Python series and committed uv lock, Conventional Commits/Commitizen and setuptools-scm, Windows-primary and required Linux/macOS portable CI, Dependabot, and manually initiated draft GitHub Releases. These are **planned changes**, tracked in [parent issue #4](https://github.com/heaje/muteinous/issues/4) and [phase issues #5–#8](https://github.com/heaje/muteinous/issues/5); they are **not yet the commands or settings of this repository**.
+
+Until the respective phase PRs merge, the explicit Python 3.12 uv commands above and the current [PR workflow](../.github/workflows/pr.yml) describe the actual bootstrap. After adoption, `task setup` must explicitly prepare the locked `.venv`; other Task commands must use it without shell activation and must not silently provision it. `task check` runs routine checks while individual tasks remain available for focused validation and CI reporting. Cross-platform developer commands are distinct from claims of Linux/macOS application support.
+
+The future official release workflow will be manual, generate Git-tag-derived wheel/sdist builds and SHA-256 provenance, and produce draft GitHub Releases with Commitizen notes for human review before publication. It will not publish to PyPI or write `CHANGELOG.md`. Refer to D166 for prerelease and recovery rules; existing files must not be represented as implemented until verified in their respective PRs.
+
 ## Architecture documentation governance
 
 The version-controlled [architecture decision log](architecture/decisions.md) is the **self-contained implementation reference for this repository** (adopted as canonical by the merge of PR #1). Contributors should be able to implement, test, review, and propose changes without access to private planning discussions or other external workspaces. If the recorded requirements are missing, ambiguous or contradictory, raise the issue for maintainer review rather than guessing or silently changing a decision. Approved amendments and supersessions must be recorded in the decision log through a reviewed PR, with affected implementation guidance and evidence tracking synchronized. Maintainers are responsible for reconciling earlier planning records; contributors do not need those records.
