@@ -222,6 +222,18 @@ def verify_prior_draft_run(item: dict[str, Any], sha: str) -> None:
         or metadata["version"] != tag[1:]
     ):
         raise RuntimeError(f"Existing draft source provenance mismatch: {tag}")
+    # The manifest is itself an editable asset; the build-time hashes recorded
+    # in the metadata must still match what GitHub holds for the distributions.
+    recorded = {
+        name: f"sha256:{value}" for name, value in metadata["artifacts"].items()
+    }
+    held = {
+        a["name"]: a["digest"]
+        for a in item["assets"]
+        if a["name"] not in {"build-metadata.json", "SHA256SUMS"}
+    }
+    if recorded != held:
+        raise RuntimeError(f"Existing draft distributions differ from build: {tag}")
     server = os.getenv("GITHUB_SERVER_URL")
     repository = os.getenv("GITHUB_REPOSITORY")
     prefix = f"{server}/{repository}/actions/runs/"
@@ -565,7 +577,7 @@ def verify_creation_log(run_id: str, tag: str, sha: str) -> None:
             "api",
             "--paginate",
             "--slurp",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?filter=latest&per_page=100",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?filter=all&per_page=100",
         )
     )
     jobs = [
@@ -574,13 +586,18 @@ def verify_creation_log(run_id: str, tag: str, sha: str) -> None:
         for job in page["jobs"]
         if job["name"] == "Create immutable-source tag and draft release"
     ]
-    if len(jobs) != 1:
-        raise RuntimeError("Original run has no unique draft job; refusing recovery")
-    job_id = int(jobs[0]["id"])
-    log = run("gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
+    if not jobs:
+        raise RuntimeError("Original run has no draft job; refusing recovery")
     marker = f"CREATED RELEASE TAG {tag} {sha}"
-    if not any(line.split(maxsplit=1)[1:] == [marker] for line in log.splitlines()):
-        raise RuntimeError("Original draft job did not prove creation of this tag")
+    # Every attempt is searched: the attempt that created the tag may not be
+    # the latest one if the run was (against the documented advice) rerun.
+    for job in jobs:
+        log = run(
+            "gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job['id']}/logs"
+        )
+        if any(line.split(maxsplit=1)[1:] == [marker] for line in log.splitlines()):
+            return
+    raise RuntimeError("Original draft job did not prove creation of this tag")
 
 
 def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -> None:
@@ -610,8 +627,11 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
         flush=True,
     )
     release_id = recovery_target(tag, sha, remote_tags(), releases())
-    if release_id is None and original["conclusion"] == "success":
-        raise RuntimeError("Orphan reset requires an unsuccessful original release run")
+    if original["conclusion"] not in {"failure", "cancelled", "timed_out"}:
+        raise RuntimeError(
+            "Recovery requires a failed, cancelled or timed-out original run; "
+            "a successful draft is deleted or published by a maintainer instead"
+        )
     if release_id is not None:
         # Recheck both the tag inventory and the draft immediately before deletion.
         if recovery_target(tag, sha, remote_tags(), releases()) != release_id:

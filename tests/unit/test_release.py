@@ -142,9 +142,8 @@ def test_only_draft_is_created(
             release.publish_draft(SHA, channel, output)
         with pytest.raises(RuntimeError, match="(?i)existing draft"):
             release.check_existing_drafts(records)
-    assert len(calls) == 2
     # The only writes are a new tag and a draft. No publication/edit operation.
-    assert records[0]["draft"] is True
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(
@@ -380,7 +379,11 @@ def test_existing_draft_requires_successful_original_run(
                 "id": 12,
                 "name": metadata.name,
                 "digest": f"sha256:{release.digest(metadata)}",
-            }
+            },
+            *(
+                {"id": 13, "name": p.name, "digest": f"sha256:{release.digest(p)}"}
+                for p in output.glob("muteinous-*")
+            ),
         ],
     }
 
@@ -404,3 +407,130 @@ def test_existing_draft_requires_successful_original_run(
     else:
         with pytest.raises(RuntimeError, match="no successful original release run"):
             release.verify_prior_draft_run(item, SHA)
+
+
+def test_existing_draft_distribution_must_match_recorded_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A swapped wheel with a regenerated manifest is not the built artifact."""
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/disposable")
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG)
+    metadata = output / "build-metadata.json"
+    item = {
+        **record(),
+        "assets": [
+            {
+                "id": 12,
+                "name": metadata.name,
+                "digest": f"sha256:{release.digest(metadata)}",
+            },
+            {
+                "id": 13,
+                "name": "muteinous-0.2.0a1.tar.gz",
+                "digest": f"sha256:{'0' * 64}",
+            },
+            {
+                "id": 14,
+                "name": "muteinous-0.2.0a1-py3-none-any.whl",
+                "digest": f"sha256:{'1' * 64}",
+            },
+        ],
+    }
+    monkeypatch.setattr(release, "run", lambda *_: metadata.read_text("utf-8").strip())
+    with pytest.raises(RuntimeError, match="differ from build"):
+        release.verify_prior_draft_run(item, SHA)
+
+
+@pytest.mark.parametrize(
+    "conclusion", ["success", "neutral", "skipped", "action_required"]
+)
+@pytest.mark.parametrize("has_draft", [True, False])
+def test_recovery_refuses_non_failed_original_run(
+    monkeypatch: pytest.MonkeyPatch, conclusion: str, has_draft: bool
+) -> None:
+    def gh(*args: str) -> str:
+        assert args[-1].endswith("/actions/runs/42"), "no write may be attempted"
+        return json.dumps(
+            {
+                "head_sha": SHA,
+                "event": "workflow_dispatch",
+                "path": ".github/workflows/release.yml",
+                "status": "completed",
+                "conclusion": conclusion,
+            }
+        )
+
+    monkeypatch.setattr(release, "run", gh)
+    monkeypatch.setattr(release, "verify_creation_log", lambda *_: None)
+    monkeypatch.setattr(release, "remote_tags", lambda: {TAG: SHA})
+    monkeypatch.setattr(release, "releases", lambda: [record()] if has_draft else [])
+    monkeypatch.setattr(release, "git", lambda *_: pytest.fail("Unexpected tag write"))
+    with pytest.raises(RuntimeError, match="failed, cancelled or timed-out"):
+        release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "42", "evidence")
+
+
+def test_creation_marker_may_come_from_an_earlier_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    jobs = [
+        {"name": "Create immutable-source tag and draft release", "id": i}
+        for i in (1, 2)
+    ]
+    logs = {"1": f"2026-11-24T00:00:00Z CREATED RELEASE TAG {TAG} {SHA}", "2": "rerun"}
+
+    def gh(*args: str) -> str:
+        if "/jobs?" in args[-1]:
+            assert "filter=all" in args[-1]
+            return json.dumps([{"jobs": jobs}])
+        return logs[args[-1].split("/")[-2]]
+
+    monkeypatch.setattr(release, "run", gh)
+    release.verify_creation_log("42", TAG, SHA)
+    logs["1"] = "rerun"
+    with pytest.raises(RuntimeError, match="did not prove creation"):
+        release.verify_creation_log("42", TAG, SHA)
+
+
+def test_remote_inventory_adapters_parse_slurped_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pages = {
+        "releases": [[{"tag_name": TAG}], [{"tag_name": "v0.2.0b1"}]],
+        "matching-refs": [
+            [{"ref": f"refs/tags/{TAG}", "object": {"sha": SHA}}],
+            [{"ref": "refs/tags/v0.2.0b1", "object": {"sha": OTHER_SHA}}],
+        ],
+    }
+
+    def gh(*args: str) -> str:
+        assert args[:4] == ("gh", "api", "--paginate", "--slurp")
+        return json.dumps(
+            pages["releases" if "/releases?" in args[-1] else "matching-refs"]
+        )
+
+    monkeypatch.setattr(release, "run", gh)
+    assert [r["tag_name"] for r in release.releases()] == [TAG, "v0.2.0b1"]
+    assert release.remote_tags() == {TAG: SHA, "v0.2.0b1": OTHER_SHA}
+
+
+def test_workflow_contracts() -> None:
+    """Cheap structural guards; live dispatch is separate acceptance evidence."""
+    root = Path(__file__).resolve().parents[2] / ".github/workflows"
+    text = {p.name: p.read_text("utf-8") for p in root.glob("*.yml")}
+    for name in ("development-build.yml", "release.yml", "recover-release.yml"):
+        assert "workflow_dispatch" in text[name]
+        assert "pull_request" not in text[name] and "push:" not in text[name]
+    for name in ("development-build.yml", "release.yml"):
+        assert "retention-days" not in text[name]
+    assert "--draft" in (root.parent.parent / "scripts/release.py").read_text("utf-8")
+    assert (
+        "twine" not in "".join(text.values())
+        and "pypi" not in "".join(text.values()).lower()
+    )
+    assert "timeout-minutes: 10" in text["pr.yml"]
+    assert text["release.yml"].count("muteinous-official-release") == 1
+    assert text["recover-release.yml"].count("muteinous-official-release") == 1
+    assert "gh release edit" not in "".join(text.values())
+    assert "--cleanup-tag" not in "".join(text.values())

@@ -365,3 +365,48 @@ def test_actual_commitizen_one_point_zero_guard(
         with pytest.raises(RuntimeError, match="reviewed policy"):
             release.propose(channel)
     assert run(repo, "git", "tag", "--list") == "v0.2.0"
+
+
+@pytest.mark.portable
+def test_bootstrap_history_exemptions_are_exact(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    run(repo, "git", "commit", "--allow-empty", "-m", "legacy nonconventional")
+    legacy = run(repo, "git", "rev-parse", "HEAD")
+    run(repo, "git", "commit", "--allow-empty", "-m", "bootstrap nonconventional")
+    bootstrap = run(repo, "git", "rev-parse", "HEAD")
+    monkeypatch.setattr(release, "BOOTSTRAP", bootstrap)
+    monkeypatch.setattr(release, "LEGACY", {legacy, bootstrap})
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: conventional afterwards")
+    release.check_history()
+    # An unlisted pre-bootstrap commit is not exempt.
+    monkeypatch.setattr(release, "LEGACY", {bootstrap})
+    with pytest.raises(RuntimeError, match="commitizen"):
+        release.check_history()
+    # Nothing after the bootstrap commit is exempt.
+    monkeypatch.setattr(release, "LEGACY", {legacy, bootstrap})
+    run(repo, "git", "commit", "--allow-empty", "-m", "later nonconventional")
+    with pytest.raises(RuntimeError, match="commitizen"):
+        release.check_history()
+
+
+@pytest.mark.portable
+def test_build_refuses_stale_dist_and_prepare_refuses_remote_drift(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(repo)
+    sha = run(repo, "git", "rev-parse", "HEAD")
+    (repo / "dist").mkdir()
+    (repo / "dist/stale.whl").write_bytes(b"stale")
+    output = tmp_path / "artifacts"
+    with pytest.raises(RuntimeError, match="fresh output"):
+        release.build(sha, output)
+    assert not output.exists()
+    assert (repo / "dist/stale.whl").read_bytes() == b"stale"
+    shutil.rmtree(repo / "dist")
+    monkeypatch.setattr(release, "remote_tags", lambda: {"v0.0.9": sha})
+    with pytest.raises(RuntimeError, match="Remote tags changed"):
+        release.prepare(sha, "alpha", output)
+    assert not output.exists()
+    assert not run(repo, "git", "tag", "--list")
