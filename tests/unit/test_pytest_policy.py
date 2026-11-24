@@ -94,6 +94,43 @@ def test_skipped_tests_fail(
     assert "test_inner.py" in output
 
 
+def test_skip_preserves_interrupted_exit_status(tmp_path: Path) -> None:
+    # Keep this serial: definition order records the skip before pytest.exit().
+    source = (
+        "import pytest\n"
+        "\n"
+        "def test_00_skip():\n"
+        "    pytest.skip('deliberate')\n"
+        "\n"
+        "def test_01_exit_interrupted():\n"
+        "    pytest.exit('deliberate interruption', returncode=2)\n"
+    )
+    result = run_inner_pytest(tmp_path / "project", source)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 2, output
+    assert "Required test suite contains skipped tests" in output
+    assert "test_00_skip" in output
+
+
+def test_skip_preserves_test_failure_exit_status(tmp_path: Path) -> None:
+    source = (
+        "import pytest\n"
+        "\n"
+        "def test_00_skip():\n"
+        "    pytest.skip('deliberate')\n"
+        "\n"
+        "def test_01_fail():\n"
+        "    pytest.fail('deliberate failure')\n"
+    )
+    result = run_inner_pytest(tmp_path / "project", source)
+    output = result.stdout + result.stderr
+
+    assert result.returncode == 1, output
+    assert "Required test suite contains skipped tests" in output
+    assert "test_00_skip" in output
+
+
 def test_all_passing_tests_still_pass_and_report_session_time(tmp_path: Path) -> None:
     summary_path = tmp_path / "step-summary.md"
     result = run_inner_pytest(

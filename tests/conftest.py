@@ -44,7 +44,7 @@ class _RequiredTestPolicy:
 
         if self._session_started_at is not None:
             self._session_duration = time.perf_counter() - self._session_started_at
-        if self._skipped_test_ids:
+        if self._skipped_test_ids and session.exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
     def pytest_testnodedown(self, node: Any, error: Any) -> None:
