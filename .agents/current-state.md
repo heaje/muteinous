@@ -10,8 +10,8 @@
 
 ## Next
 
-1. Discuss and agree M1 shared core/safety scope, dependencies and acceptance criteria; then create cohesive feature/safety Issues. No M1 implementation Issues are established at this reconciliation. Follow the [work-unit policy](../docs/development.md#work-unit-and-review-policy).
-2. Investigate reusable native-format reconstruction, fidelity and safe installation viability early, not only at final Apply integration. Keep experiments separate from claims of supported game capability.
+1. M1 (shared core and safety foundations): the maintainer agreed to a foundation-first approach with early native-format feasibility investigation. Build small, independently testable components without speculative abstractions or scaffolding; defer infrastructure until justified by actual needs. Agree the individual issue scopes, dependencies and acceptance criteria, then establish the GitHub milestone and cohesive feature/safety Issues following the [work-unit policy](../docs/development.md#work-unit-and-review-policy). Detailed issue boundaries are not yet agreed.
+2. Investigate reusable native-format extraction, reconstruction, fidelity and safe installation viability early in M1, in parallel with foundation work where practical, not only at final Apply integration. Keep experiments separate from claims of supported game capability.
 3. Proposed subsequent milestones: M2 discovery/scanning, M3 filtering/preview/desktop review, M4 safe Apply/release. Milestone boundaries and issue decomposition remain proposals.
 4. Resume infrastructure verification tracked in #4 when available; do not mark deferred requirements verified or close the parent without evidence.
 
