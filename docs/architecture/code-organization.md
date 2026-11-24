@@ -9,7 +9,7 @@ src/muteinous/
   core/
     filtering/               # policy, matching, language, concrete edit planning
     speech/                  # ASR/alignment coordination and result validation
-    audio/                   # time interval/PCM editing, fades, temporary WAV
+    audio/                   # time interval/PCM editing, fades, lossless scratch audio
     ...                      # scan/results/preview/apply/settings coordination
   plugins/
     contracts.py             # smallest justified content-plugin contract
@@ -41,7 +41,7 @@ Create directories and modules only as functionality arrives; this tree is illus
 ## Dependency direction and ownership
 
 - **`models/`** owns simple shared representations (`Segment` is identity-only; `SpeechAnalysisResult` and recognized-word sequence are immutable). No OS, game, plugin or UI code.
-- **`core/`** owns reusable policy and user-workflow coordination: scan/results, filtering, language, speech alignment, safe PCM editing, preview, effective settings and Apply orchestration. Do not move generic censorship algorithms into native adapters.
+- **`core/`** owns reusable policy and user-workflow coordination: scan/results, filtering, language, speech alignment, safe PCM editing, preview, effective settings and Apply orchestration. Do not move generic censorship algorithms into native adapters. Keep PCM editing independent of temporary storage encoding through the narrow internal boundary in [D06](decisions.md#d06--bounded-temporary-wav-workflow); select the initial lossless backend from benchmark evidence, not a speculative codec framework.
 - **`plugins/video_games/`** discovers actual installations and source capabilities, identifies assets/occurrences/dependencies, extracts/decodes/reconstructs/validates native formats and **proposes staged declarative installation changes**. Its adapter knowledge is format/engine-capability based, not game-title based. Plugin-native code never claims installation authorization.
 - **`infrastructure/`** implements verified originals, job scheduling, immutable results/caches, local inference, persistence and the **only shared installer authorized to write/replace/remove game-facing files**. Not all infrastructure is OS-specific: isolate Windows/Linux/macOS divergences under `platform/` only when necessary (D02, D17–D19).
 - **`ui/desktop/`** provides presentation. A fully user-facing `cli/` is **not** in initial-release scope. A small composition entry point wires real components when needed.
