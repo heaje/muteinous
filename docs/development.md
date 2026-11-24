@@ -38,7 +38,7 @@ See [Python compatibility evidence](python-compatibility.md) for the Windows 3.1
 
 ## Development and release direction
 
-D163–D166 define the work tracked by [parent issue #4](https://github.com/heaje/muteinous/issues/4) and phase issues [#5 (architecture)](https://github.com/heaje/muteinous/issues/5), [#6 (tooling/versioning)](https://github.com/heaje/muteinous/issues/6), [#7 (CI/dependencies)](https://github.com/heaje/muteinous/issues/7), and [#8 (builds/releases)](https://github.com/heaje/muteinous/issues/8). The [PR workflow](../.github/workflows/pr.yml) uses locked Task commands on Windows and focused Linux/macOS portability jobs (see [required checks](testing.md#mandatory-portability-checks--d165)). Release automation is a separate phase.
+D163–D166 define the work tracked by [parent issue #4](https://github.com/heaje/muteinous/issues/4) and phase issues [#5 (architecture)](https://github.com/heaje/muteinous/issues/5), [#6 (tooling/versioning)](https://github.com/heaje/muteinous/issues/6), [#7 (CI/dependencies)](https://github.com/heaje/muteinous/issues/7), and [#8 (builds/releases)](https://github.com/heaje/muteinous/issues/8). The [PR workflow](../.github/workflows/pr.yml) uses locked Task commands on Windows and focused Linux/macOS portability jobs (see [required checks](testing.md#mandatory-portability-checks--d165)). Pytest session duration is reported separately from workflow test-step wall time; the latter includes Task readiness checks. Release automation is a separate phase.
 
 ### Dependency maintenance and merge gates
 
