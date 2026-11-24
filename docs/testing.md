@@ -7,7 +7,7 @@ On the baseline **two-vCPU Windows runner**, target **five minutes or less of py
 Run fast unit and plugin-contract tests plus representative **deterministic safety-critical integration tests** for implemented capabilities, covering as applicable:
 - Source identity/freshness and stale-edit/configuration rejection.
 - Required-edit completeness and selected-scope or deferred-manual-resolution refusals (D24/D143/D159).
-- PCM sample/timing/fade fidelity outside intended edits.
+- PCM sample/timing/fade fidelity outside intended edits, and lossless intermediate audio round-trip fidelity for supported representations and properties (D05–D06), including bounded frame processing and safe failure/cleanup. Keep reproducible codec-selection benchmarks separate from routine checks where their runtime warrants it.
 - Shared installation ownership, backup, replacement/removal, and recovery safeguards.
 - Result-bundle integrity, invalidation, and protected cleanup.
 
