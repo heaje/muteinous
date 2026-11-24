@@ -24,8 +24,8 @@ The stable check names and runner labels are:
 | Required check | Runner | Scope |
 | --- | --- | --- |
 | Windows package and tests | `windows-2025` | Full suite, lint, format, strict typing, decision IDs, commit range and PR title, version preview, packaging and imports |
-| Linux portability | `ubuntu-24.04` | Locked setup, packaging and imports, portable tests |
-| macOS portability | `macos-15` | Locked setup, packaging and imports, portable tests |
+| Linux portability | `ubuntu-26.04` | Locked setup, packaging and imports, portable tests |
+| macOS portability | `macos-26` | Locked setup, packaging and imports, portable tests |
 
 The portable selection currently covers installed-distribution import, real Git/Commitizen/setuptools-scm/uv versioning, and isolated pytest-policy regression tests in [test_package_import.py](../tests/unit/test_package_import.py), [test_versioning.py](../tests/unit/test_versioning.py), and [test_pytest_policy.py](../tests/unit/test_pytest_policy.py). These exercise platform-sensitive paths, subprocesses, metadata and package rebuilds using the locked tools and temporary Git repositories; the policy tests also verify serial and xdist skip handling in isolated pytest runs. The decision-ID checker tests remain in the comprehensive Windows suite because they test documentation parsing, not a portability-sensitive contract. Reevaluate markers as dependencies and functionality evolve. The portable jobs use two workers to avoid unnecessary worker startup; Windows retains `-n logical` and runs every test. This is tooling portability, not verified non-Windows application compatibility.
 

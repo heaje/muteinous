@@ -91,9 +91,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-26.04
             check: Linux portability
-          - runner: macos-15
+          - runner: macos-26
             check: macOS portability
     steps:
       - uses: actions/checkout@v7
