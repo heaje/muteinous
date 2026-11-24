@@ -153,6 +153,36 @@ def check_release_inventory(tags: list[str], existing: list[dict[str, Any]]) -> 
         )
 
 
+def check_existing_drafts(existing: list[dict[str, Any]]) -> None:
+    for item in existing:
+        if not item["draft"]:
+            continue
+        tag = str(item["tag_name"])
+        assets = item["assets"]
+        names = [asset["name"] for asset in assets]
+        wheels = [
+            name
+            for name in names
+            if name.startswith(f"muteinous-{tag[1:]}-") and name.endswith(".whl")
+        ]
+        expected = {
+            f"muteinous-{tag[1:]}.tar.gz",
+            "build-metadata.json",
+            "SHA256SUMS",
+            *wheels,
+        }
+        if (
+            item["published_at"] is not None
+            or item.get("immutable")
+            or item["prerelease"] != (tag_key(tag)[3] != 3)
+            or len(wheels) != 1
+            or len(names) != 4
+            or set(names) != expected
+            or any(a["state"] != "uploaded" or a["size"] <= 0 for a in assets)
+        ):
+            raise RuntimeError(f"Incomplete or ambiguous existing draft: {tag}")
+
+
 def remote_tags() -> dict[str, str]:
     pages: list[list[dict[str, Any]]] = json.loads(
         run(
@@ -235,11 +265,7 @@ def build(
             "image_version": os.getenv("ImageVersion"),
             "uv": run("uv", "--version"),
             "lock_sha256": digest(Path("uv.lock")),
-            "run_url": (
-                f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}"
-                f"/actions/runs/{os.getenv('GITHUB_RUN_ID')}"
-            ),
-            "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
+            **workflow_provenance(),
         },
         "artifacts": {p.name: digest(output / p.name) for p in (wheel, sdist)},
     }
@@ -317,13 +343,37 @@ def validate_artifacts(
     return tag, source_tags
 
 
+def workflow_provenance() -> dict[str, str | None]:
+    return {
+        "run_url": (
+            f"{os.getenv('GITHUB_SERVER_URL')}/{os.getenv('GITHUB_REPOSITORY')}"
+            f"/actions/runs/{os.getenv('GITHUB_RUN_ID')}"
+        ),
+        "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
+    }
+
+
+def validate_run_provenance(output: Path) -> None:
+    if os.getenv("GITHUB_ACTIONS") != "true":
+        return
+    metadata = json.loads((output / "build-metadata.json").read_text("utf-8"))
+    if any(
+        metadata["environment"].get(key) != value
+        for key, value in workflow_provenance().items()
+    ):
+        raise RuntimeError("Artifact is from a different run or attempt; dispatch afresh")
+
+
 def publish_draft(sha: str, channel: str, output: Path) -> None:
     validate_source(sha)
     tag, tags = validate_artifacts(output, sha, channel)
+    validate_run_provenance(output)
     if remote_tags() != tags or local_tags() != tags:
         raise RuntimeError("Remote tags changed after build; start a fresh release run")
     # Only the write-enabled job can reliably enumerate private draft releases.
-    check_release_inventory(list(tags), releases())
+    existing = releases()
+    check_release_inventory(list(tags), existing)
+    check_existing_drafts(existing)
     # Atomic creation; GitHub refuses a pre-existing ref. No force/update.
     print(
         f"Creating {tag} at {sha}; if a later operation fails use documented recovery",
@@ -340,6 +390,10 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         "-f",
         f"sha={sha}",
     )
+    # Recovery requires this success marker in the original draft job's log.
+    print(f"CREATED RELEASE TAG {tag} {sha}", flush=True)
+    if remote_tags() != {**tags, tag: sha}:
+        raise RuntimeError("Remote tags changed during tag creation; investigate")
     args = [
         "gh",
         "release",
@@ -376,8 +430,8 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
             raise RuntimeError(f"Incomplete draft asset: {name}")
         if asset.get("digest") and asset["digest"] != f"sha256:{digest(path)}":
             raise RuntimeError(f"GitHub asset digest mismatch: {name}")
-    if remote_tags().get(tag) != sha:
-        raise RuntimeError("Remote tag no longer matches validated source")
+    if remote_tags() != {**tags, tag: sha}:
+        raise RuntimeError("Remote tags no longer match validated source and inventory")
     print(f"Draft {tag} created; review and publish manually.", flush=True)
 
 
@@ -403,9 +457,35 @@ def recovery_target(
         len(matches) != 1
         or not matches[0]["draft"]
         or matches[0]["published_at"] is not None
+        or matches[0].get("immutable")
     ):
         raise RuntimeError("Refusing to reset a published or ambiguous release")
     return int(matches[0]["id"])
+
+
+def verify_creation_log(run_id: str, tag: str, sha: str) -> None:
+    pages = json.loads(
+        run(
+            "gh",
+            "api",
+            "--paginate",
+            "--slurp",
+            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?filter=latest&per_page=100",
+        )
+    )
+    jobs = [
+        job
+        for page in pages
+        for job in page["jobs"]
+        if job["name"] == "Create immutable-source tag and draft release"
+    ]
+    if len(jobs) != 1:
+        raise RuntimeError("Original run has no unique draft job; refusing recovery")
+    job_id = int(jobs[0]["id"])
+    log = run("gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job_id}/logs")
+    marker = f"CREATED RELEASE TAG {tag} {sha}"
+    if not any(line.split(maxsplit=1)[1:] == [marker] for line in log.splitlines()):
+        raise RuntimeError("Original draft job did not prove creation of this tag")
 
 
 def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -> None:
@@ -429,6 +509,7 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
         raise RuntimeError(
             "Original run is not a completed official release for this SHA"
         )
+    verify_creation_log(run_id, tag, sha)
     print(
         f"Recovery requested: {tag} {sha}; original run: {run_id}; evidence: {evidence!r}",
         flush=True,
@@ -445,6 +526,7 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
             item["tag_name"] != tag
             or not item["draft"]
             or item["published_at"] is not None
+            or item.get("immutable")
         ):
             raise RuntimeError("Draft changed; refusing recovery")
         run(

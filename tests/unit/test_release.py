@@ -48,6 +48,7 @@ def artifacts(output: Path, tag: str) -> None:
         "tag": tag,
         "version": tag[1:],
         "source_tags": {},
+        "environment": release.workflow_provenance(),
         "notes_sha256": release.digest(notes),
         "artifacts": {p.name: release.digest(p) for p in (wheel, sdist)},
     }
@@ -119,6 +120,7 @@ def test_only_draft_is_created(
     monkeypatch.setattr(release, "run", gh)
     release.publish_draft(SHA, channel, output)
     assert len(calls) == 2
+    release.check_existing_drafts(records)
     # The only writes are a new tag and a draft. No publication/edit operation.
     assert records[0]["draft"] is True
 
@@ -228,9 +230,64 @@ def test_recovery_requires_evidence_and_lease(
     monkeypatch.setattr(release, "releases", lambda: list(records))
     monkeypatch.setattr(release, "run", gh)
     monkeypatch.setattr(release, "git", git)
+    monkeypatch.setattr(release, "verify_creation_log", lambda *_: None)
     with pytest.raises(RuntimeError, match="confirmation"):
         release.recover(TAG, SHA, "yes", "42", "failed upload")
     assert not calls
     release.recover(TAG, SHA, f"NEVER PUBLISHED {TAG} {SHA}", "42", "failed upload")
     assert not tags
     assert not records
+
+
+def test_reject_previous_incomplete_draft() -> None:
+    item = {
+        **record(),
+        "prerelease": True,
+        "assets": [],
+    }
+    with pytest.raises(RuntimeError, match="Incomplete or ambiguous existing draft"):
+        release.check_existing_drafts([item])
+
+
+def test_reject_stale_run_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_RUN_ID", "42")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    output = tmp_path / "artifacts"
+    artifacts(output, TAG)
+    release.validate_run_provenance(output)
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    with pytest.raises(RuntimeError, match="different run or attempt"):
+        release.validate_run_provenance(output)
+
+
+def test_recovery_requires_exact_tag_creation_log(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = f"2026-11-24T00:00:00Z CREATED RELEASE TAG {TAG} {SHA}"
+
+    def gh(*args: str) -> str:
+        if "/jobs?" in args[-1]:
+            return json.dumps(
+                [
+                    {
+                        "jobs": [
+                            {
+                                "name": "Create immutable-source tag and draft release",
+                                "id": 123,
+                            }
+                        ]
+                    }
+                ]
+            )
+        assert args[-1].endswith("/actions/jobs/123/logs")
+        return log
+
+    monkeypatch.setattr(release, "run", gh)
+    release.verify_creation_log("42", TAG, SHA)
+    with pytest.raises(RuntimeError, match="did not prove creation"):
+        release.verify_creation_log("42", "v0.2.0b1", SHA)
+    with pytest.raises(RuntimeError, match="did not prove creation"):
+        release.verify_creation_log("42", TAG, OTHER_SHA)
