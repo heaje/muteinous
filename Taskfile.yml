@@ -79,3 +79,9 @@ tasks:
             rm -rf -- "$cache"
           fi
         done
+  update-deps:
+    desc: Update all dependencies to their newest versions
+    deps: [ready]
+    cmds:
+      - uv sync --upgrade
+      - task: setup
