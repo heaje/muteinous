@@ -31,23 +31,35 @@ def package_version(root: Path, output: Path) -> str:
     return str(version)
 
 
-@pytest.mark.portable
-def test_git_versions_and_pre_one_breaking_bump(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
+@pytest.fixture
+def repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo with spaces"
     repo.mkdir()
     source = Path(__file__).resolve().parents[2]
     shutil.copy2(source / "pyproject.toml", repo)
+    shutil.copy2(source / ".gitignore", repo)
+    (repo / "scripts").mkdir()
+    shutil.copy2(source / "scripts/check_package.py", repo / "scripts")
     shutil.copytree(
         source / "src",
         repo / "src",
         ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"),
     )
-    run(repo, "git", "init")
+    run(repo, "git", "init", "--template=")
+    hooks = tmp_path / "empty-hooks"
+    hooks.mkdir()
+    run(repo, "git", "config", "core.hooksPath", str(hooks))
+    run(repo, "git", "config", "tag.gpgsign", "false")
     run(repo, "git", "config", "user.name", "Version Test")
     run(repo, "git", "config", "user.email", "test@example.invalid")
     run(repo, "git", "config", "commit.gpgsign", "false")
     run(repo, "git", "add", ".")
     run(repo, "git", "commit", "-m", "feat: initial package")
+    return repo
+
+
+@pytest.mark.portable
+def test_git_versions_and_pre_one_breaking_bump(repo: Path, tmp_path: Path) -> None:
     assert ".dev" in package_version(repo, tmp_path / "untagged")
     initial = run(
         repo, sys.executable, "-m", "commitizen", "bump", "--get-next", "--yes"
@@ -76,8 +88,85 @@ def test_git_versions_and_pre_one_breaking_bump(tmp_path: Path) -> None:
 
 
 @pytest.mark.portable
-def test_commitizen_rejects_nonconventional_message() -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        "random message",
+        "Merge random changes",
+        "Revert some stuff",
+        "Pull request with changes",
+        "fixup! invalid message",
+        "squash! invalid message",
+        "amend! invalid message",
+    ],
+)
+def test_commitizen_rejects_nonconventional_message(message: str) -> None:
     root = Path(__file__).resolve().parents[2]
     cmd = [sys.executable, "-m", "commitizen", "check", "--message"]
-    assert subprocess.run([*cmd, "fix: correct behavior"], cwd=root).returncode == 0
-    assert subprocess.run([*cmd, "random message"], cwd=root).returncode != 0
+    assert subprocess.run([*cmd, message], cwd=root).returncode != 0
+
+
+@pytest.mark.portable
+def test_commitizen_checks_every_commit(repo: Path) -> None:
+    base = run(repo, "git", "rev-parse", "HEAD")
+    cmd = [sys.executable, "-m", "commitizen", "check", "--rev-range"]
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
+    assert subprocess.run([*cmd, f"{base}..HEAD"], cwd=repo).returncode == 0
+    run(repo, "git", "commit", "--allow-empty", "-m", "Merge random changes")
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: valid final message")
+    assert subprocess.run([*cmd, f"{base}..HEAD"], cwd=repo).returncode != 0
+
+
+@pytest.mark.portable
+def test_version_preview_no_increment_and_nonmutation(repo: Path) -> None:
+    run(repo, "git", "tag", "v0.2.0")
+    run(repo, "git", "commit", "--allow-empty", "-m", "docs: clarify usage")
+    before = run(repo, "git", "rev-parse", "HEAD")
+    cz = [sys.executable, "-m", "commitizen"]
+    args = ["bump", "--get-next", "--yes"]
+    assert subprocess.run([*cz, *args], cwd=repo).returncode != 0
+    run(repo, *cz, "--no-raise", "NO_INCREMENT", *args)
+    assert run(repo, "git", "status", "--porcelain") == ""
+    assert run(repo, "git", "rev-parse", "HEAD") == before
+    assert run(repo, "git", "tag", "--list") == "v0.2.0"
+
+
+@pytest.mark.portable
+def test_version_preview_propagates_other_failures(repo: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "not-a-git-repo"
+    outside.mkdir()
+    shutil.copy2(repo / "pyproject.toml", outside)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "commitizen",
+            "--no-raise",
+            "NO_INCREMENT",
+            "bump",
+            "--get-next",
+            "--yes",
+        ],
+        cwd=outside,
+    )
+    assert result.returncode != 0
+
+
+@pytest.mark.portable
+def test_dirty_tree_has_development_metadata(repo: Path, tmp_path: Path) -> None:
+    run(repo, "git", "tag", "v0.2.0")
+    module = repo / "src/muteinous/__init__.py"
+    with module.open("a", encoding="utf-8") as stream:
+        stream.write("\n# Dirty working tree\n")
+    version = package_version(repo, tmp_path / "dirty")
+    assert version != "0.2.0"
+    assert "+" in version
+
+
+@pytest.mark.portable
+def test_tagged_sdist_rebuild_and_installed_metadata(repo: Path) -> None:
+    run(repo, "git", "tag", "v0.2.0")
+    # uv builds a wheel from the unpacked sdist, without Git metadata.
+    run(repo, sys.executable, "scripts/check_package.py")
+    assert (repo / "dist/muteinous-0.2.0.tar.gz").is_file()
+    assert (repo / "dist/muteinous-0.2.0-py3-none-any.whl").is_file()

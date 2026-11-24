@@ -1,0 +1,77 @@
+name: Temporary tooling review verification
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  review:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: checkout with spaces
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          path: checkout with spaces
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: '0.13.9'
+      - uses: go-task/setup-task@v2
+      - name: Missing environment and cleanup without setup
+        shell: bash
+        run: |
+          if task lint; then exit 1; fi
+          mkdir .pytest_cache .mypy_cache .ruff_cache
+          echo keep > user-file.txt
+          task clean
+          test ! -e .venv
+          test ! -e .pytest_cache
+          test ! -e .mypy_cache
+          test ! -e .ruff_cache
+          test -f user-file.txt
+      - name: Locked setup and activated environment isolation
+        shell: bash
+        run: |
+          task setup
+          if [[ "$RUNNER_OS" == Windows ]]; then python=.venv/Scripts/python.exe; else python=.venv/bin/python; fi
+          uv venv --python "$python" .ci/external
+          VIRTUAL_ENV="$(pwd)/.ci/external" task setup
+          VIRTUAL_ENV="$(pwd)/.ci/external" task lint
+      - name: Wrong patch and stale environment refused
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then python=.venv/Scripts/python.exe; else python=.venv/bin/python; fi
+          cp .python-version .ci/python-version
+          echo 3.14.0 > .python-version
+          if task lint; then exit 1; fi
+          cp .ci/python-version .python-version
+          uv pip uninstall --python "$python" ruff
+          if task lint; then exit 1; fi
+          if "$python" -m ruff --version; then exit 1; fi
+          git diff --exit-code -- uv.lock .python-version
+          task setup
+      - name: Windows aggregate check
+        if: runner.os == 'Windows'
+        run: task check
+      - name: Portable tests
+        if: runner.os != 'Windows'
+        run: task test -- -m portable
+      - name: Portable build and version preview
+        if: runner.os != 'Windows'
+        run: |
+          task build
+          task version-preview
+      - name: Cleanup preserves environment and user files
+        shell: bash
+        run: |
+          task clean
+          test -d .venv
+          test -d dist
+          test -f user-file.txt
+          git diff --exit-code -- uv.lock
