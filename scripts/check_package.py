@@ -20,9 +20,7 @@ def metadata_version(data: bytes) -> str:
 def validate_versions(wheel: Path, sdist: Path, expected: str) -> None:
     with ZipFile(wheel) as archive:
         (name,) = (
-            name
-            for name in archive.namelist()
-            if name.endswith(".dist-info/METADATA")
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
         )
         wheel_version = metadata_version(archive.read(name))
     with open_tar(sdist, "r:gz") as archive:
