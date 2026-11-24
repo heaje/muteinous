@@ -255,7 +255,7 @@ def test_recovery_refuses_published_ambiguous_old_or_mismatched_targets() -> Non
     assert release.recovery_target(TAG, SHA, tags, []) is None
     assert release.recovery_target(TAG, SHA, tags, [record()]) == 7
     for existing in (
-        [record(draft=False)],
+        [record(draft=False, published_at="2026-11-24")],
         [record(draft=True, published_at="2026-11-24")],
         [record(immutable=True)],
         [record(), record()],
