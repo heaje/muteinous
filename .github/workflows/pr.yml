@@ -14,12 +14,12 @@ jobs:
     timeout-minutes: 30 # Safety net; pytest has its own 10-minute step timeout.
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
         with:
-          python-version: '3.12'
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v10.4.0
         with:
           version: '0.13.9'
+      - uses: go-task/setup-task@v1
 
       - name: Confirm two-vCPU baseline
         shell: pwsh
@@ -30,51 +30,40 @@ jobs:
             throw 'Benchmark baseline changed; expected two-vCPU Windows runner.'
           }
 
-      - name: Create uv environment and install editable package
+      - name: Resolve tooling lock (temporary checkpoint)
         shell: pwsh
         run: |
-          uv venv --python 3.12 .venv
+          uv python install 3.14
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv pip install --python .venv/Scripts/python.exe -e '.[dev]'
+          uv lock
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Validate editable import and built wheel
-        shell: pwsh
+          Get-Content uv.lock | ForEach-Object { Write-Output "LOCKFILE:$_" }
+      - name: Set up locked environment
+        run: task setup
+      - name: Validate editable import and built distributions
         run: |
-          & .\.venv\Scripts\python.exe -c "import muteinous; print(muteinous.__file__)"
+          .\.venv\Scripts\python.exe -c "import muteinous; print(muteinous.__file__)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv build --wheel --out-dir dist
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv venv --python 3.12 .ci/wheel-venv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $wheel = (Get-ChildItem dist/*.whl | Select-Object -First 1).FullName
-          uv pip install --python .ci/wheel-venv/Scripts/python.exe $wheel
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Push-Location $env:RUNNER_TEMP
-          try {
-            & "$env:GITHUB_WORKSPACE/.ci/wheel-venv/Scripts/python.exe" -c "import muteinous; from importlib.metadata import version; assert version('muteinous'); print(muteinous.__file__)"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          }
-          finally { Pop-Location }
+          task build
 
       - name: Ruff lint
-        run: .\.venv\Scripts\python.exe -m ruff check src scripts tests
+        run: task lint
 
       - name: Ruff format
-        run: .\.venv\Scripts\python.exe -m ruff format --check src scripts tests
+        run: task format-check
 
       - name: Strict type check
-        run: .\.venv\Scripts\python.exe -m mypy src scripts tests
+        run: task typecheck
 
       - name: Verify decision ID synchronization
-        run: .\.venv\Scripts\python.exe scripts/check_decision_ids.py
+        run: task decisions
 
       - name: Pytest (logical CPUs, independent 10-minute timeout)
         shell: pwsh
         timeout-minutes: 10
         run: |
           $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-          & .\.venv\Scripts\python.exe -m pytest -n logical --durations=10
+          task test
           $testExitCode = $LASTEXITCODE
           $stopwatch.Stop()
           $elapsed = '{0:F3}' -f $stopwatch.Elapsed.TotalSeconds
