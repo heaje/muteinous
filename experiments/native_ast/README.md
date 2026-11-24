@@ -1,6 +1,6 @@
 # Native AST feasibility investigation (incomplete M1.5)
 
-This isolated developer experiment is a checkpoint for [#20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported format declaration or completed censorship demonstration. The final experiment must use the real shared editor and selected lossless intermediate from [#19](https://github.com/heaje/muteinous/issues/19), which was open and absent from main at the checkpoint. No substitute censor algorithm is implemented.
+This isolated developer experiment is a checkpoint for [#20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported format declaration or completed censorship demonstration. The final experiment must use the real shared editor and selected lossless intermediate from [#19](https://github.com/heaje/muteinous/issues/19), which was open and absent from main at the initial checkpoint. The stacked integration below now targets the actual upstream implementation; no substitute censor algorithm is implemented.
 
 ## Format and tooling rationale
 
@@ -37,10 +37,20 @@ The independent parser checks STRM size, codec/precision, channels, sample rate,
 
 The exact fixture probe and Python compilation succeeded. The required repository validation is **not run**: Go Task is absent (attempted task check returned 127), CPython 3.14.10 is absent, and direct GitHub Git transport failed DNS resolution. GitHub connector access permits a branch checkpoint but not a complete local checkout with tags. No remote CI result claimed. Preserve [#4](https://github.com/heaje/muteinous/issues/4) infrastructure verification.
 
+## Stacked integration (implementation added; not yet executed)
+
+PR #25 is based on [PR #27](https://github.com/heaje/muteinous/pull/27), upstream commit `db091d4f97713178bf6ba2dd52cc4ed7cf3331cc`. Run from the repository root after `task setup`:
+
+~~~shell
+.venv/bin/python -m experiments.native_ast.shared_edit
+~~~
+
+On Windows use `.venv/Scripts/python.exe` instead. This separately provisioned native-tool experiment uses `PCMFormat`, `audio_scratch`, `WaveStorage`, and the actual shared `Scratch.edit` method. Three synthetic assets, two segment-relative requests mapped to one affected asset and one to a second, exercise grouped rebuilding; margins/fades are deliberately zero. The expected zeroed frames are an independent fixture oracle, not an alternative editor. A third asset is untouched. Native metadata and all decoded samples must match the expected output; original files must remain unchanged. A corrupt or unsupported second required asset or real reconstruction subprocess failure must prevent any staged result from escaping and remove disposable scratch. The probe is intentionally fixture-sized and uses temporary output bytes, not a production staging API. External FFmpeg remains separately provisioned. This new integrated script has not yet been executed in the available environment; the identity experiment above is the only executed native evidence at this point.
+
 ## Remaining work / acceptance gaps
 
-- D05/D06/D08: integrate the merged #19 boundary, use actual shared PCM censoring on controlled segment-relative edits, verify exact frames and fidelity outside the intended edit and margins. No lossy effects apply to the current PCM16 profile. Test any additional profile independently.
-- D07/D24: demonstrate multiple required edits grouped into one native rebuild and at least one unaffected asset left byte-identical; verify source and asset identities and actual required edits. Fail the whole preparation on a required asset or reconstruction error, with no valid partial output. Add deterministic unit and representative safety integration tests; do not substitute the identity probe for these.
+- D05/D06/D08: execute and review the stacked shared-editor integration above; verify exact frames and fidelity outside intended edits. No lossy effects apply to the current PCM16 profile. Revalidate against merged #19.
+- D07/D24: execute grouped-edit and whole-request refusal paths, add routine deterministic unit and representative safety integration tests independent of externally provisioned native tooling; do not substitute the identity probe for these.
 - D16/D132–D135: keep the investigation outside production, no title-specific assumptions, loader execution, keys or installation writes. A structurally valid AST is not proof of a game loader accepting it, nor of safe placement, override precedence, verified originals, or reversible removal. Production adapter feasibility requires verified structural variants, exact metadata/channel layout preservation, a bounded streaming path, independent decoder validation, safe tool execution and a separate installation-method investigation under the shared installer. No D135 loader experiment without explicit approval.
 - D160–D165: run documented Task validation on the pinned environment, add appropriate portable tests only when platform dependencies are verified, and report actual local/remote evidence separately.
 

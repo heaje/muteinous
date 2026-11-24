@@ -1,9 +1,8 @@
-# Issue #20 handoff — incomplete
+# Issue #20 handoff — stacked, incomplete
 
-Related: [#20](https://github.com/heaje/muteinous/issues/20), [#19](https://github.com/heaje/muteinous/issues/19); D05–D08, D16, D24, D132–D135, D160.
-Branch: `m1/issue-20-native-format-poc`.
-Base inspected: `f5ba24e2b5043dad7f6118dee79edb57880adf26`.
+Related: [#20](https://github.com/heaje/muteinous/issues/20), [#19](https://github.com/heaje/muteinous/issues/19), [PR #25](https://github.com/heaje/muteinous/pull/25), [PR #27](https://github.com/heaje/muteinous/pull/27).
+Branch: `m1/issue-20-native-format-poc`; stacked on `feat/m1-4-pcm-scratch-19` at `db091d4f97713178bf6ba2dd52cc4ed7cf3331cc`.
 
-The [AST experiment](../../experiments/native_ast/README.md) and [reproducible probe](../../experiments/native_ast/probe.py) are an identity transport investigation only. They succeeded on the available Linux environment; see experiment README for exact output and limitations. No production code, dependency lock, coordination snapshot or coverage ledger changes.
+The [AST experiment](../../experiments/native_ast/README.md) records a previously executed identity round trip. The [stacked integration](../../experiments/native_ast/shared_edit.py) now calls upstream's actual PCM and scratch API; not yet executed. No production code, dependency lock, shared snapshot or coverage ledger changes.
 
-Resume after #19's implementation is merged to main; rebase this branch onto current main and inspect the real editor/storage interface rather than inventing one. Decide whether this narrow AST specimen remains suitable for the final demonstration (it does not establish Windows relevance). Complete shared editing, grouping, all-or-nothing preparation/refusals, independent validation and required tests; run task setup and task check with the pinned environment. Remove this handoff before completion. No game-facing writes, proprietary assets, loader experiment or merge authorization. See the issue/PR for the pushed checkpoint SHA.
+Run the integration, add routine deterministic safety tests, run pinned Task validation and assess Windows relevance before completion. Coordinate upstream API changes via PR #27; keep the stack rebased with an explicit upstream SHA. After #19 squash-merges, replay only #20 commits onto main, retarget #25 and rerun validation. Do not merge #20 first. Remove this handoff on completion. No loader or game-facing writes. See PR for pushed SHA.
