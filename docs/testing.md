@@ -1,4 +1,4 @@
-# Testing policy — D160–D161
+# Testing policy — D160–D161 and D165
 
 ## Required pull-request validation
 
@@ -17,9 +17,9 @@ Use small generic synthetic fixtures and controlled inference fakes; required PR
 
 ## Planned mandatory portability checks — D165
 
-Once the CI phase is implemented, PRs must pass the D161 Windows comprehensive suite **and** lightweight, required Linux/macOS checks on explicit versioned runner images. Linux/macOS scope is Go Task and uv environment setup, locked installation, wheel/sdist build/import and selected portability-sensitive tests registered as `@pytest.mark.portable`. Keep portable tests alongside their functional tests; only mark cases whose real dependencies and behavior work on all supported CI platforms. A skipped or failing case must not be quietly hidden to satisfy the gate. Windows retains linting, typing and all required tests; Linux/macOS need not duplicate Windows lint/type checks.
+Once the CI phase is implemented, PRs must pass the D161 Windows comprehensive suite **and** lightweight, required Linux/macOS checks on explicit versioned runner images. Linux/macOS scope is Go Task and uv environment setup, locked installation, wheel/sdist build/import and selected portability-sensitive tests registered as `@pytest.mark.portable`. Keep portable tests alongside their functional tests; only mark cases whose real dependencies and behavior work on all supported CI platforms. A skipped or failing case must not be quietly hidden to satisfy the gate. Windows retains linting, typing and all required tests; Linux/macOS do not duplicate Windows lint/type checks.
 
-The current Windows-only workflow and local Python 3.12 commands below remain the **existing implementation** until the relevant PRs are merged. D161's independently failing test-step timeout and five-minute test execution target remain mandatory; the intentional timeout-overrun negative-control is **deferred and unverified** pending a separately approved test.
+The current Windows-only workflow and local Python 3.12 commands below remain the **existing implementation** until the relevant PRs are merged. D161's independently failing test-step timeout and five-minute test execution target remain mandatory; the intentional timeout-overrun negative-control is **deferred and unverified** pending a separately approved test (see the [Issue #2 deferral](https://github.com/heaje/muteinous/issues/2#issuecomment-7113969758)).
 
 ## Local validation commands
 
