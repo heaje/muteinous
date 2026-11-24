@@ -125,10 +125,30 @@ def test_version_preview_no_increment_and_nonmutation(repo: Path) -> None:
     cz = [sys.executable, "-m", "commitizen"]
     args = ["bump", "--get-next", "--yes"]
     assert subprocess.run([*cz, *args], cwd=repo).returncode != 0
-    run(repo, *cz, "--no-raise", "NO_INCREMENT", *args)
+    run(repo, *cz, "--no-raise", "NO_INCREMENT,NO_COMMITS_FOUND", *args)
     assert run(repo, "git", "status", "--porcelain") == ""
     assert run(repo, "git", "rev-parse", "HEAD") == before
     assert run(repo, "git", "tag", "--list") == "v0.2.0"
+
+
+@pytest.mark.portable
+def test_version_preview_at_stable_tag_and_nonmutation(repo: Path) -> None:
+    run(repo, "git", "tag", "v0.2.0")
+    before = (
+        run(repo, "git", "rev-parse", "HEAD"),
+        run(repo, "git", "tag", "--list"),
+        run(repo, "git", "status", "--porcelain"),
+    )
+    cz = [sys.executable, "-m", "commitizen"]
+    args = ["bump", "--get-next", "--yes"]
+
+    assert subprocess.run([*cz, *args], cwd=repo).returncode == 3
+    run(repo, *cz, "--no-raise", "NO_INCREMENT,NO_COMMITS_FOUND", *args)
+
+    assert run(repo, "git", "rev-parse", "HEAD") == before[0]
+    assert run(repo, "git", "tag", "--list") == before[1] == "v0.2.0"
+    assert run(repo, "git", "rev-parse", "v0.2.0") == before[0]
+    assert run(repo, "git", "status", "--porcelain") == before[2] == ""
 
 
 @pytest.mark.portable
@@ -142,7 +162,7 @@ def test_version_preview_propagates_other_failures(repo: Path, tmp_path: Path) -
             "-m",
             "commitizen",
             "--no-raise",
-            "NO_INCREMENT",
+            "NO_INCREMENT,NO_COMMITS_FOUND",
             "bump",
             "--get-next",
             "--yes",
