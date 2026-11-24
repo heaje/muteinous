@@ -172,6 +172,10 @@
 | D160 | Cross-cutting | No implementation evidence | — | — |
 | D161 | Cross-cutting | No implementation evidence | — | — |
 | D162 | Cross-cutting (release phasing) | No implementation evidence | — | — |
+| D163 | Cross-cutting (development tooling) | No implementation evidence | [#5](https://github.com/heaje/muteinous/issues/5), [#6](https://github.com/heaje/muteinous/issues/6) (planned) | — |
+| D164 | Cross-cutting (Python/dependencies) | No implementation evidence | [#5](https://github.com/heaje/muteinous/issues/5), [#6](https://github.com/heaje/muteinous/issues/6), [#7](https://github.com/heaje/muteinous/issues/7) (planned) | — |
+| D165 | Cross-cutting (CI/portability) | No implementation evidence | [#5](https://github.com/heaje/muteinous/issues/5), [#7](https://github.com/heaje/muteinous/issues/7) (planned) | — |
+| D166 | Cross-cutting (versioning/releases) | No implementation evidence | [#5](https://github.com/heaje/muteinous/issues/5), [#6](https://github.com/heaje/muteinous/issues/6), [#8](https://github.com/heaje/muteinous/issues/8) (planned) | — |
 
 ## Updating this tracker
 
