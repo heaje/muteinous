@@ -284,7 +284,9 @@ def prepare(sha: str, channel: str, output: Path, *, remote: bool = True) -> Non
     git("tag", tag, sha)
     git("checkout", "--detach", tag)
     build(sha, output, tag, source_tags=tags, release_notes=release_notes)
-    print(f"Prepared {tag} from {sha}; no remote tag or release created yet", flush=True)
+    print(
+        f"Prepared {tag} from {sha}; no remote tag or release created yet", flush=True
+    )
 
 
 def validate_artifacts(

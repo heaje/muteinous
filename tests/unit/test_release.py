@@ -51,9 +51,7 @@ def artifacts(output: Path, tag: str) -> None:
         "notes_sha256": release.digest(notes),
         "artifacts": {p.name: release.digest(p) for p in (wheel, sdist)},
     }
-    (output / "build-metadata.json").write_text(
-        json.dumps(metadata), encoding="utf-8"
-    )
+    (output / "build-metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
     release.write_checksums(output)
 
 
@@ -133,7 +131,9 @@ def test_only_draft_is_created(
         ("SHA256SUMS", "manifest mismatch"),
     ],
 )
-def test_artifact_tampering_is_rejected(tmp_path: Path, file: str, message: str) -> None:
+def test_artifact_tampering_is_rejected(
+    tmp_path: Path, file: str, message: str
+) -> None:
     output = tmp_path / "artifacts"
     artifacts(output, TAG)
     (output / file).write_bytes(b"tampered")
