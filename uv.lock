@@ -312,6 +312,7 @@ source = { editable = "." }
 dev = [
     { name = "commitizen" },
     { name = "mypy" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-xdist", extra = ["psutil"] },
     { name = "ruff" },
@@ -326,6 +327,7 @@ dev = [
 dev = [
     { name = "commitizen" },
     { name = "mypy" },
+    { name = "packaging" },
     { name = "pytest" },
     { name = "pytest-xdist", extras = ["psutil"] },
     { name = "ruff" },

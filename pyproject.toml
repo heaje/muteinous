@@ -13,6 +13,7 @@ dependencies = []
 dev = [
     "commitizen",
     "mypy",
+    "packaging",
     "pytest",
     "pytest-xdist[psutil]",
     "ruff",

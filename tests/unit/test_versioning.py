@@ -202,6 +202,7 @@ def test_tagged_sdist_rebuild_and_installed_metadata(repo: Path) -> None:
 @pytest.mark.portable
 def test_release_channel_proposals(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(repo)
+    monkeypatch.setattr(release, "BOOTSTRAP", run(repo, "git", "rev-parse", "HEAD"))
     release.check_history()
     for channel, expected in (
         ("alpha", "v0.1.0a1"),
@@ -229,6 +230,7 @@ def test_release_source_and_history_validation(
 ) -> None:
     monkeypatch.chdir(repo)
     sha = run(repo, "git", "rev-parse", "HEAD")
+    monkeypatch.setattr(release, "BOOTSTRAP", sha)
     release.validate_source(sha)
     release.check_history()
     with pytest.raises(RuntimeError, match="requested source SHA"):
@@ -260,6 +262,7 @@ def test_release_builds_each_channel_from_its_own_tag(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sha = run(repo, "git", "rev-parse", "HEAD")
+    monkeypatch.setattr(release, "BOOTSTRAP", sha)
     # A separate checkout per channel models the actual workflow. All four
     # versions deliberately use the same commit, not synthetic version overrides.
     previous: dict[str, str] = {}
@@ -368,24 +371,18 @@ def test_actual_commitizen_one_point_zero_guard(
 
 
 @pytest.mark.portable
-def test_bootstrap_history_exemptions_are_exact(
+def test_release_history_starts_after_bootstrap(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(repo)
     run(repo, "git", "commit", "--allow-empty", "-m", "legacy nonconventional")
-    legacy = run(repo, "git", "rev-parse", "HEAD")
-    run(repo, "git", "commit", "--allow-empty", "-m", "bootstrap nonconventional")
+    run(
+        repo, "git", "commit", "--allow-empty", "-m", "feat: establish history boundary"
+    )
     bootstrap = run(repo, "git", "rev-parse", "HEAD")
     monkeypatch.setattr(release, "BOOTSTRAP", bootstrap)
-    monkeypatch.setattr(release, "LEGACY", {legacy, bootstrap})
     run(repo, "git", "commit", "--allow-empty", "-m", "fix: conventional afterwards")
     release.check_history()
-    # An unlisted pre-bootstrap commit is not exempt.
-    monkeypatch.setattr(release, "LEGACY", {bootstrap})
-    with pytest.raises(RuntimeError, match="commitizen"):
-        release.check_history()
-    # Nothing after the bootstrap commit is exempt.
-    monkeypatch.setattr(release, "LEGACY", {legacy, bootstrap})
     run(repo, "git", "commit", "--allow-empty", "-m", "later nonconventional")
     with pytest.raises(RuntimeError, match="commitizen"):
         release.check_history()
@@ -405,6 +402,7 @@ def test_build_refuses_stale_dist_and_prepare_refuses_remote_drift(
     assert not output.exists()
     assert (repo / "dist/stale.whl").read_bytes() == b"stale"
     shutil.rmtree(repo / "dist")
+    monkeypatch.setattr(release, "BOOTSTRAP", sha)
     monkeypatch.setattr(release, "remote_tags", lambda: {"v0.0.9": sha})
     with pytest.raises(RuntimeError, match="Remote tags changed"):
         release.prepare(sha, "alpha", output)

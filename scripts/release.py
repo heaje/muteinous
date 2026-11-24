@@ -1,5 +1,7 @@
 """Manual build/release orchestration; Commitizen owns version calculation."""
 
+from __future__ import annotations
+
 import argparse
 import hashlib
 import json
@@ -11,21 +13,16 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 # Pre-1.0 policy is deliberately not an input to workflow dispatch.
 CHANNELS = {"alpha": "a", "beta": "b", "rc": "rc", "stable": None}
-TAG = re.compile(
-    r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:(a|b|rc)(0|[1-9]\d*))?\Z",
-    re.ASCII,
-)
 SHA = re.compile(r"[0-9a-f]{40}\Z")
-# Exactly these pre-enforcement commits have nonconventional messages.
-LEGACY = {
-    "f1e4c747e316e80afb91b7cccdc1c3fbe60d6bef",
-    "922b92ec08f6f711be2b5734000304459b13ba62",
-}
 BOOTSTRAP = "922b92ec08f6f711be2b5734000304459b13ba62"
+RECOVERY_DOC = "docs/development.md#recover-a-failed-unpublished-release"
+
+if TYPE_CHECKING:
+    from packaging.version import Version
 
 
 def run(*args: str) -> str:
@@ -53,29 +50,35 @@ def cz(*args: str) -> str:
     return run(sys.executable, "-m", "commitizen", *args)
 
 
-def tag_key(tag: str) -> tuple[int, int, int, int, int]:
-    match = TAG.fullmatch(tag)
-    if not match:
+def version_for_tag(tag: str) -> Version:
+    from packaging.version import InvalidVersion, Version
+
+    if not tag.startswith("v"):
         raise RuntimeError(f"Noncanonical release tag: {tag}")
-    major, minor, patch, phase, number = match.groups()
-    return (
-        int(major),
-        int(minor),
-        int(patch),
-        {"a": 0, "b": 1, "rc": 2, None: 3}[phase],
-        int(number or 0),
-    )
+    value = tag[1:]
+    try:
+        version = Version(value)
+    except InvalidVersion as exc:
+        raise RuntimeError(f"Noncanonical release tag: {tag}") from exc
+    if (
+        str(version) != value
+        or version.epoch != 0
+        or len(version.release) != 3
+        or version.post is not None
+        or version.dev is not None
+        or version.local is not None
+    ):
+        raise RuntimeError(f"Noncanonical release tag: {tag}")
+    return version
 
 
 def validate_candidate(tag: str, channel: str, tags: list[str]) -> None:
-    key = tag_key(tag)
-    if key[0] != 0:
+    version = version_for_tag(tag)
+    if version.release[0] != 0:
         raise RuntimeError(
             "D166: 1.0 (including prereleases) requires reviewed policy/configuration change"
         )
-    match = TAG.fullmatch(tag)
-    assert match is not None
-    if match.group(4) != CHANNELS[channel]:
+    if (version.pre[0] if version.pre else None) != CHANNELS[channel]:
         raise RuntimeError(
             f"Commitizen proposed {tag}, not the requested {channel} channel"
         )
@@ -83,7 +86,7 @@ def validate_candidate(tag: str, channel: str, tags: list[str]) -> None:
         raise RuntimeError(
             f"Tag already exists: {tag}; never overwrite or silently reuse"
         )
-    if tags and key <= max(map(tag_key, tags)):
+    if tags and version <= max(map(version_for_tag, tags)):
         raise RuntimeError(f"Non-increasing release version: {tag}")
 
 
@@ -97,30 +100,25 @@ def validate_source(sha: str) -> None:
 
 
 def check_history() -> None:
-    commits = set(git("rev-list", "HEAD").splitlines())
-    if BOOTSTRAP in commits:
-        # Check all later commits in one invocation; inspect the small bootstrap
-        # history separately so the exceptions cannot exempt any future commits.
-        before = git("rev-list", BOOTSTRAP).splitlines()
-        if BOOTSTRAP != git("rev-parse", "HEAD"):
-            cz("check", "--rev-range", f"{BOOTSTRAP}..HEAD")
-        for commit in before:
-            if commit not in LEGACY:
-                cz("check", "--message", git("show", "-s", "--format=%B", commit))
-    else:
-        cz("check", "--rev-range", "HEAD")
+    commits = git("rev-list", "HEAD").splitlines()
+    if BOOTSTRAP not in commits:
+        raise RuntimeError(
+            "Release history does not include the Python bootstrap commit"
+        )
+    if BOOTSTRAP != git("rev-parse", "HEAD"):
+        cz("check", "--rev-range", f"{BOOTSTRAP}..HEAD")
 
 
 def local_tags() -> dict[str, str]:
     tags = git("tag", "--list").splitlines()
-    for tag in tags:
-        tag_key(tag)
     return {tag: git("rev-parse", f"refs/tags/{tag}") for tag in tags}
 
 
 def propose(channel: str) -> str:
     tags = local_tags()
     if tags:
+        for tag in tags:
+            version_for_tag(tag)
         # All existing release tags must be reachable from the release source.
         # Refuse a divergent version history instead of guessing which line to bump.
         for tag in tags:
@@ -151,119 +149,21 @@ def check_release_inventory(tags: list[str], existing: list[dict[str, Any]]) -> 
     names = [str(item["tag_name"]) for item in existing]
     if len(names) != len(set(names)) or set(names) != set(tags):
         raise RuntimeError(
-            "Remote release/tag inventory differs; investigate drafts, orphan tags, or deleted releases before continuing"
+            "Git tag and GitHub Release inventory differs; investigate orphan tags or "
+            f"drafts before continuing. See {RECOVERY_DOC}"
         )
 
 
-def check_existing_drafts(existing: list[dict[str, Any]]) -> None:
-    for item in existing:
-        if not item["draft"]:
-            continue
-        tag = str(item["tag_name"])
-        assets = item["assets"]
-        names = [asset["name"] for asset in assets]
-        wheels = [
-            name
-            for name in names
-            if name.startswith(f"muteinous-{tag[1:]}-") and name.endswith(".whl")
-        ]
-        expected = {
-            f"muteinous-{tag[1:]}.tar.gz",
-            "build-metadata.json",
-            "SHA256SUMS",
-            *wheels,
-        }
-        if (
-            item["published_at"] is not None
-            or item.get("immutable")
-            or item["prerelease"] != (tag_key(tag)[3] != 3)
-            or len(wheels) != 1
-            or len(names) != 4
-            or set(names) != expected
-            or any(a["state"] != "uploaded" or a["size"] <= 0 for a in assets)
-            or any(
-                not re.fullmatch(r"sha256:[0-9a-f]{64}", str(a.get("digest")))
-                for a in assets
-            )
-        ):
-            raise RuntimeError(f"Incomplete or ambiguous existing draft: {tag}")
-        digests = {asset["name"]: asset["digest"] for asset in assets}
-        manifest = "".join(
-            f"{digests[name].removeprefix('sha256:')}  {name}\n"
-            for name in sorted(digests)
-            if name != "SHA256SUMS"
-        )
-        manifest_digest = hashlib.sha256(manifest.encode()).hexdigest()
-        if digests["SHA256SUMS"] != f"sha256:{manifest_digest}":
-            raise RuntimeError(f"Existing draft checksum manifest mismatch: {tag}")
-
-
-def verify_prior_draft_run(item: dict[str, Any], sha: str) -> None:
-    tag = str(item["tag_name"])
-    asset = next(a for a in item["assets"] if a["name"] == "build-metadata.json")
-    asset_id = int(asset["id"])
-    # The generated metadata has exactly one LF at EOF; run() strips it.
-    metadata_text = (
-        run(
-            "gh",
-            "api",
-            "-H",
-            "Accept: application/octet-stream",
-            f"repos/{{owner}}/{{repo}}/releases/assets/{asset_id}",
-        )
-        + "\n"
+def refuse_other_drafts(existing: list[dict[str, Any]], tag: str) -> None:
+    drafts = sorted(
+        str(item["tag_name"])
+        for item in existing
+        if item["draft"] and item["tag_name"] != tag
     )
-    metadata_digest = hashlib.sha256(metadata_text.encode()).hexdigest()
-    if asset["digest"] != f"sha256:{metadata_digest}":
-        raise RuntimeError(f"Existing draft metadata checksum mismatch: {tag}")
-    metadata = json.loads(metadata_text)
-    if (
-        metadata["tag"] != tag
-        or metadata["sha"] != sha
-        or metadata["version"] != tag[1:]
-    ):
-        raise RuntimeError(f"Existing draft source provenance mismatch: {tag}")
-    # The manifest is itself an editable asset; the build-time hashes recorded
-    # in the metadata must still match what GitHub holds for the distributions.
-    recorded = {
-        name: f"sha256:{value}" for name, value in metadata["artifacts"].items()
-    }
-    held = {
-        a["name"]: a["digest"]
-        for a in item["assets"]
-        if a["name"] not in {"build-metadata.json", "SHA256SUMS"}
-    }
-    if recorded != held:
-        raise RuntimeError(f"Existing draft distributions differ from build: {tag}")
-    server = os.getenv("GITHUB_SERVER_URL")
-    repository = os.getenv("GITHUB_REPOSITORY")
-    prefix = f"{server}/{repository}/actions/runs/"
-    environment = metadata["environment"]
-    run_id = str(environment["run_url"]).removeprefix(prefix)
-    attempt = str(environment["run_attempt"])
-    if not (
-        server
-        and repository
-        and re.fullmatch(r"[1-9][0-9]*", run_id)
-        and re.fullmatch(r"[1-9][0-9]*", attempt)
-    ):
-        raise RuntimeError(f"Existing draft has invalid workflow provenance: {tag}")
-    original = json.loads(
-        run(
-            "gh",
-            "api",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/attempts/{attempt}",
-        )
-    )
-    if (
-        original["head_sha"] != sha
-        or original["event"] != "workflow_dispatch"
-        or original["path"].split("@", 1)[0] != ".github/workflows/release.yml"
-        or original["status"] != "completed"
-        or original["conclusion"] != "success"
-    ):
+    if drafts:
         raise RuntimeError(
-            f"Existing draft has no successful original release run: {tag}"
+            f"Other draft release(s) already exist: {', '.join(drafts)}. "
+            f"Resolve them before retrying; see {RECOVERY_DOC}"
         )
 
 
@@ -287,16 +187,16 @@ def remote_tags() -> dict[str, str]:
 def notes(tag: str, tags: list[str]) -> str:
     # Cumulative notes since the last stable release, including prerelease
     # changes. Dry-run never writes a changelog file.
-    stable = [t for t in tags if tag_key(t)[3] == 3]
+    stable = [t for t in tags if version_for_tag(t).pre is None]
     # Commitizen otherwise labels same-SHA promotions with the previous tag.
     # Hide prerelease tags in this disposable checkout only, after calculating
     # the proposal from the complete tag history.
     for previous in tags:
-        if tag_key(previous)[3] != 3:
+        if version_for_tag(previous).pre is not None:
             git("tag", "-d", previous)
     args = ["changelog", "--dry-run", "--unreleased-version", tag]
     if stable:
-        args += ["--start-rev", max(stable, key=tag_key)]
+        args += ["--start-rev", max(stable, key=version_for_tag)]
     result = cz(*args)
     if not result.strip():
         raise RuntimeError("Commitizen returned empty release notes")
@@ -315,6 +215,7 @@ def build(
     *,
     source_tags: dict[str, str] | None = None,
     release_notes: str | None = None,
+    channel: str | None = None,
 ) -> None:
     validate_source(sha)
     if output.exists() or Path("dist").exists():
@@ -338,6 +239,7 @@ def build(
         "package": "muteinous",
         "version": version,
         "tag": tag,
+        "channel": channel,
         "sha": sha,
         "python": sys.version,
         "environment": {
@@ -349,7 +251,6 @@ def build(
             "image_version": os.getenv("ImageVersion"),
             "uv": run("uv", "--version"),
             "lock_sha256": digest(Path("uv.lock")),
-            **workflow_provenance(),
         },
         "artifacts": {p.name: digest(output / p.name) for p in (wheel, sdist)},
     }
@@ -393,7 +294,14 @@ def prepare(sha: str, channel: str, output: Path, *, remote: bool = True) -> Non
         git("tag", "-d", old)
     git("tag", tag, sha)
     git("checkout", "--detach", tag)
-    build(sha, output, tag, source_tags=tags, release_notes=release_notes)
+    build(
+        sha,
+        output,
+        tag,
+        source_tags=tags,
+        release_notes=release_notes,
+        channel=channel,
+    )
     print(
         f"Prepared {tag} from {sha}; no remote tag or release created yet", flush=True
     )
@@ -406,13 +314,16 @@ def validate_artifacts(
         (output / "build-metadata.json").read_text(encoding="utf-8")
     )
     tag = str(metadata["tag"])
-    validate_candidate(tag, channel, [])
     if (
         metadata["package"] != "muteinous"
         or metadata["sha"] != sha
         or metadata["version"] != tag[1:]
+        or metadata["channel"] != channel
     ):
         raise RuntimeError("Artifact provenance does not match requested release")
+    source_tags: dict[str, str] = metadata["source_tags"]
+    if tag in source_tags:
+        raise RuntimeError("Release tag already exists in its source tag inventory")
     (wheel,) = output.glob("*.whl")
     (sdist,) = output.glob("*.tar.gz")
     if (
@@ -431,38 +342,7 @@ def validate_artifacts(
     sums = "".join(f"{digest(output / name)}  {name}\n" for name in sorted(assets))
     if (output / "SHA256SUMS").read_text(encoding="utf-8") != sums:
         raise RuntimeError("Release checksum manifest mismatch")
-    source_tags: dict[str, str] = metadata["source_tags"]
-    validate_candidate(tag, channel, list(source_tags))
     return tag, source_tags
-
-
-def workflow_provenance() -> dict[str, str | None]:
-    server = os.getenv("GITHUB_SERVER_URL")
-    repository = os.getenv("GITHUB_REPOSITORY")
-    run_id = os.getenv("GITHUB_RUN_ID")
-    return {
-        "run_url": (
-            f"{server}/{repository}/actions/runs/{run_id}"
-            if server and repository and run_id
-            else None
-        ),
-        "run_attempt": os.getenv("GITHUB_RUN_ATTEMPT"),
-    }
-
-
-def validate_run_provenance(output: Path) -> None:
-    if os.getenv("GITHUB_ACTIONS") != "true":
-        return
-    metadata = json.loads((output / "build-metadata.json").read_text("utf-8"))
-    provenance = workflow_provenance()
-    if None in provenance.values() or any(
-        metadata["environment"].get(key) != value for key, value in provenance.items()
-    ):
-        raise RuntimeError(
-            "Artifact is from a different run or attempt; dispatch afresh"
-        )
-    if metadata["environment"].get("lock_sha256") != digest(Path("uv.lock")):
-        raise RuntimeError("Artifact dependency lock differs from the source checkout")
 
 
 def settled_releases(
@@ -491,18 +371,23 @@ def settled_releases(
 def publish_draft(sha: str, channel: str, output: Path) -> None:
     validate_source(sha)
     tag, tags = validate_artifacts(output, sha, channel)
-    validate_run_provenance(output)
-    if remote_tags() != tags or local_tags() != tags:
-        raise RuntimeError("Remote tags changed after build; start a fresh release run")
-    # Only the write-enabled job can reliably enumerate private draft releases.
+    if local_tags() != tags or remote_tags() != tags:
+        raise RuntimeError(
+            "Remote tags changed after preparation; investigate before retrying. "
+            f"See {RECOVERY_DOC}"
+        )
     existing = releases()
     check_release_inventory(list(tags), existing)
-    check_existing_drafts(existing)
-    for item in existing:
-        if item["draft"]:
-            verify_prior_draft_run(item, tags[str(item["tag_name"])])
+    refuse_other_drafts(existing, tag)
+    if tag in tags:
+        raise RuntimeError(
+            f"Tag already exists: {tag}; never overwrite or silently reuse"
+        )
     if remote_tags() != tags:
-        raise RuntimeError("Remote tags changed during draft checks; dispatch afresh")
+        raise RuntimeError(
+            "Remote tags changed during draft checks; investigate before retrying. "
+            f"See {RECOVERY_DOC}"
+        )
     # Atomic creation; GitHub refuses a pre-existing ref. No force/update.
     print(
         f"Creating {tag} at {sha}; if a later operation fails use documented recovery",
@@ -520,7 +405,6 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         f"sha={sha}",
     )
     # Recovery requires this success marker in the original draft job's log.
-    print(f"CREATED RELEASE TAG {tag} {sha}", flush=True)
     if remote_tags() != {**tags, tag: sha}:
         raise RuntimeError("Remote tags changed during tag creation; investigate")
     args = [
@@ -541,11 +425,13 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
     print(run(*args), flush=True)
     count = sum(p.name != "release-notes.md" for p in output.iterdir())
     current_releases = settled_releases([*tags, tag], tag, count)
+    refuse_other_drafts(current_releases, tag)
     matches = [item for item in current_releases if item["tag_name"] == tag]
     if (
         len(matches) != 1
         or not matches[0]["draft"]
         or matches[0]["published_at"] is not None
+        or matches[0].get("immutable")
         or matches[0]["prerelease"] != (channel != "stable")
     ):
         raise RuntimeError(
@@ -569,20 +455,16 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
 def recovery_target(
     tag: str, sha: str, tags: dict[str, str], existing: list[dict[str, Any]]
 ) -> int | None:
-    tag_key(tag)
+    version_for_tag(tag)
     if not SHA.fullmatch(sha) or tags.get(tag) != sha:
         raise RuntimeError(
             "Tag is missing or does not match the explicitly supplied original SHA"
         )
-    if tag != max(tags, key=tag_key):
+    if tag != max(tags, key=version_for_tag):
         raise RuntimeError("Only the newest failed release can be reset")
     matches = [item for item in existing if item["tag_name"] == tag]
-    check_release_inventory(
-        [previous for previous in tags if previous != tag],
-        [item for item in existing if item["tag_name"] != tag],
-    )
     if not matches:
-        # Orphan tag: requires independent operator evidence/attestation.
+        # Orphan tag: requires independent operator evidence.
         return None
     if (
         len(matches) != 1
@@ -594,83 +476,20 @@ def recovery_target(
     return int(matches[0]["id"])
 
 
-def verify_creation_log(run_id: str, tag: str, sha: str) -> None:
-    pages = json.loads(
-        run(
-            "gh",
-            "api",
-            "--paginate",
-            "--slurp",
-            f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}/jobs?filter=all&per_page=100",
-        )
-    )
-    jobs = [
-        job
-        for page in pages
-        for job in page["jobs"]
-        if job["name"] == "Create immutable-source tag and draft release"
-    ]
-    if not jobs:
-        raise RuntimeError("Original run has no draft job; refusing recovery")
-    marker = f"CREATED RELEASE TAG {tag} {sha}"
-    # Every attempt is searched: the attempt that created the tag may not be
-    # the latest one if the run was (against the documented advice) rerun.
-    for job in jobs:
-        log = run(
-            "gh", "api", f"repos/{{owner}}/{{repo}}/actions/jobs/{job['id']}/logs"
-        )
-        if any(line.split(maxsplit=1)[1:] == [marker] for line in log.splitlines()):
-            return
-    raise RuntimeError("Original draft job did not prove creation of this tag")
-
-
-def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -> None:
-    if (
-        confirmation != f"NEVER PUBLISHED {tag} {sha}"
-        or not evidence.strip()
-        or not re.fullmatch(r"[0-9]+", run_id)
-    ):
+def recover(tag: str, sha: str, confirmation: str, evidence: str) -> None:
+    if confirmation != f"NEVER PUBLISHED {tag} {sha}" or not evidence.strip():
         raise RuntimeError(
-            "Supply exact never-published confirmation, original run ID and failure evidence"
+            "Supply exact never-published confirmation and failure evidence"
         )
-    original: dict[str, Any] = json.loads(
-        run("gh", "api", f"repos/{{owner}}/{{repo}}/actions/runs/{run_id}")
-    )
-    if (
-        original["head_sha"] != sha
-        or original["event"] != "workflow_dispatch"
-        or original["path"].split("@", 1)[0] != ".github/workflows/release.yml"
-        or original["status"] != "completed"
-    ):
-        raise RuntimeError(
-            "Original run is not a completed official release for this SHA"
-        )
-    verify_creation_log(run_id, tag, sha)
     print(
-        f"Recovery requested: {tag} {sha}; original run: {run_id}; evidence: {evidence!r}",
+        f"Recovery requested: {tag} {sha}; operator evidence: {evidence!r}",
         flush=True,
     )
     release_id = recovery_target(tag, sha, remote_tags(), releases())
-    if original["conclusion"] not in {"failure", "cancelled", "timed_out"}:
-        raise RuntimeError(
-            "Recovery requires a failed, cancelled or timed-out original run; "
-            "a successful draft is deleted or published by a maintainer instead"
-        )
+    # Recheck the exact tag and release state immediately before deletion.
+    if recovery_target(tag, sha, remote_tags(), releases()) != release_id:
+        raise RuntimeError("Recovery target changed; refusing deletion")
     if release_id is not None:
-        # Recheck both the tag inventory and the draft immediately before deletion.
-        if recovery_target(tag, sha, remote_tags(), releases()) != release_id:
-            raise RuntimeError("Recovery target changed; refusing draft deletion")
-        # Never use --cleanup-tag.
-        item: dict[str, Any] = json.loads(
-            run("gh", "api", f"repos/{{owner}}/{{repo}}/releases/{release_id}")
-        )
-        if (
-            item["tag_name"] != tag
-            or not item["draft"]
-            or item["published_at"] is not None
-            or item.get("immutable")
-        ):
-            raise RuntimeError("Draft changed; refusing recovery")
         run(
             "gh",
             "api",
@@ -678,13 +497,9 @@ def recover(tag: str, sha: str, confirmation: str, run_id: str, evidence: str) -
             "DELETE",
             f"repos/{{owner}}/{{repo}}/releases/{release_id}",
         )
-    if recovery_target(tag, sha, remote_tags(), releases()) is not None:
-        raise RuntimeError("Release still exists; refusing tag deletion")
     # Lease protects against deleting a tag moved since confirmation.
     ref = f"refs/tags/{tag}"
     git("push", f"--force-with-lease={ref}:{sha}", "origin", f":{ref}")
-    if tag in remote_tags():
-        raise RuntimeError("Tag still exists after deletion")
     print(
         "Reset complete. Fix through PR, then dispatch a fresh release. "
         "Previously fetched tags may remain.",
@@ -705,7 +520,6 @@ def main() -> None:
     p.add_argument("--tag", required=True)
     p.add_argument("--sha", required=True)
     p.add_argument("--confirmation", required=True)
-    p.add_argument("--run-id", required=True)
     p.add_argument("--evidence", required=True)
     args = parser.parse_args()
     if args.command in {"draft", "recover"} and os.getenv("GITHUB_ACTIONS") != "true":
@@ -718,7 +532,7 @@ def main() -> None:
     elif args.command == "draft":
         publish_draft(args.sha, args.channel, args.output)
     else:
-        recover(args.tag, args.sha, args.confirmation, args.run_id, args.evidence)
+        recover(args.tag, args.sha, args.confirmation, args.evidence)
 
 
 if __name__ == "__main__":

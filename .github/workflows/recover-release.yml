@@ -11,12 +11,8 @@ on:
         description: Exact original 40-character source SHA
         required: true
         type: string
-      run_id:
-        description: Original official release workflow run ID
-        required: true
-        type: string
       evidence:
-        description: Reason and evidence that this version has never been published
+        description: Operator evidence that this version has never been published
         required: true
         type: string
       confirmation:
@@ -38,7 +34,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: write
-      actions: read
     steps:
       - name: Require main
         shell: bash
@@ -52,14 +47,19 @@ jobs:
           fetch-depth: 0
           # Git needs this credential for the lease-protected tag deletion.
           persist-credentials: true
-      - name: Inspect original run, draft and tag before recovery
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: '0.13.9'
+      - uses: go-task/setup-task@v2
+      - name: Set up locked environment
+        run: task setup
+      - name: Check recovery confirmation and reset unpublished release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
           SHA: ${{ inputs.sha }}
-          ORIGINAL_RUN: ${{ inputs.run_id }}
           EVIDENCE: ${{ inputs.evidence }}
           CONFIRMATION: ${{ inputs.confirmation }}
         run: |
-          python3 scripts/release.py recover --tag "$TAG" --sha "$SHA" --run-id "$ORIGINAL_RUN" --evidence "$EVIDENCE" --confirmation "$CONFIRMATION"
+          .venv/bin/python scripts/release.py recover --tag "$TAG" --sha "$SHA" --evidence "$EVIDENCE" --confirmation "$CONFIRMATION"
