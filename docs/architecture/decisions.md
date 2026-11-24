@@ -761,6 +761,14 @@ Protect `main` through available GitHub repository rulesets or branch protection
 
 All mechanisms in this decision are **requirements for subsequent implementation**, not evidence that versioning, tagging, release workflows or repository protections are already deployed.
 
+### Amendment (2026-11-24): draft-first publication
+
+Official release automation creates a **draft GitHub Release targeting the exact validated source SHA**; automation does not create a remote Git tag. GitHub creates the tag at that SHA when a maintainer publishes the draft, even if the source branch has since moved. The build still creates a local tag in its disposable checkout and builds both distributions from it; Commitizen and setuptools-scm remain unchanged. The requirement for each channel's own tag and fresh build is met by that local build tag and the tag created on publication. Git tags remain canonical version identifiers after publication.
+
+The “before tagging or drafting” validation requirement applies before drafting. If a release fails before publication, at most a draft remains; a maintainer deletes it in GitHub. No remote tag exists, so tag reset/recreation and risk from tags fetched by others do not arise. Explicit, auditable recovery applies only if a remote tag was ever created for an unpublished version; any such exceptional cleanup is a manual maintainer action recorded in the Issue/PR.
+
+Published tags must still never be moved or reused. The workflow refuses an existing release tag and refuses to create a release while **any** draft exists, including another draft with the same tag name. This amendment supersedes only D166's remote tag-before-draft creation and automated unpublished-tag recovery clauses. Channels, Commitizen notes, prerelease flags, checksums, no-PyPI distribution, draft-only automation and human publication remain unchanged.
+
 ## Process rules
 
 - Discuss and settle one substantial architectural decision at a time.
@@ -772,4 +780,3 @@ All mechanisms in this decision are **requirements for subsequent implementation
 - No repository edits or implementation until the architecture is explicitly agreed.
 
 - Update this decision log as new decisions are confirmed. When the architecture is approved, consider committing a Markdown/ADR version to the new repository as the version-controlled long-term source of truth.
-
