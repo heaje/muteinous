@@ -49,6 +49,15 @@ def run_inner_pytest(
     command.append(str(project / "test_inner.py"))
 
     env = os.environ.copy()
+    for name in (
+        "GITHUB_STEP_SUMMARY",
+        "PYTEST_ADDOPTS",
+        "PYTEST_PLUGINS",
+        "PYTEST_DISABLE_PLUGIN_AUTOLOAD",
+        "PYTEST_XDIST_AUTO_NUM_WORKERS",
+        "PYTEST_CURRENT_TEST",
+    ):
+        env.pop(name, None)
     if summary_path is not None:
         env["GITHUB_STEP_SUMMARY"] = str(summary_path)
     return subprocess.run(
@@ -97,6 +106,27 @@ def test_all_passing_tests_still_pass_and_report_session_time(tmp_path: Path) ->
     assert result.returncode == 0, output
     assert "pytest session time:" in output
     assert "Pytest session time:" in summary_path.read_text(encoding="utf-8")
+
+
+def test_inner_pytest_ignores_inherited_ci_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary_path = tmp_path / "outer-step-summary.md"
+    summary_path.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-k no_inner_tests_match")
+    monkeypatch.setenv("PYTEST_PLUGINS", "plugin_that_does_not_exist")
+    monkeypatch.setenv("PYTEST_DISABLE_PLUGIN_AUTOLOAD", "1")
+    monkeypatch.setenv("PYTEST_XDIST_AUTO_NUM_WORKERS", "not-a-worker-count")
+
+    result = run_inner_pytest(
+        tmp_path / "project",
+        "def test_passes():\n    assert True\n",
+        workers=2,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert summary_path.read_text(encoding="utf-8") == ""
 
 
 def test_empty_portable_selection_keeps_pytest_exit_code_5(tmp_path: Path) -> None:
