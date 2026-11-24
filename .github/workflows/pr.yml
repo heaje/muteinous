@@ -30,14 +30,6 @@ jobs:
             throw 'Benchmark baseline changed; expected two-vCPU Windows runner.'
           }
 
-      - name: Resolve tooling lock (temporary checkpoint)
-        shell: pwsh
-        run: |
-          uv python install 3.14
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          uv lock
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-Content uv.lock | ForEach-Object { Write-Output "LOCKFILE:$_" }
       - name: Set up locked environment
         run: task setup
       - name: Validate editable import and built distributions
