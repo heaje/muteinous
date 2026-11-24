@@ -1,6 +1,7 @@
 """Deterministic release orchestration and failure-path tests."""
 
 import json
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,7 @@ pytestmark = pytest.mark.portable
         ("v0.2.0a1", "alpha", ["v0.2.0b1"], "Non-increasing"),
         ("v0.2.0b1", "alpha", [], "not the requested"),
         ("v0.02.0", "stable", [], "Noncanonical"),
-        ("v0.1Ù¡.0", "stable", [], "Noncanonical"),
+        ("v0.1Ãƒâ„¢Ã‚Â¡.0", "stable", [], "Noncanonical"),
         ("v0.2.0.dev1", "stable", [], "Noncanonical"),
     ],
 )
@@ -129,6 +130,7 @@ def test_only_draft_is_created(
         )
         return "draft URL"
 
+    monkeypatch.setattr(time, "sleep", lambda _: None)
     monkeypatch.setattr(release, "validate_source", lambda _: None)
     monkeypatch.setattr(release, "remote_tags", lambda: dict(tags))
     monkeypatch.setattr(release, "local_tags", dict)
@@ -561,3 +563,21 @@ def test_write_commands_refuse_to_run_outside_actions(
         monkeypatch.setattr("sys.argv", ["release.py", *argv])
         with pytest.raises(SystemExit, match="only run inside"):
             release.main()
+
+
+def test_settled_releases_tolerates_lag_but_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sleeps: list[int] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    done = {"tag_name": TAG, "assets": [{"digest": "sha256:" + "0" * 64}]}
+    reads = iter([[], [{"tag_name": TAG, "assets": []}], [done]])
+    monkeypatch.setattr(release, "releases", lambda: next(reads))
+    assert release.settled_releases([TAG], TAG, 1) == [done]
+    assert sleeps == [0, 1, 2]
+    # A release that never appears is refused after the bounded wait.
+    sleeps.clear()
+    monkeypatch.setattr(release, "releases", lambda: [])
+    with pytest.raises(RuntimeError, match="inventory differs"):
+        release.settled_releases([TAG], TAG, 1)
+    assert len(sleeps) == 6

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -464,6 +465,29 @@ def validate_run_provenance(output: Path) -> None:
         raise RuntimeError("Artifact dependency lock differs from the source checkout")
 
 
+def settled_releases(
+    expected_tags: list[str], tag: str, asset_count: int
+) -> list[dict[str, Any]]:
+    """Read releases after creation, tolerating GitHub's read-after-write lag.
+
+    Only the read is retried, never the creation. Persistent disagreement still
+    fails closed through the normal inventory check.
+    """
+    for delay in (0, 1, 2, 4, 8, 15):
+        time.sleep(delay)
+        current = releases()
+        match = [r for r in current if r["tag_name"] == tag]
+        if (
+            {r["tag_name"] for r in current} == set(expected_tags)
+            and len(match) == 1
+            and len(match[0]["assets"]) == asset_count
+            and all(a.get("digest") for a in match[0]["assets"])
+        ):
+            return current
+    check_release_inventory(expected_tags, current)
+    return current
+
+
 def publish_draft(sha: str, channel: str, output: Path) -> None:
     validate_source(sha)
     tag, tags = validate_artifacts(output, sha, channel)
@@ -515,8 +539,8 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         args.append("--prerelease")
     args += [str(p) for p in sorted(output.iterdir()) if p.name != "release-notes.md"]
     print(run(*args), flush=True)
-    current_releases = releases()
-    check_release_inventory([*tags, tag], current_releases)
+    count = sum(p.name != "release-notes.md" for p in output.iterdir())
+    current_releases = settled_releases([*tags, tag], tag, count)
     matches = [item for item in current_releases if item["tag_name"] == tag]
     if (
         len(matches) != 1
