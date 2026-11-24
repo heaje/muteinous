@@ -58,6 +58,22 @@ jobs:
       - name: Verify decision ID synchronization
         run: task decisions
 
+      - name: Conventional Commits and PR title
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        shell: pwsh
+        run: |
+          & .\.venv\Scripts\python.exe -m commitizen check --rev-range "$env:BASE_SHA..${env:HEAD_SHA}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .\.venv\Scripts\python.exe -m commitizen check --message "$env:PR_TITLE"
+          exit $LASTEXITCODE
+
+      - name: Version preview
+        run: task version-preview
+
       - name: Pytest (logical CPUs, independent 10-minute timeout)
         shell: pwsh
         timeout-minutes: 10

@@ -10,8 +10,9 @@ tasks:
   setup:
     desc: Explicitly install the locked development environment
     cmds:
-      - uv sync --locked --no-install-project
-      - uv sync --locked --no-build-isolation
+      - uv python install 3.14
+      - uv sync --locked --python 3.14 --no-install-project
+      - uv sync --locked --python 3.14 --no-build-isolation-package muteinous
   ready:
     internal: true
     preconditions:
@@ -54,7 +55,7 @@ tasks:
     deps: [ready]
     cmds:
       - '"{{.PYTHON}}" -m setuptools_scm'
-      - '"{{.PYTHON}}" -m commitizen bump --get-next'
+      - '"{{.PYTHON}}" -m commitizen --no-raise NO_INCREMENT bump --get-next'
   check:
     desc: Run comprehensive routine local validation
     cmds:
@@ -64,6 +65,7 @@ tasks:
       - task: decisions
       - task: test
       - task: build
+      - task: version-preview
   clean:
     desc: Remove only reproducible Python tool caches
     deps: [ready]
