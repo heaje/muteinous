@@ -1,8 +1,5 @@
 version: '3'
 
-env:
-  UV_PROJECT_ENVIRONMENT: .venv
-
 vars:
   PYTHON: '{{if eq OS "windows"}}.venv/Scripts/python.exe{{else}}.venv/bin/python{{end}}'
 
@@ -11,8 +8,8 @@ tasks:
     desc: Explicitly install the locked development environment
     cmds:
       - uv python install
-      - uv sync --locked --managed-python --no-install-project
-      - uv sync --locked --managed-python --no-build-isolation-package muteinous
+      - UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --managed-python --no-install-project
+      - UV_PROJECT_ENVIRONMENT=.venv uv sync --locked --managed-python --no-build-isolation-package muteinous
   ready:
     internal: true
     preconditions:
@@ -23,7 +20,7 @@ tasks:
           sys.exit(0 if sys.prefix != sys.base_prefix and Path(sys.prefix).resolve() == Path('.venv').resolve()
           and '.'.join(map(str, sys.version_info[:3])) == Path('.python-version').read_text().strip() else 1)"
         msg: Incorrect .venv interpreter; run task setup to use the pinned Python version.
-      - sh: 'uv sync --check --locked --offline --no-python-downloads --python "{{.PYTHON}}" --no-build-isolation-package muteinous'
+      - sh: 'UV_PROJECT_ENVIRONMENT=.venv uv sync --check --locked --offline --no-python-downloads --python "{{.PYTHON}}" --no-build-isolation-package muteinous'
         msg: The locked environment is not synchronized; run task setup (or update the lock intentionally).
     cmds: []
   lint:
