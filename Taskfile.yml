@@ -10,9 +10,9 @@ tasks:
   setup:
     desc: Explicitly install the locked development environment
     cmds:
-      - uv python install 3.14
-      - uv sync --locked --python 3.14 --no-install-project
-      - uv sync --locked --python 3.14 --no-build-isolation-package muteinous
+      - uv python install
+      - uv sync --locked --managed-python --no-install-project
+      - uv sync --locked --managed-python --no-build-isolation-package muteinous
   ready:
     internal: true
     preconditions:
@@ -58,8 +58,9 @@ tasks:
       - '"{{.PYTHON}}" -m commitizen --no-raise NO_INCREMENT bump --get-next --yes'
   check:
     desc: Run comprehensive routine local validation
+    deps: [ready]
     cmds:
-      - uv lock --check
+      - 'uv lock --check --python "{{.PYTHON}}"'
       - task: lint
       - task: format-check
       - task: typecheck
@@ -71,4 +72,4 @@ tasks:
     desc: Remove only reproducible Python tool caches
     deps: [ready]
     cmds:
-      - '"{{.PYTHON}}" -c "import shutil; [shutil.rmtree(p, ignore_errors=True) for p in (''.pytest_cache'', ''.mypy_cache'', ''.ruff_cache'')]"'
+      - '"{{.PYTHON}}" -c "import shutil; from pathlib import Path; [shutil.rmtree(p) for p in map(Path, (''.pytest_cache'', ''.mypy_cache'', ''.ruff_cache'')) if p.exists() or p.is_symlink()]"'
