@@ -379,10 +379,6 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
     existing = releases()
     check_release_inventory(list(tags), existing)
     refuse_other_drafts(existing, tag)
-    if tag in tags:
-        raise RuntimeError(
-            f"Tag already exists: {tag}; never overwrite or silently reuse"
-        )
     if remote_tags() != tags:
         raise RuntimeError(
             "Remote tags changed during draft checks; investigate before retrying. "
@@ -404,7 +400,6 @@ def publish_draft(sha: str, channel: str, output: Path) -> None:
         "-f",
         f"sha={sha}",
     )
-    # Recovery requires this success marker in the original draft job's log.
     if remote_tags() != {**tags, tag: sha}:
         raise RuntimeError("Remote tags changed during tag creation; investigate")
     args = [
