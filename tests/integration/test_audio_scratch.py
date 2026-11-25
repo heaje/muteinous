@@ -14,14 +14,14 @@ from types import SimpleNamespace
 from typing import Any, BinaryIO
 
 import pytest
-from audio_storage import FAKE_STORAGE_MARKER as _FAKE_STORAGE_MARKER
-from audio_storage import FakeStorage as _FakeStorage
 
 import muteinous
 from muteinous.core.audio.pcm import BLOCK_FRAMES, PCMFormat, Representation
 from muteinous.core.audio.scratch import audio_scratch, cleanup_abandoned
 from muteinous.core.audio.storage import Reader
 from muteinous.core.audio.wav import WaveStorage
+from tests.support.audio_storage import FAKE_STORAGE_MARKER as _FAKE_STORAGE_MARKER
+from tests.support.audio_storage import FakeStorage as _FakeStorage
 
 pytestmark = pytest.mark.portable
 
