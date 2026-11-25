@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import Counter
 from collections.abc import Callable
@@ -26,6 +27,13 @@ from muteinous.infrastructure.jobs.queue import (
 )
 
 pytestmark = pytest.mark.portable
+
+
+def test_job_plan_factory_json_escapes_source_text() -> None:
+    source = 'a"b\\c'
+    submitted = plan("cpu", source=source)
+    assert plan("cpu").input_json == '{"source":"v1"}'
+    assert json.loads(submitted.input_json) == {"source": source}
 
 
 def test_fifo_eligibility_and_atomic_multi_resource_acquisition(
@@ -56,6 +64,49 @@ def test_fifo_eligibility_and_atomic_multi_resource_acquisition(
         assert [w.calls for w in (owner, older, younger, independent)] == [1] * 4
     finally:
         for worker in (owner, older, younger, independent):
+            worker.release.set()
+        queue.close()
+
+
+def test_busy_later_resource_does_not_reserve_free_gpu(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    queue = JobQueue({"cpu": 1, "gpu": 1}, lambda _: None)
+    cpu_owner, waiting, gpu_only = (workers() for _ in range(3))
+    try:
+        queue.submit(plan("cpu", source="cpu-owner"), cpu_owner)
+        assert cpu_owner.entered.wait(5)
+
+        waiting_id = queue.submit(plan("gpu", "cpu", source="both"), waiting)
+        eventually(
+            lambda: (
+                queue.snapshot(waiting_id).state == JobState.QUEUED
+                and queue.snapshot(waiting_id).detail == "Waiting for: cpu"
+            )
+        )
+        assert queue._used["gpu"] == 0
+
+        gpu_id = queue.submit(plan("gpu", source="gpu-only"), gpu_only)
+        assert gpu_only.entered.wait(5)
+        assert queue.snapshot(gpu_id).state == JobState.RUNNING
+        assert queue._used["gpu"] == 1
+        assert not waiting.entered.is_set()
+        assert waiting.calls == 0
+
+        gpu_only.release.set()
+        eventually(lambda: queue.snapshot(gpu_id).state == JobState.COMPLETED)
+        assert not waiting.entered.is_set()
+
+        cpu_owner.release.set()
+        assert waiting.entered.wait(5)
+        assert waiting.calls == 1
+        assert queue._used["gpu"] == queue._used["cpu"] == 1
+        waiting.release.set()
+        assert queue.drain(5)
+        assert waiting.calls == gpu_only.calls == 1
+        assert queue._used["gpu"] == queue._used["cpu"] == 0
+    finally:
+        for worker in (cpu_owner, waiting, gpu_only):
             worker.release.set()
         queue.close()
 
@@ -241,6 +292,63 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
         )
     finally:
         owner.release.set()
+        queue.close()
+
+
+def test_busy_plan_revalidates_at_exact_deadline_without_spinning(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = CountingFakeClock()
+    waiting_plan = plan("cpu", source="deadline")
+    calls: Counter[str] = Counter()
+    revalidated = Event()
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        if submitted == waiting_plan and calls[submitted.input_json] == 2:
+            revalidated.set()
+        return None
+
+    queue = JobQueue(
+        {"cpu": 1, "other": 1},
+        validate,
+        revalidate_interval=1.0,
+        clock=clock,
+    )
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(waiting_plan, waiting)
+        eventually(
+            lambda: (
+                queue.snapshot(waiting_id).detail == "Waiting for: cpu"
+                and calls[waiting_plan.input_json] == 1
+            )
+        )
+
+        clock.now = 1.0
+        queue.set_capacity("other", 1)
+        assert revalidated.wait(5)
+        assert calls[waiting_plan.input_json] == 2
+        snapshot = queue.snapshot(waiting_id)
+        assert snapshot.state == JobState.QUEUED
+        assert snapshot.detail == "Waiting for: cpu"
+
+        before = clock.dispatcher_calls
+        Event().wait(0.25)
+        assert clock.dispatcher_calls - before < 10
+
+        owner.release.set()
+        assert waiting.entered.wait(5)
+        waiting.release.set()
+        assert queue.drain(5)
+        assert calls[waiting_plan.input_json] == 3
+        assert waiting.calls == 1
+        assert queue.snapshot(waiting_id).state == JobState.COMPLETED
+    finally:
+        owner.release.set()
+        waiting.release.set()
         queue.close()
 
 

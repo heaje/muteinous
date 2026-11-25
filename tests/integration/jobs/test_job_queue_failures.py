@@ -1,7 +1,9 @@
 """Deterministic integration tests for the in-process job queue.
 
-Dispatch holds the queue lock while starting a worker; its first action takes
-that lock, so a launched worker cannot enter before a start error is handled.
+`_dispatch` starts a thread while holding the queue lock. A launched child may
+begin running, but its first action in `_run` takes that same lock, so it cannot
+inspect or mutate queue state until the dispatcher's except-branch records
+`start_aborted`.
 """
 
 from __future__ import annotations
@@ -449,6 +451,48 @@ def test_worker_baseexception_fails_job_and_releases_capacity(
         queue.close()
 
 
+def test_worker_exception_with_broken_string_fails_and_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class UnprintableWorkerError(Exception):
+        def __str__(self) -> str:
+            raise RuntimeError("cannot format worker exception")
+
+    thread_errors: list[BaseException] = []
+    following_entered = Event()
+    following_calls = 0
+
+    monkeypatch.setattr(
+        threading, "excepthook", capture_thread_exceptions(thread_errors)
+    )
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+
+    def failed_worker(submitted: JobPlan, context: JobContext) -> object:
+        raise UnprintableWorkerError
+
+    def following_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal following_calls
+        following_calls += 1
+        following_entered.set()
+        return submitted.input_json
+
+    try:
+        failed = queue.submit(plan("cpu", source="unprintable"), failed_worker)
+        following = queue.submit(plan("cpu", source="following"), following_worker)
+        assert queue.drain(5)
+        assert following_entered.is_set()
+        assert following_calls == 1
+        assert queue.snapshot(failed).state == JobState.FAILED
+        assert queue.snapshot(failed).detail == "UnprintableWorkerError"
+        assert queue.snapshot(following).state == JobState.COMPLETED
+        assert queue._used["cpu"] == 0
+        assert all(used >= 0 for used in queue._used.values())
+        queue.close()
+        assert thread_errors == []
+    finally:
+        queue.close()
+
+
 def test_scheduler_pass_baseexception_marks_job_and_dispatcher_survives() -> None:
     class InjectedSchedulerClockFailure(BaseException):
         pass
@@ -516,6 +560,39 @@ def test_validator_failure_is_not_execution_failure_or_retry() -> None:
             "Plan validation failed: RuntimeError: provider unavailable"
         )
         assert not called.is_set()
+    finally:
+        queue.close()
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        pytest.param("", id="empty"),
+        pytest.param("   ", id="whitespace"),
+    ],
+)
+def test_empty_validator_reason_needs_attention_without_running_worker(
+    reason: str,
+) -> None:
+    worker_calls = 0
+
+    def validate(submitted: JobPlan) -> str | None:
+        return reason
+
+    def worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal worker_calls
+        worker_calls += 1
+        return None
+
+    queue = JobQueue({"cpu": 1}, validate)
+    try:
+        job = queue.submit(plan("cpu"), worker)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.NEEDS_ATTENTION
+        assert snapshot.detail == "Plan validation returned an empty reason"
+        assert snapshot.detail.strip()
+        assert worker_calls == 0
     finally:
         queue.close()
 

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-support_path = str(Path(__file__).parent.parent / "support")
+support_path = str(Path(__file__).parents[2] / "support")
 if support_path not in sys.path:
     sys.path.insert(0, support_path)
 

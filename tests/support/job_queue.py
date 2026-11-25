@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from collections.abc import Callable
@@ -11,7 +12,12 @@ from muteinous.infrastructure.jobs.queue import JobContext, JobPlan
 
 
 def plan(*resources: str, source: str = "v1") -> JobPlan:
-    return JobPlan("fake", "fixed", resources, f'{{"source":"{source}"}}')
+    return JobPlan(
+        "fake",
+        "fixed",
+        resources,
+        json.dumps({"source": source}, separators=(",", ":")),
+    )
 
 
 def eventually(predicate: Callable[[], bool]) -> None:

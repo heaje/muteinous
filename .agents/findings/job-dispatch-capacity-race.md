@@ -16,7 +16,7 @@ at the oldest pending job on changes before dispatch.
 
 ## Reproduction / evidence
 
-The [controlled regression](../../tests/integration/test_job_queue_scheduling.py)
+The [controlled regression](../../tests/integration/jobs/test_job_queue_scheduling.py)
 `test_capacity_release_during_validation_restarts_fifo` holds the younger
 job's validator open, releases the occupying worker, then releases validation.
 The older job must dispatch first. The focused queue/value suite passed under
