@@ -19,6 +19,7 @@ from typing import BinaryIO
 
 import pytest
 
+import muteinous.infrastructure.storage._filesystem as storage_filesystem
 import muteinous.infrastructure.storage.bundles as storage_bundles
 from muteinous.infrastructure.storage._filesystem import (
     InsufficientSpace,
@@ -124,6 +125,23 @@ def test_successful_publish_consumes_stage_inside_owning_context(
 
 
 @pytest.mark.portable
+def test_extended_length_store_root_can_publish_and_open_current(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "extended-store"
+    root.mkdir()
+    if sys.platform == "win32":
+        root = Path(storage_filesystem._extended_windows_path(root))
+
+    extended_store = ResultStore(root, atomic_rename_supported=True)
+    if sys.platform == "win32":
+        assert os.fspath(extended_store.root).startswith("\\\\?\\")
+    selected = publish(extended_store, b"extended-path")
+    assert extended_store.selection("scan") == selected
+    assert read(extended_store) == b"extended-path"
+
+
+@pytest.mark.portable
 @pytest.mark.parametrize("operation", ["rename", "replace"])
 def test_atomic_operation_failure_preserves_previous_selection(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch, operation: str
@@ -143,6 +161,49 @@ def test_atomic_operation_failure_preserves_previous_selection(
     assert len(list((store.root / "bundles").iterdir())) == (
         2 if operation == "replace" else 1
     )
+
+
+@pytest.mark.portable
+def test_indeterminate_rename_failure_consumes_stage_and_preserves_primary_error(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = publish(store)
+    primary_error = OSError(errno.EACCES, "injected directory rename failure")
+    destination: list[Path | None] = [None]
+    original_lstat = Path.lstat
+
+    def fail_rename(
+        _source: str | os.PathLike[str], target: str | os.PathLike[str]
+    ) -> None:
+        destination[0] = Path(target)
+        raise primary_error
+
+    def fail_reconcile_lstat(path: Path) -> os.stat_result:
+        if path == destination[0]:
+            raise PermissionError(errno.EACCES, "rename outcome is indeterminate")
+        return original_lstat(path)
+
+    with store.stage("indeterminate-rename") as stage:
+        (stage.path / "payload.bin").write_bytes(b"not-published")
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                "muteinous.infrastructure.storage.bundles.os.rename", fail_rename
+            )
+            patch.setattr(Path, "lstat", fail_reconcile_lstat)
+            with pytest.raises(OSError) as raised:
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=previous,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+        assert raised.value is primary_error
+        with pytest.raises(StorageError, match="no longer writable"):
+            _ = stage.path
+        assert store.selection("scan") == previous
+    assert read(store) == b"original"
 
 
 @pytest.mark.portable
@@ -1036,12 +1097,13 @@ def test_cleanup_unlink_failure_preserves_busy_error_and_allows_retry(
     holder.start()
     original_unlink = Path.unlink
     candidate_path: Path | None = None
-    fail_once = [True]
+    integrity_path: Path | None = None
+    failed_unlinks: set[Path] = set()
 
-    def fail_candidate_unlink(path: Path, *, missing_ok: bool = False) -> None:
-        if path == candidate_path and fail_once[0]:
-            fail_once[0] = False
-            raise PermissionError(errno.EACCES, "candidate is temporarily locked")
+    def fail_publisher_unlink(path: Path, *, missing_ok: bool = False) -> None:
+        if path in {candidate_path, integrity_path} and path not in failed_unlinks:
+            failed_unlinks.add(path)
+            raise PermissionError(errno.EACCES, "publisher file is temporarily locked")
         original_unlink(path, missing_ok=missing_ok)
 
     try:
@@ -1049,7 +1111,8 @@ def test_cleanup_unlink_failure_preserves_busy_error_and_allows_retry(
         with store.stage("cleanup-retry") as stage:
             (stage.path / "payload.bin").write_bytes(b"retry-cleanup")
             candidate_path = stage.path.parent / "candidate.json"
-            monkeypatch.setattr("pathlib.Path.unlink", fail_candidate_unlink)
+            integrity_path = stage.path / "integrity.json"
+            monkeypatch.setattr("pathlib.Path.unlink", fail_publisher_unlink)
             with pytest.raises(StorageError, match="busy"):
                 store.publish(
                     stage,
@@ -1060,7 +1123,8 @@ def test_cleanup_unlink_failure_preserves_busy_error_and_allows_retry(
                     validate_domain=validate_domain,
                 )
             assert candidate_path.exists()
-            assert not (stage.path / "integrity.json").exists()
+            assert integrity_path.exists()
+            assert {candidate_path, integrity_path} <= failed_unlinks
             release.set()
             holder.join(timeout=5)
             assert not holder.is_alive()

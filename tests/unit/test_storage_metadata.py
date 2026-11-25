@@ -2,6 +2,7 @@
 
 import ctypes
 import hashlib
+import ntpath
 import os
 import stat
 from collections.abc import Callable, Iterator
@@ -215,14 +216,27 @@ def test_invalid_or_noncanonical_json_is_rejected(raw: bytes) -> None:
         "C:drive",
         "NUL.txt",
         "COM1",
+        "COM¹",
+        "COM²",
+        "COM³",
+        "LPT¹",
+        "LPT²",
+        "LPT³",
+        "CONIN$",
+        "CONOUT$",
         "x.",
         "x ",
         "a\x00",
+        "control\x1fcharacter",
     ],
 )
 def test_unsafe_path_components_are_rejected(name: str) -> None:
     with pytest.raises(StorageError):
         safe_name(name)
+
+
+def test_safe_name_allows_space_inside_component() -> None:
+    safe_name("name with spaces.txt")
 
 
 def test_safe_name_rejects_unencodable_utf8_component() -> None:
@@ -326,6 +340,55 @@ def test_walk_files_rejects_casefold_collisions(
     monkeypatch.setattr("pathlib.Path.iterdir", collision_listing)
     with pytest.raises(StorageError, match="Ambiguous path"):
         walk_files(tmp_path, controlled_root=tmp_path)
+
+
+def test_walk_files_rejects_unicode_casefold_collision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "\u00df"
+    second = tmp_path / "ss"
+    backing_file = tmp_path / "backing.bin"
+    backing_file.write_bytes(b"fixture")
+    backing_info = backing_file.lstat()
+    original_lstat = Path.lstat
+
+    def collision_listing(path: Path) -> Iterator[Path]:
+        if path == tmp_path:
+            return iter([first, second])
+        return path.iterdir()
+
+    def synthetic_lstat(path: Path) -> os.stat_result:
+        if path in {first, second}:
+            return backing_info
+        return original_lstat(path)
+
+    monkeypatch.setattr("pathlib.Path.iterdir", collision_listing)
+    monkeypatch.setattr(Path, "lstat", synthetic_lstat)
+    monkeypatch.setattr(filesystem, "_enumerate_streams", lambda path: ("::$DATA",))
+    with pytest.raises(StorageError, match="Ambiguous path"):
+        walk_files(tmp_path, controlled_root=tmp_path)
+
+
+def test_extended_windows_path_handles_drive_unc_prefix_and_relative_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("muteinous.infrastructure.storage._filesystem.os.path", ntpath)
+
+    assert (
+        filesystem._extended_windows_path(Path(r"C:\results\bundle"))
+        == r"\\?\C:\results\bundle"
+    )
+    prefixed = r"\\?\C:\already\extended"
+    assert filesystem._extended_windows_path(Path(prefixed)) == prefixed
+    assert (
+        filesystem._extended_windows_path(Path(r"\\server\share\x"))
+        == r"\\?\UNC\server\share\x"
+    )
+
+    relative = filesystem._extended_windows_path(Path(r"relative\result"))
+    absolute_without_prefix = relative.removeprefix("\\\\?\\")
+    assert ntpath.isabs(absolute_without_prefix)
+    assert absolute_without_prefix == ntpath.abspath(r"relative\result")
 
 
 def test_walk_files_rejects_unsafe_inventory_names(
