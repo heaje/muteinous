@@ -9,7 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Never
 
-from ._filesystem import InsufficientSpace, StorageError, checked_directory
+from ._filesystem import (
+    InsufficientSpace,
+    StorageError,
+    _reject_parent_components,
+    checked_directory,
+)
 
 
 @dataclass(frozen=True)
@@ -54,6 +59,9 @@ def preflight(
     """Aggregate simultaneous requirements by filesystem; never reserve bytes."""
     grouped: dict[int, list[SpaceRequirement]] = {}
     for requirement in requirements:
+        _reject_parent_components(requirement.directory)
+        if root is not None:
+            _reject_parent_components(root)
         directory = requirement.directory.absolute()
         if root is None:
             boundary = directory

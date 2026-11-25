@@ -73,6 +73,7 @@ class StagingArea:
         self.space_assessments = assessments
         self._active = True
         self._published = False
+        self._publisher_files: set[str] = set()
 
     @property
     def path(self) -> Path:

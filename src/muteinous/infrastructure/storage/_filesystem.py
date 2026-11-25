@@ -84,12 +84,20 @@ def checked_stat(path: Path, *, directory: bool) -> os.stat_result:
     return info
 
 
+def _reject_parent_components(path: Path) -> None:
+    if ".." in path.parts:
+        raise StorageError(f"Parent traversal is not allowed: {path}")
+
+
 def checked_directory(path: Path, *, root: Path | None = None) -> os.stat_result:
     """Check a directory and its controlled-root path without following links.
 
     When ``root`` is supplied, ancestors above that caller-established boundary
     are intentionally outside this component's control and are not inspected.
     """
+    _reject_parent_components(path)
+    if root is not None:
+        _reject_parent_components(root)
     path = path.absolute()
     if root is None:
         components = [*reversed(path.parents), path]

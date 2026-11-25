@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -28,6 +29,8 @@ from .space import SpaceRequirement, preflight, translate_write_error
 from .staging import CleanupReport, Staging, StagingArea, try_lock
 
 _METADATA = "integrity.json"
+SELECTION_GUARD_TIMEOUT_SECONDS = 2.0
+SELECTION_GUARD_POLL_INTERVAL_SECONDS = 0.01
 DomainValidator = Callable[[Path], None]
 
 
@@ -114,6 +117,19 @@ def _validate(
     validate_domain(directory)
 
 
+def _prepare_publisher_file(staging: StagingArea, path: Path, name: str) -> None:
+    if name in staging._publisher_files:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise StorageError(
+                f"Cannot remove earlier publisher-created {name}"
+            ) from exc
+        staging._publisher_files.remove(name)
+    elif os.path.lexists(path):
+        raise StorageError(f"Reserved {name} is already present")
+
+
 class ResultStore:
     """Storage under an explicitly application-owned, controlled directory.
 
@@ -176,10 +192,16 @@ class ResultStore:
 
     @contextmanager
     def _selection_guard(self) -> Iterator[None]:
-        with try_lock(self._guard, root=self.root) as held:
-            if held is None:
+        deadline = time.monotonic() + max(0.0, SELECTION_GUARD_TIMEOUT_SECONDS)
+        while True:
+            with try_lock(self._guard, root=self.root) as held:
+                if held is not None:
+                    yield
+                    return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 raise StorageError("Result selection is busy; retry the operation")
-            yield
+            time.sleep(min(remaining, SELECTION_GUARD_POLL_INTERVAL_SECONDS))
 
     def _manifest_path(self, result: str) -> Path:
         checked_directory(self._current, root=self.root)
@@ -223,8 +245,12 @@ class ResultStore:
 
         The caller supplies a final authoritative generation/freshness check,
         synchronized with its source/configuration changes. The callback and
-        expected-manifest comparison run inside the storage selection guard.
-        Domain validators must be read-only and raise on invalid results.
+        expected-manifest comparisons run inside the selection guard. The guard
+        waits briefly for contention and then refuses retryably. Refusals before
+        the directory rename leave this stage writable; once renamed, any later
+        failure consumes the stage and may leave an unreferenced bundle, so the
+        caller must produce and stage again. Domain validators must be read-only
+        and raise on invalid results.
         """
         _result_key(result)
         if staging._manager is not self._staging:
@@ -236,9 +262,11 @@ class ResultStore:
             )
         integrity_path = path / _METADATA
         candidate_manifest = staging._directory / "candidate.json"
+        destination: Path | None = None
         created_integrity = False
         created_candidate = False
         renamed = False
+        rename_attempted = False
         try:
             device = checked_directory(path, root=self.root).st_dev
             if any(
@@ -248,8 +276,8 @@ class ResultStore:
                 raise StorageError(
                     "Publication requires destination-filesystem staging"
                 )
-            if os.path.lexists(integrity_path):
-                raise StorageError("Reserved integrity metadata is already present")
+            _prepare_publisher_file(staging, integrity_path, _METADATA)
+            _prepare_publisher_file(staging, candidate_manifest, "candidate.json")
             bundle = uuid4().hex
             metadata = _metadata(
                 path, result, bundle, identity, controlled_root=self.root
@@ -269,6 +297,7 @@ class ResultStore:
             # Exclusive creation: staged inputs cannot provide their own metadata.
             with integrity_path.open("xb") as stream:
                 created_integrity = True
+                staging._publisher_files.add(_METADATA)
                 stream.write(metadata)
             _validate(
                 path,
@@ -278,10 +307,9 @@ class ResultStore:
                 validate_domain,
                 controlled_root=self.root,
             )
-            if os.path.lexists(candidate_manifest):
-                raise StorageError("Reserved candidate metadata is already present")
             with candidate_manifest.open("xb") as stream:
                 created_candidate = True
+                staging._publisher_files.add("candidate.json")
                 stream.write(manifest)
             destination = self._bundles / bundle
             with self._selection_guard():
@@ -289,6 +317,7 @@ class ResultStore:
                     raise StorageError("Result producer was superseded")
                 if os.path.lexists(destination):
                     raise StorageError("Bundle identity already exists")
+                rename_attempted = True
                 os.rename(path, destination)
                 renamed = True
                 staging._published = True
@@ -309,11 +338,34 @@ class ResultStore:
         except OSError as exc:
             translate_write_error(exc)
         finally:
+            if not renamed and rename_attempted and destination is not None:
+                try:
+                    destination.lstat()
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    # An indeterminate rename outcome must never expose a
+                    # writable stage whose payload may already have moved.
+                    renamed = True
+                    staging._published = True
+                else:
+                    renamed = True
+                    staging._published = True
             if not renamed:
                 if created_candidate:
-                    candidate_manifest.unlink(missing_ok=True)
+                    try:
+                        candidate_manifest.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    else:
+                        staging._publisher_files.discard("candidate.json")
                 if created_integrity:
-                    integrity_path.unlink(missing_ok=True)
+                    try:
+                        integrity_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    else:
+                        staging._publisher_files.discard(_METADATA)
 
     @contextmanager
     def open_current(
