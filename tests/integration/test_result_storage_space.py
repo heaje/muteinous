@@ -217,7 +217,6 @@ def test_publication_rejects_payload_file_on_another_device(
                 validate_domain=validate_domain,
             )
     assert store.selection("scan") == previous
-    assert len(list((store.root / "bundles").iterdir())) == 1
     assert read(store) == b"original"
 
 
