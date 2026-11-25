@@ -229,7 +229,9 @@ class JobQueue:
 
     @staticmethod
     def _check_capacity(name: str, capacity: int) -> None:
-        if not name or type(capacity) is not int or capacity < 0:
+        if not isinstance(name, str) or not name:
+            raise ValueError("Resource names must be nonempty strings")
+        if type(capacity) is not int or capacity < 0:
             raise ValueError("Resource capacities must be nonnegative integers")
 
     def _wake(self) -> None:

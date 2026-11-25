@@ -144,6 +144,48 @@ def test_running_and_queued_cancellation_hold_slots_and_reject_late_results(
         queue.close()
 
 
+def test_cancel_rejects_completed_failed_and_already_cancelled_jobs() -> None:
+    started, release = Event(), Event()
+
+    def completed_worker(submitted: JobPlan, context: JobContext) -> object:
+        return submitted.input_json
+
+    def failed_worker(submitted: JobPlan, context: JobContext) -> object:
+        raise RuntimeError("terminal-cancel test failure")
+
+    def cancelled_worker(submitted: JobPlan, context: JobContext) -> object:
+        started.set()
+        assert release.wait(10)
+        return submitted.input_json
+
+    queue = JobQueue({"completed": 1, "failed": 1, "cancelled": 1}, lambda _: None)
+    try:
+        completed = queue.submit(plan("completed"), completed_worker)
+        failed = queue.submit(plan("failed"), failed_worker)
+        cancelled = queue.submit(plan("cancelled"), cancelled_worker)
+        assert started.wait(5)
+        assert queue.cancel(cancelled)
+        cancelled_state = queue.snapshot(cancelled).state
+        assert cancelled_state == JobState.CANCELLED
+        assert not queue.cancel(cancelled)
+        assert queue.snapshot(cancelled).state == cancelled_state
+
+        release.set()
+        assert queue.drain(5)
+        for job_id, expected_state in (
+            (completed, JobState.COMPLETED),
+            (failed, JobState.FAILED),
+            (cancelled, JobState.CANCELLED),
+        ):
+            before = queue.snapshot(job_id)
+            assert before.state == expected_state
+            assert not queue.cancel(job_id)
+            assert queue.snapshot(job_id).state == before.state
+    finally:
+        release.set()
+        queue.close()
+
+
 def test_failure_releases_capacity_without_retry_and_capacity_changes_apply(
     workers: Callable[..., ControlledWorker],
 ) -> None:
@@ -336,6 +378,38 @@ def test_busy_wait_does_not_expire_after_large_clock_advance(
         queue.close()
 
 
+def test_capacity_increase_wakes_waiting_job_without_clock_advance(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    queue = JobQueue(
+        {"cpu": 1},
+        lambda _: None,
+        revalidate_interval=3600,
+        clock=clock,
+    )
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
+        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
+
+        queue.set_capacity("cpu", 2)
+        assert waiting.entered.wait(5)
+        assert clock.now == 0
+        assert queue.snapshot(waiting_id).state == JobState.RUNNING
+
+        owner.release.set()
+        waiting.release.set()
+        assert queue.drain(5)
+        assert waiting.calls == 1
+    finally:
+        owner.release.set()
+        waiting.release.set()
+        queue.close()
+
+
 def test_zero_capacity_makes_queued_job_needs_attention_without_revival(
     workers: Callable[..., ControlledWorker],
 ) -> None:
@@ -428,6 +502,60 @@ def test_worker_start_prelaunch_baseexception_releases_slot_and_scheduler_contin
         )
         assert queue.snapshot(later).state == JobState.COMPLETED
     finally:
+        queue.close()
+
+
+def test_prelaunch_failure_publishes_terminal_revision_without_clock_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedPreLaunchFailure(BaseException):
+        pass
+
+    start_entered, fail_start = Event(), Event()
+    worker_called = Event()
+    clock = FakeClock()
+
+    class FailingBeforeLaunchThread(Thread):
+        def start(self) -> None:
+            if self.name.startswith("job-"):
+                start_entered.set()
+                assert fail_start.wait(5)
+                raise InjectedPreLaunchFailure("injected publication failure")
+            super().start()
+
+    monkeypatch.setattr(queue_module, "Thread", FailingBeforeLaunchThread)
+    queue = JobQueue(
+        {"cpu": 1},
+        lambda _: None,
+        progress_interval=3600,
+        clock=clock,
+    )
+
+    def worker(submitted: JobPlan, context: JobContext) -> object:
+        worker_called.set()
+        return submitted.input_json
+
+    try:
+        job = queue.submit(plan("cpu"), worker)
+        assert start_entered.wait(5)
+        # start() is called under the queue lock; inspect the already-published
+        # running snapshot directly while the injected start failure is held.
+        before = queue._records[job].snapshot
+        assert before.state == JobState.RUNNING
+        fail_start.set()
+        assert queue.drain(5)
+
+        failed = queue.snapshot(job)
+        published = queue.poll(job, before.revision)
+        assert failed.state == JobState.FAILED
+        assert failed.revision > before.revision
+        assert published is not None
+        assert published.state == JobState.FAILED
+        assert published.revision > before.revision
+        assert clock.now == 0
+        assert not worker_called.is_set()
+    finally:
+        fail_start.set()
         queue.close()
 
 
@@ -862,6 +990,38 @@ def test_validator_failure_is_not_execution_failure_or_retry() -> None:
             "Plan validation failed: RuntimeError: provider unavailable"
         )
         assert not called.is_set()
+    finally:
+        queue.close()
+
+
+@pytest.mark.parametrize(
+    ("reason", "truncated"),
+    [
+        pytest.param("validation-prefix:" + "x" * 5000, True, id="ascii"),
+        pytest.param("validation-prefix:" + "😀" * 5000, True, id="astral"),
+        pytest.param("validation-prefix:short", False, id="short"),
+    ],
+)
+def test_long_validator_reasons_are_safely_truncated(
+    reason: str, truncated: bool
+) -> None:
+    def validate(submitted: JobPlan) -> str | None:
+        return reason
+
+    queue = JobQueue({"cpu": 1}, validate)
+    try:
+        job = queue.submit(plan("cpu"), lambda submitted, context: None)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.NEEDS_ATTENTION
+        assert snapshot.detail is not None
+        if truncated:
+            assert len(snapshot.detail) <= queue_module._MAX_DETAIL
+            assert snapshot.detail.startswith("validation-prefix:")
+            assert snapshot.detail.endswith(queue_module._DETAIL_TRUNCATION_SUFFIX)
+            snapshot.detail.encode("utf-8")
+        else:
+            assert snapshot.detail == reason
     finally:
         queue.close()
 
