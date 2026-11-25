@@ -1,32 +1,23 @@
-# Issue #20 / draft PR #25 handoff — AST and Ogg specimens
+# Issue #20 / draft PR #25 handoff - AST and Ogg Vorbis specimens
 
-Related: [Issue #20](https://github.com/heaje/muteinous/issues/20), [draft PR #25](https://github.com/heaje/muteinous/pull/25), [PR #27](https://github.com/heaje/muteinous/pull/27).
+Related: [Issue #20](https://github.com/heaje/muteinous/issues/20), [draft PR #25](https://github.com/heaje/muteinous/pull/25), [PR #27](https://github.com/heaje/muteinous/pull/27) (Issue #19, upstream).
 
-## Branch and ownership
+Branch `m1/issue-20-native-format-poc`, stacked on `feat/m1-4-pcm-scratch-19`. All work is committed and pushed; the PR description records the exact pushed head, upstream base SHA and the local validation results. Verify them with `git rev-parse HEAD` and `git merge-base HEAD origin/feat/m1-4-pcm-scratch-19` rather than trusting this note.
 
-Branch: `m1/issue-20-native-format-poc`, based on `b2ee60a731e506fc2b34083eedf2edd59b947a67`. At the start of fix round 3, HEAD `ebff61ba7d46e730316f6e328eba951447e9da77` matched `origin/m1/issue-20-native-format-poc`; the AST and Ogg specimens were already committed and pushed. The round-3 corrections below are currently **uncommitted worktree changes**. The supervisor owns commit/push; this implementer did not rebase, commit, or push. Remove this temporary handoff after the PR/task is complete.
+## State
 
-No upstream-owned source, scripts, upstream tests, `docs/audio-storage.md`, architecture/coverage docs, or `uv.lock` were changed.
+- Two isolated, synthetic experiments use the real shared `PCMFormat` / `audio_scratch` / `WaveStorage` / `Scratch.edit` boundary: [AST](../../experiments/native_ast/README.md) (lossless Nintendo-console PCM16 container, byte-exact) and [Ogg Vorbis](../../experiments/native_ogg/README.md) (lossy, Windows-relevant loose standard container, measured tolerances and padded edits).
+- Required tests use injected fake codecs and need no FFmpeg; the real-FFmpeg scripts are manual native-tool checks (`python -m experiments.native_ast.probe`, `.native_ast.shared_edit`, `experiments.native_ogg.probe`, `.native_ogg.shared_edit`).
+- `experiments/` is covered by `task lint`, `format-check` and `typecheck`; it is excluded from the wheel and sdist.
+- No production adapter, game-facing write, dependency change, loader trial or title-specific rule.
 
-## Round-3 corrections
+## Remaining before merge (coordinator-owned steps marked *)
 
-- Ogg lossy verification now checks unedited boundary guard bands against the source using separate 18 dB SNR / 0.05 maximum-error limits. Measured real-libvorbis guard bands had minimum 31.092 dB SNR and maximum error 0.01743349. A request with no verified unedited frames refuses unless it genuinely edits the full clip; the full-clip case still checks edited silence.
-- Ogg parsing uses a once-built table-driven CRC, retains only the three headers, validates/counts/discards audio packet bodies, and enforces a 100,000 total-packet limit. The README documents the whole-file buffer and caps.
-- Nominal bitrate drift is limited to 10% relative; ASCII Vorbis field-name validation/case comparison is Unicode-safe.
-- Added negative tests for rebuilt native AST/Ogg validation, an isolated Ogg SNR rejection, path-safe AST suffixes, and both-asset-order refusal coverage across both specimens.
-- `MANIFEST.in` excludes the four experiment-only native tests from the sdist; sdist extraction no longer contains them.
+1. Merge order: PR #27 / Issue #19 first. After its squash merge, replay only the #20 commits onto current `main`, retarget PR #25 to `main`, rerun `task setup` and `task check` plus the four manual scripts on the exact merged upstream.
+2. Remote CI and Linux/macOS behaviour have not been observed; local evidence is Windows only. Preserve the outstanding infrastructure verification tracked in [#4](https://github.com/heaje/muteinous/issues/4).
+3. Remove this handoff and its pointer in [`README.md`](README.md); retire or promote the two findings (`ast-pcm-roundtrip.md`, `vorbis-lossy-roundtrip.md`) per [the finding lifecycle](../README.md#reusable-findings).
+4. *Decision-coverage ledger, coordination snapshot, merge and issue closure belong to the coordinator.
 
-## Local verification
+## Not established
 
-Windows 11, CPython 3.14.10, FFmpeg `n7.1.5-12-g1fdbca85aa-20260731`.
-
-- Native AST/Ogg tests: **114 passed in 3.20s**, no skips.
-- `cmd /v:on /c "task.cmd check & echo exit=!errorlevel!"`: **exit 0**; lint, format check (38 files), mypy (36 source files), decision IDs, **285 passed in 45.86s**, package build/import, and version preview passed.
-- Extracted sdist inventory: no `test_native_*.py`; the remaining sdist suite: **171 passed in 73.17s**, no skips.
-- Manual scripts, each exit 0: `experiments.native_ast.probe`, `experiments.native_ast.shared_edit`, `experiments.native_ogg.probe`, `experiments.native_ogg.shared_edit`. See the experiment READMEs for outputs. Ogg identity: 66,150 frames, 128,000→128,000 bit/s, 33.020 dB SNR, max error 0.01706610, 27,390→26,507 bytes. Edited guard minimum: 31.092 dB / 0.01743349; outside minimum: 31.636 dB / 0.02047877; edited cores were silent.
-- Negative controls, deliberately failing and restored: removing rebuilt-native validation made all four AST/Ogg order cases fail their expected-refusal assertion (**4 failed, 51 deselected**); disabling the Ogg outside-SNR condition made the dedicated SNR test fail its expected-refusal assertion (**1 failed, 22 deselected**).
-- No remote CI result was checked or claimed.
-
-## Limits
-
-The specimens remain synthetic feasibility experiments for a loose AST PCM file and loose Ogg Vorbis file, not production adapters or engine banks. No game-loader acceptance, independent decoder, Linux/macOS shared-edit, other FFmpeg build, or licensing conclusion is established. The tested FFmpeg binary is GPL-configured; do not redistribute it with Muteinous.
+Game-loader acceptance, engine banks (Wwise, FMOD, Unity, Unreal), independent decoder agreement, other FFmpeg builds, redistribution licensing of any FFmpeg build (the tested one is GPL-configured and must not be bundled), production bounded-memory streaming and installation safety.
