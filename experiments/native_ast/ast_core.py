@@ -5,6 +5,7 @@ through the decoder and encoder callables so required tests need no FFmpeg.
 """
 
 import math
+import re
 import struct
 import tempfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -31,6 +32,7 @@ NativeValidator = Callable[[str, bytes, bytes, PCMFormat], None]
 ReconstructionVerifier = Callable[
     [str, bytes, bytes, bytes, Sequence[tuple[int, int]], PCMFormat], None
 ]
+_NATIVE_EXTENSION = re.compile(r"\.[a-z0-9]{1,8}\Z")
 
 
 class NativeStageError(ValueError):
@@ -428,8 +430,11 @@ def prepare(
     supply only its native validator and decoded-output verifier while reusing
     this bounded PCM/scratch orchestration.
     """
-    if not native_extension.startswith(".") or "/" in native_extension:
-        raise ValueError("native extension must be a simple dotted suffix")
+    if _NATIVE_EXTENSION.fullmatch(native_extension) is None:
+        raise ValueError(
+            "native extension must be a dot followed by 1-8 lowercase ASCII "
+            "letters or digits"
+        )
     groups = group_edits(assets, edits, total_frames=info.frames)
     if assets.keys() != originals.keys():
         raise ValueError("fixture asset/original identity mismatch")
@@ -452,6 +457,14 @@ def prepare(
             edited = directory / "edited.pcm"
             rebuilt = directory / f"rebuilt{native_extension}"
             validated_pcm = directory / "validated.pcm"
+            private_root = working.resolve()
+            for native_path in (source, rebuilt):
+                try:
+                    native_path.resolve().relative_to(private_root)
+                except ValueError as exc:
+                    raise ValueError(
+                        "native path escaped private working directory"
+                    ) from exc
             source.write_bytes(native)
 
             try:

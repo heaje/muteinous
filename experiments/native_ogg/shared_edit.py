@@ -21,6 +21,7 @@ from .ogg_core import build_ogg_fixture, parse_ogg_vorbis
 from .ogg_prepare import (
     INFO,
     QualityPolicy,
+    bitrate_is_approximately_preserved,
     measure_lossy_effects,
     prepare_ogg,
 )
@@ -162,8 +163,9 @@ def main() -> None:
                 f"{asset_id} user comments changed",
             )
             _require(
-                abs(parsed.nominal_bitrate - metadata[asset_id].nominal_bitrate)
-                <= max(16_000, metadata[asset_id].nominal_bitrate * 0.15),
+                bitrate_is_approximately_preserved(
+                    metadata[asset_id].nominal_bitrate, parsed.nominal_bitrate
+                ),
                 f"{asset_id} nominal bitrate class changed",
             )
             output_path = root / f"{asset_id}.rebuilt.ogg"
@@ -185,6 +187,12 @@ def main() -> None:
             for region in measured.outside_regions:
                 print(
                     f"MEASURE: {asset_id} outside [{region.start_frame},"
+                    f"{region.end_frame}) SNR={region.snr_db:.3f} dB "
+                    f"max_abs_error={region.maximum_absolute_error:.8f}"
+                )
+            for region in measured.guard_regions:
+                print(
+                    f"MEASURE: {asset_id} guard [{region.start_frame},"
                     f"{region.end_frame}) SNR={region.snr_db:.3f} dB "
                     f"max_abs_error={region.maximum_absolute_error:.8f}"
                 )

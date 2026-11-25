@@ -8,7 +8,9 @@ from .manual_support import create_source_assets, snapshot
 from .ogg_core import parse_ogg_vorbis
 from .ogg_prepare import (
     INFO,
+    MAX_GUARD_ABS_ERROR,
     MAX_OUTSIDE_ABS_ERROR,
+    MIN_GUARD_SNR_DB,
     MIN_OUTSIDE_SNR_DB,
     QualityPolicy,
     bitrate_is_approximately_preserved,
@@ -104,7 +106,10 @@ def main() -> None:
             "POLICY: outside-region gates "
             f"SNR>={MIN_OUTSIDE_SNR_DB:.1f} dB and "
             f"max_abs_error<={MAX_OUTSIDE_ABS_ERROR:.3f}; "
-            f"edit guard={policy.guard_frames} frames"
+            f"guard regions SNR>={MIN_GUARD_SNR_DB:.1f} dB and "
+            f"max_abs_error<={MAX_GUARD_ABS_ERROR:.3f}; "
+            f"edit guard={policy.guard_frames} frames; "
+            "nominal bitrate drift<=10%"
         )
         if snapshot(root) != before:
             raise AssertionError("identity probe unexpectedly changed source files")

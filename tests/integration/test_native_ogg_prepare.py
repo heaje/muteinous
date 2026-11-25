@@ -12,6 +12,7 @@ from experiments.native_ast.ast_core import (
     Edit,
     EditError,
     Encoder,
+    ExtractionError,
     NativeStageError,
     NativeValidationError,
     ReconstructionError,
@@ -19,8 +20,12 @@ from experiments.native_ast.ast_core import (
 )
 from experiments.native_ogg.ogg_core import build_ogg_fixture, parse_ogg_vorbis
 from experiments.native_ogg.ogg_prepare import (
+    INFO as PRODUCTION_INFO,
+)
+from experiments.native_ogg.ogg_prepare import (
     QualityPolicy,
     prepare_ogg,
+    verify_lossy_reconstruction,
 )
 from muteinous.core.audio.pcm import PCMFormat
 from muteinous.core.audio.storage import Reader
@@ -102,6 +107,7 @@ def _fake_codecs(
     originals: dict[str, bytes],
     *,
     output_change: str | None = None,
+    native_change: str | None = None,
 ) -> tuple[Decoder, Encoder, list[str], list[str]]:
     pcm_for_native = {native: originals[asset] for asset, native in assets.items()}
     comments_by_asset = {
@@ -134,6 +140,15 @@ def _fake_codecs(
             struct.pack_into("<f", output, (2_500 * info.channels) * 4, 0.01)
         elif output_change == "outside-tolerance" and asset_id == "a":
             struct.pack_into("<f", output, 0, 0.12)
+        elif output_change == "outside-snr" and asset_id == "a":
+            assert output[500 * info.frame_bytes : 1_600 * info.frame_bytes] == bytes(
+                (1_600 - 500) * info.frame_bytes
+            )
+            for frame in (*range(0, 436), *range(1_664, info.frames)):
+                for channel in range(info.channels):
+                    offset = (frame * info.channels + channel) * 4
+                    sample = struct.unpack_from("<f", output, offset)[0]
+                    struct.pack_into("<f", output, offset, sample + 0.03)
         native = build_ogg_fixture(
             frames=info.frames,
             comments=comments_by_asset[asset_id],
@@ -141,6 +156,10 @@ def _fake_codecs(
             nominal_bitrate=128_000,
             serial=0x1234 + len(encode_calls),
         )
+        if native_change == "crc" and asset_id == "b":
+            damaged = bytearray(native)
+            damaged[-1] ^= 1
+            native = bytes(damaged)
         pcm_for_native[native] = bytes(output)
         native_path.write_bytes(native)
 
@@ -149,17 +168,23 @@ def _fake_codecs(
 
 class _TamperingReader:
     def __init__(
-        self, reader: Reader, mode: str, original: bytes, info: PCMFormat
+        self,
+        reader: Reader,
+        mode: str,
+        original: bytes,
+        info: PCMFormat,
+        tamper_frame: int = 500,
     ) -> None:
         self._reader = reader
         self._mode = mode
         self._original = original
         self.info = info
+        self._tamper_frame = tamper_frame
 
     def blocks(self) -> Iterator[bytes]:
         pcm = bytearray(b"".join(self._reader.blocks()))
         if self._mode == "required frame":
-            offset = 500 * self.info.frame_bytes
+            offset = self._tamper_frame * self.info.frame_bytes
             pcm[offset : offset + self.info.frame_bytes] = self._original[
                 offset : offset + self.info.frame_bytes
             ]
@@ -173,15 +198,29 @@ class _TamperingReader:
 
 
 class _TamperingStorage(WaveStorage):
-    def __init__(self, mode: str, original: bytes) -> None:
+    def __init__(
+        self,
+        mode: str,
+        original: bytes,
+        *,
+        target_directory: str = "0",
+        tamper_frame: int = 500,
+    ) -> None:
         self.mode = mode
         self.original = original
+        self.target_directory = target_directory
+        self.tamper_frame = tamper_frame
 
     @contextmanager
     def open(self, path: Path) -> Iterator[Reader]:
         with super().open(path) as reader:
-            if path.name == "edited.pcmstore":
-                yield _TamperingReader(reader, self.mode, self.original, INFO)
+            if (
+                path.name == "edited.pcmstore"
+                and path.parent.parent.parent.name == self.target_directory
+            ):
+                yield _TamperingReader(
+                    reader, self.mode, self.original, INFO, self.tamper_frame
+                )
             else:
                 yield reader
 
@@ -238,6 +277,46 @@ def _pcm_for_fake_native(
     if asset == "a":
         return _silenced(source_pcm, [(500, 1_600)])
     return _silenced(source_pcm, [(2_000, 3_200)])
+
+
+@pytest.mark.parametrize("failing_asset_first", [False, True])
+def test_extraction_failure_is_atomic_in_both_asset_orders(
+    tmp_path: Path, failing_asset_first: bool
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, decode_calls, encode_calls = _fake_codecs(assets, originals)
+    normal_decoder = decoder
+
+    def fail_b(
+        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
+    ) -> None:
+        if asset_id == "b" and native_path.name == "source.ogg":
+            decode_calls.append(asset_id)
+            raise OSError("injected Vorbis extraction failure")
+        normal_decoder(asset_id, native_path, pcm_path, info)
+
+    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
+    before = _snapshot(tmp_path)
+    with pytest.raises(ExtractionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            edits,
+            decoder=fail_b,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert (
+        str(error.value)
+        == "required asset b: extraction: injected Vorbis extraction failure"
+    )
+    assert error.value.asset_id == "b"
+    assert decode_calls == (["b"] if failing_asset_first else ["a", "a", "b"])
+    assert encode_calls == ([] if failing_asset_first else ["a"])
+    assert _snapshot(tmp_path) == before
+    assert not list(tmp_path.glob("native-prepare-*"))
 
 
 @pytest.mark.parametrize("failing_asset_first", [False, True])
@@ -298,7 +377,8 @@ def test_corrupt_unsupported_and_encode_failures_refuse_whole_request_in_both_or
         )
     assert type(error.value) is error_type
     assert error.value.asset_id == "b"
-    assert detail in str(error.value)
+    assert error.value.detail == detail
+    assert str(error.value) == f"required asset b: {error_type.stage}: {detail}"
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
     if failure == "encode" and failing_asset_first:
@@ -341,6 +421,39 @@ def test_intermediate_edit_completeness_refusal_is_atomic(
     assert _snapshot(tmp_path) == before
 
 
+@pytest.mark.parametrize("failing_asset_first", [False, True])
+def test_edit_completeness_failure_is_atomic_in_both_asset_orders(
+    tmp_path: Path, failing_asset_first: bool
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
+    target_directory = "0" if failing_asset_first else "1"
+    storage = _TamperingStorage(
+        "required frame",
+        originals["b"],
+        target_directory=target_directory,
+        tamper_frame=2_000,
+    )
+    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
+    before = _snapshot(tmp_path)
+    with pytest.raises(EditError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            edits,
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            storage=storage,
+            quality=QUALITY,
+        )
+    assert str(error.value) == "required asset b: PCM edit: required edit incomplete"
+    assert error.value.asset_id == "b"
+    assert encode_calls == ([] if failing_asset_first else ["a"])
+    assert _snapshot(tmp_path) == before
+
+
 @pytest.mark.parametrize("mode", ["not-silent", "outside-tolerance"])
 def test_lossy_decode_tolerance_violation_refuses_rebuild_atomically(
     tmp_path: Path, mode: str
@@ -365,6 +478,96 @@ def test_lossy_decode_tolerance_violation_refuses_rebuild_atomically(
     assert "reconstruction" in str(error.value)
     assert encode_calls
     assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("failing_asset_first", [False, True])
+def test_rebuilt_native_validation_failure_is_atomic_in_both_asset_orders(
+    tmp_path: Path, failing_asset_first: bool
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, decode_calls, encode_calls = _fake_codecs(
+        assets, originals, native_change="crc"
+    )
+    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
+    before = _snapshot(tmp_path)
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            edits,
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert str(error.value) == "required asset b: reconstruction: Ogg page CRC mismatch"
+    assert error.value.asset_id == "b"
+    assert decode_calls.count("b") == 1
+    assert encode_calls == (["b"] if failing_asset_first else ["a", "b"])
+    assert _snapshot(tmp_path) == before
+    assert not list(tmp_path.glob("native-prepare-*"))
+
+
+def test_lossy_snr_gate_refuses_broad_low_amplitude_outside_perturbation(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(
+        assets, originals, output_change="outside-snr"
+    )
+    before = _snapshot(tmp_path)
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert error.value.asset_id == "a"
+    assert "SNR" in error.value.detail
+    assert "unaffected-region" in error.value.detail
+    assert encode_calls == ["a"]
+    assert _snapshot(tmp_path) == before
+
+
+def test_guard_region_catches_all_zero_output_when_expanded_guards_cover_clip() -> None:
+    original = b"".join(
+        struct.pack(
+            "<ff",
+            0.22 * math.sin(frame * 0.037),
+            0.18 * math.cos(frame * 0.031),
+        )
+        for frame in range(PRODUCTION_INFO.frames)
+    )
+    decoded_silence = bytes(len(original))
+    with pytest.raises(ValueError, match="unaffected guard-region"):
+        verify_lossy_reconstruction(
+            "guarded",
+            original,
+            decoded_silence,
+            decoded_silence,
+            [(2_048, 64_102)],
+            PRODUCTION_INFO,
+        )
+
+
+def test_full_clip_edit_can_pass_without_unedited_frames_to_verify() -> None:
+    original = _pcm(0)
+    silence = bytes(len(original))
+    verify_lossy_reconstruction(
+        "whole-clip",
+        original,
+        silence,
+        silence,
+        [(0, INFO.frames)],
+        INFO,
+        policy=QUALITY,
+    )
 
 
 def test_source_without_nominal_bitrate_is_refused_before_decode(

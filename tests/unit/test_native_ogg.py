@@ -1,8 +1,10 @@
+import random
 import struct
 
 import pytest
 
 from experiments.native_ogg.ogg_core import (
+    MAX_PACKETS,
     OggFormatError,
     build_ogg_fixture,
     ogg_crc,
@@ -53,9 +55,32 @@ def test_pure_python_writer_builds_pages_crc_headers_and_tags() -> None:
 
 
 def test_bitrate_class_comparison_has_a_bounded_tolerance() -> None:
-    assert bitrate_is_approximately_preserved(128_000, 144_000)
+    assert bitrate_is_approximately_preserved(128_000, 140_800)
+    assert not bitrate_is_approximately_preserved(32_000, 48_000)
     assert not bitrate_is_approximately_preserved(128_000, 160_000)
     assert not bitrate_is_approximately_preserved(-1, 128_000)
+    assert not bitrate_is_approximately_preserved(128_000, 0)
+
+
+def _slow_ogg_crc(data: bytes | bytearray) -> int:
+    crc = 0
+    for byte in data:
+        crc ^= byte << 24
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ 0x04C11DB7) & 0xFFFFFFFF
+                if crc & 0x80000000
+                else (crc << 1) & 0xFFFFFFFF
+            )
+    return crc
+
+
+def test_table_driven_ogg_crc_matches_known_vector_and_slow_reference() -> None:
+    assert ogg_crc(b"123456789") == 0x89A1897F
+    randomizer = random.Random(0x0A66)
+    for length in (0, 1, 2, 26, 27, 255, 1_024, 4_096):
+        data = bytes(randomizer.randrange(256) for _ in range(length))
+        assert ogg_crc(data) == _slow_ogg_crc(data)
 
 
 def test_packet_reassembly_across_continued_pages() -> None:
@@ -69,6 +94,30 @@ def test_packet_reassembly_across_continued_pages() -> None:
     assert parsed.page_count == len(pages)
     assert parsed.vendor == "v" * 900
     assert any(native[start + 5] & 0x01 for start, _ in pages[1:])
+
+
+def test_parser_refuses_too_many_tiny_crc_valid_packets_promptly() -> None:
+    native = build_ogg_fixture(
+        audio_packets=(b"\x00",) * (MAX_PACKETS - 2),
+    )
+    with pytest.raises(OggFormatError, match="Ogg packet count exceeds limit"):
+        parse_ogg_vorbis(native)
+
+
+def test_vorbis_field_names_are_ascii_case_insensitive_only() -> None:
+    upper = parse_ogg_vorbis(build_ogg_fixture(comments=(("LOOPSTART", "4410"),)))
+    lower = parse_ogg_vorbis(build_ogg_fixture(comments=(("loopstart", "4410"),)))
+    assert upper.comment_multiset == lower.comment_multiset
+    punctuation = parse_ogg_vorbis(
+        build_ogg_fixture(comments=(("FIELD NAME!?", "value"),))
+    )
+    punctuation_lower = parse_ogg_vorbis(
+        build_ogg_fixture(comments=(("field name!?", "value"),))
+    )
+    assert punctuation.comment_multiset == punctuation_lower.comment_multiset
+
+    with pytest.raises(OggFormatError, match="invalid Vorbis comment field"):
+        parse_ogg_vorbis(build_ogg_fixture(comments=(("ß", "4410"),)))
 
 
 @pytest.mark.parametrize(

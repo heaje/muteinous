@@ -14,8 +14,26 @@ MAX_PACKET_BYTES = 16 * 1024 * 1024
 MAX_COMMENT_BYTES = 1024 * 1024
 MAX_COMMENTS = 4096
 MAX_PAGES = 100_000
+MAX_PACKETS = 100_000
 _PAGE_HEADER_BYTES = 27
 _CRC_POLYNOMIAL = 0x04C11DB7
+
+
+def _build_crc_table() -> tuple[int, ...]:
+    table = []
+    for byte in range(256):
+        crc = byte << 24
+        for _ in range(8):
+            crc = (
+                ((crc << 1) ^ _CRC_POLYNOMIAL) & 0xFFFFFFFF
+                if crc & 0x80000000
+                else (crc << 1) & 0xFFFFFFFF
+            )
+        table.append(crc)
+    return tuple(table)
+
+
+_CRC_TABLE = _build_crc_table()
 
 
 class OggFormatError(ValueError):
@@ -42,20 +60,21 @@ class VorbisInfo:
     @property
     def comment_multiset(self) -> Counter[tuple[str, str]]:
         """Vorbis field names are case-insensitive; values are preserved exactly."""
-        return Counter((name.casefold(), value) for name, value in self.comments)
+        return Counter((_ascii_lower(name), value) for name, value in self.comments)
+
+
+def _ascii_lower(value: str) -> str:
+    return "".join(
+        chr(ord(character) + 32) if "A" <= character <= "Z" else character
+        for character in value
+    )
 
 
 def ogg_crc(data: bytes | bytearray) -> int:
     """Return the Ogg CRC-32 (poly 0x04C11DB7, non-reflected, init 0)."""
     crc = 0
     for byte in data:
-        crc ^= byte << 24
-        for _ in range(8):
-            crc = (
-                ((crc << 1) ^ _CRC_POLYNOMIAL) & 0xFFFFFFFF
-                if crc & 0x80000000
-                else (crc << 1) & 0xFFFFFFFF
-            )
+        crc = ((crc << 8) & 0xFFFFFFFF) ^ _CRC_TABLE[((crc >> 24) ^ byte) & 0xFF]
     return crc
 
 
@@ -151,8 +170,10 @@ def _parse_comment(packet: bytes) -> tuple[str, tuple[tuple[str, str], ...]]:
             not separator
             or not name
             or any(
-                character not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
-                for character in name.upper()
+                not character.isascii()
+                or not 0x20 <= ord(character) <= 0x7D
+                or character == "="
+                for character in name
             )
         ):
             _refuse("invalid Vorbis comment field")
@@ -162,7 +183,7 @@ def _parse_comment(packet: bytes) -> tuple[str, tuple[tuple[str, str], ...]]:
     return vendor, tuple(comments)
 
 
-def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int]:
+def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
     if not native:
         _refuse("empty Ogg stream")
     if len(native) > MAX_FILE_BYTES:
@@ -172,6 +193,8 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int]:
     partial = bytearray()
     cursor = 0
     expected_sequence = 0
+    packet_count = 0
+    audio_packet_count = 0
     serial: int | None = None
     prior_granule = 0
     eos_seen = False
@@ -234,11 +257,17 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int]:
                 _refuse("Ogg packet exceeds size limit")
             body_offset = end
             if lace < 255:
-                packets.append(bytes(partial))
+                packet_count += 1
+                if packet_count > MAX_PACKETS:
+                    _refuse("Ogg packet count exceeds limit")
+                if packet_count <= 3:
+                    packets.append(bytes(partial))
+                else:
+                    if not partial or partial[0] & 1:
+                        _refuse("invalid Vorbis audio packet")
+                    audio_packet_count += 1
                 partial.clear()
                 completed_packet = True
-                if len(packets) > MAX_PAGES * 255:
-                    _refuse("Ogg packet count exceeds limit")
 
         granule = -1 if granule_raw == 0xFFFFFFFFFFFFFFFF else granule_raw
         final_granule = granule
@@ -266,15 +295,15 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int]:
         _refuse("incomplete final Ogg packet")
     if serial is None:
         _refuse("missing Ogg logical stream")
-    return packets, serial, page_count, final_granule
+    return packets, serial, page_count, final_granule, audio_packet_count
 
 
 def parse_ogg_vorbis(
     native: bytes, *, expected_frames: int | None = None
 ) -> VorbisInfo:
     """Validate pages/headers and return metadata for stereo 44.1-kHz Vorbis."""
-    packets, serial, page_count, frames = _parse_pages(native)
-    if len(packets) < 4:
+    packets, serial, page_count, frames, audio_packet_count = _parse_pages(native)
+    if len(packets) < 3 or audio_packet_count < 1:
         _refuse("Ogg Vorbis stream is missing headers or audio packets")
     (
         channels,
@@ -290,10 +319,6 @@ def parse_ogg_vorbis(
         _refuse("missing or malformed Vorbis setup header")
     if not packets[2][7:]:
         _refuse("empty Vorbis setup header")
-    for packet in packets[3:]:
-        if not packet or packet[0] & 1:
-            _refuse("invalid Vorbis audio packet")
-
     if frames <= 0:
         _refuse("invalid final Ogg granule position")
     if frames > 0x7FFFFFFFFFFFFFFF:
@@ -313,7 +338,7 @@ def parse_ogg_vorbis(
         large_block_size=large_block,
         serial=serial,
         page_count=page_count,
-        audio_packet_count=len(packets) - 3,
+        audio_packet_count=audio_packet_count,
         setup_bytes=len(packets[2]),
     )
 

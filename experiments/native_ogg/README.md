@@ -13,13 +13,14 @@ Only generated deterministic stereo tone/noise-like audio is used. Nothing is re
 [`ogg_core.py`](ogg_core.py) is independent of FFmpeg and validates page framing, lacing, packet assembly, and the supported Vorbis headers:
 
 - Ogg capture pattern and version; BOS, EOS, and continued-packet flags; first sequence zero and continuous sequence numbers; one logical-stream serial; and EOS on the final page only.
-- Exact page boundaries, segment-table/body lengths, packet completion across pages, no trailing bytes, bounded file/page/packet/comment lengths, and every page CRC-32 using the Ogg polynomial `0x04C11DB7`, non-reflected, initialized to zero.
-- Vorbis version 0, stereo at 44.1 kHz, legal block sizes, identification framing bit, bounded UTF-8 vendor/comments and comment framing bit, a present opaque setup header, and audio packets. Chained/multiplexed streams, non-Vorbis codecs (including Opus-in-Ogg), non-stereo profiles, and other sample rates are refused.
+- Exact page boundaries, segment-table/body lengths, packet completion across pages, no trailing bytes, bounded file/page/packet/comment lengths, and every page CRC-32 using a once-built table for the Ogg polynomial `0x04C11DB7` (non-reflected, initialized to zero).
+- Vorbis version 0, stereo at 44.1 kHz, legal block sizes, identification framing bit, bounded UTF-8 vendor/comments and comment framing bit, a present opaque setup header, and audio packets. Comment field names follow the Vorbis ASCII range `0x20`–`0x7D` excluding `=` and compare ASCII-case-insensitively. Chained/multiplexed streams, non-Vorbis codecs (including Opus-in-Ogg), non-stereo profiles, and other sample rates are refused.
 - Final Ogg granule position as frame count. The parser can compare it to the expected decoded frame count; the manual path also checks FFmpeg's decoded `f32le` byte count against that value.
+- The parser receives the complete input as `bytes` (it is not a streaming parser). Input is capped at 64 MiB, page and total-packet counts at 100,000 each, and one unfinished packet at 16 MiB. The packet budget is about 35 minutes at this specimen's observed 70 packets per 1.5 seconds, while stopping million-scale one-byte-packet amplification. It retains the first three header packets only; completed audio packets are type-bit checked and counted, then discarded. Page checks use a temporary page copy, so memory still includes the full caller-owned file and retained headers/one in-progress packet; the parser does not hold a list of every audio packet.
 
 The parser does not decode Vorbis or interpret setup/audio entropy data. Its fixture writer creates structurally valid pages and CRCs with opaque setup/audio packets; the manual scripts separately prove the parser accepts actual FFmpeg/libvorbis output.
 
-`VorbisInfo` extracts channels, rate, final-granule frame count, vendor string, ordered user comments, nominal/minimum/maximum bitrate fields, block sizes, serial, page/packet counts, and setup-header size. Reconstruction checks rate, channel count, frame count, user comments (field names case-insensitive, values exact, duplicates retained), and bitrate class. The encoder uses `-b:a` from the source nominal bitrate; an absent/nonpositive source nominal bitrate makes the request refuse before decode/rebuild. The vendor string is intentionally **not** a preservation invariant and may change; it happened to remain `Lavf61.7.103` in the measured same-build control.
+`VorbisInfo` extracts channels, rate, final-granule frame count, vendor string, ordered user comments, nominal/minimum/maximum bitrate fields, block sizes, serial, page/packet counts, and setup-header size. Reconstruction checks rate, channel count, frame count, user comments (ASCII field names case-insensitive, values exact, duplicates retained), and nominal bitrate within 10% relative to the source value. A 32,000→48,000 bit/s nominal change is refused; the real libvorbis fixture retained 128,000 bit/s exactly. The encoder uses `-b:a` from the source nominal bitrate; an absent/nonpositive source nominal bitrate makes the request refuse before decode/rebuild. The vendor string is intentionally **not** a preservation invariant and may change; it happened to remain `Lavf61.7.103` in the measured same-build control.
 
 ## Shared-PCM path and loss semantics
 
@@ -32,7 +33,8 @@ The rebuilt Ogg is **not bit-exact**. Validation is decoded-domain and explicit:
 - Every rebuilt Ogg is parsed again by the pure-Python validator.
 - FFmpeg decode must preserve exactly 66,150 frames, 44.1 kHz, and stereo.
 - In each edited span's interior, excluding 2,048 frames (46.440 ms) at both edges for Vorbis overlap/pre-echo, decoded peak must be at most `0.0005`.
-- Outside the edit plus the same edge guard regions, each contiguous region must have at least 24 dB SNR against the *original Ogg's decoded PCM* and maximum absolute sample error at most `0.08`.
+- Unedited samples farther than 2,048 frames from an edit boundary require at least 24 dB SNR and maximum absolute error at most `0.08` against the *original Ogg's decoded PCM*. Unedited boundary guard bands are also checked, with a separate looser SNR floor of 18 dB and maximum absolute error of `0.05`; no unedited frames are silently exempted just because guards meet or overlap.
+- If no unedited frames exist, verification refuses unless the requested edit legitimately covers the complete clip. A complete-clip edit still has to pass the edited-interior silence check.
 - These are refusal thresholds calibrated for this synthetic signal/build, **not** claims of bit-exactness, perceptual transparency, or acceptable quality for every source.
 
 ### Measured Windows run
@@ -59,6 +61,17 @@ The actual shared-edit script measured two affected assets; each encoded once, w
 | `a` `[32048, 66150)` | 32.261 dB | 0.01278514 |
 | `b` `[0, 33232)` | 32.622 dB | 0.02047877 |
 | `b` `[54968, 66150)` | 31.636 dB | 0.01443876 |
+
+The separately checked unedited guard bands around those edit boundaries measured:
+
+| Asset / guard frame region | SNR | Maximum absolute error |
+| --- | ---: | ---: |
+| `a` `[8977, 11025)` | 31.637 dB | 0.01743349 |
+| `a` `[30000, 32048)` | 31.092 dB | 0.01657117 |
+| `b` `[33232, 35280)` | 31.973 dB | 0.01524723 |
+| `b` `[52920, 54968)` | 31.474 dB | 0.01156025 |
+
+Across these four guard regions, the minimum measured SNR was 31.092 dB and the maximum error was 0.01743349. The selected guard limits (18 dB and `0.05`) leave measurement margin while remaining bounded; they are not a universal codec guarantee.
 
 | Edited file-size comparison | Source | Rebuilt | Delta |
 | --- | ---: | ---: | ---: |
@@ -90,7 +103,7 @@ MEASURE: identity generation loss SNR=33.020 dB, max_abs_error=0.01706610
 MEASURE: source nominal=128000 bit/s, rebuilt nominal=128000 bit/s
 MEASURE: Ogg bytes source=27390, identity=26507, delta=-883
 MEASURE: source vendor='Lavf61.7.103'; identity vendor='Lavf61.7.103'
-POLICY: outside-region gates SNR>=24.0 dB and max_abs_error<=0.080; edit guard=2048 frames
+POLICY: outside-region gates SNR>=24.0 dB and max_abs_error<=0.080; guard-region gates SNR>=18.0 dB and max_abs_error<=0.050; edit guard=2048 frames; nominal bitrate drift<=10%
 PASS: identity control was read-only with respect to its source
 PASS: disposable probe directory removed
 ~~~
@@ -100,10 +113,14 @@ PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the 
 PASS: Ogg muxer/demuxer, libvorbis encoder, Vorbis decoder available
 MEASURE: a outside [0,8977) SNR=33.373 dB max_abs_error=0.01110106
 MEASURE: a outside [32048,66150) SNR=32.261 dB max_abs_error=0.01278514
+MEASURE: a guard [8977,11025) SNR=31.637 dB max_abs_error=0.01743349
+MEASURE: a guard [30000,32048) SNR=31.092 dB max_abs_error=0.01657117
 MEASURE: a edited core 0 peak=0.00000000
 MEASURE: a Ogg bytes source=27386, rebuilt=20881, delta=-6505
 MEASURE: b outside [0,33232) SNR=32.622 dB max_abs_error=0.02047877
 MEASURE: b outside [54968,66150) SNR=31.636 dB max_abs_error=0.01443876
+MEASURE: b guard [33232,35280) SNR=31.973 dB max_abs_error=0.01524723
+MEASURE: b guard [52920,54968) SNR=31.474 dB max_abs_error=0.01156025
 MEASURE: b edited core 0 peak=0.00000000
 MEASURE: b Ogg bytes source=27432, rebuilt=21145, delta=-6287
 PASS: shared PCMFormat/WaveStorage/Scratch.edit used f32le mask 3
@@ -125,14 +142,14 @@ Routine tests are portable pure-Python tests and do not call FFmpeg or skip:
 & .venv/Scripts/python.exe -m pytest tests/unit/test_native_ogg.py tests/integration/test_native_ogg_prepare.py -q
 ~~~
 
-The suite covers a pure-Python Ogg fixture writer, CRC/page/header/lacing/parser reject cases, metadata and granule checks, exact frame mapping, actual shared float scratch editing with fake codecs, grouping and untouched assets, all-or-nothing snapshots in both failure orders, edit completeness, and lossy tolerance rejection for a fake rebuilt stream that is not silent or changes outside tolerance.
+The suite covers a pure-Python Ogg fixture writer, table-driven CRC checked against a slow reference and known vector, CRC/page/header/lacing/parser reject cases, packet-count limits, metadata and granule checks, ASCII comment-name rules, exact frame mapping, actual shared float scratch editing with fake codecs, grouping and untouched assets, all-or-nothing snapshots in both failure orders, edit completeness, rebuilt-native rejection, and separate SNR/peak-error and guard-band refusal cases.
 
 ## Limits and remaining evidence
 
 - This is a loose Ogg Vorbis specimen, not an engine bank. No title, engine, game loader, playback acceptance, installation method, production support, or safety-to-install conclusion is established.
 - The parser supports only Vorbis version 0, stereo/44.1 kHz, and bounded files; it does not parse the setup codebooks or decode audio. A valid CRC and header structure do not establish that FFmpeg or another decoder can decode arbitrary packets.
 - Only the observed Windows FFmpeg build was run. Other FFmpeg builds, Linux/macOS shared editing, independent-decoder agreement, and real game-loader acceptance remain unverified.
-- Lossy reconstruction changes decoded samples and file bytes even for an identity edit. Boundary guard regions are intentionally not quality-checked; the chosen thresholds are synthetic-fixture evidence, not universal codec-quality limits.
+- Lossy reconstruction changes decoded samples and file bytes even for an identity edit. Unedited samples adjacent to edit boundaries are checked with a separately calibrated looser threshold; the chosen thresholds are synthetic-fixture evidence, not universal codec-quality limits.
 - Nominal bitrate and comment tags are preserved only for a stream whose source nominal bitrate is present and whose metadata the FFmpeg mapping can retain. A vendor string may legitimately change. Ogg/Vorbis loop tags are preserved as comments here; this does not validate how any consumer interprets them.
 - No license conclusion is drawn for FFmpeg/libvorbis/libogg. The tested FFmpeg binary is GPL-configured; packaging and redistribution remain a separate review.
 - The repository's source package discovery and sdist exclude `experiments/`; these modules are not a supported or installable API.

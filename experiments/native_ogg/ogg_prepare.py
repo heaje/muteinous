@@ -27,6 +27,8 @@ GUARD_FRAMES = 2_048
 SILENCE_PEAK_LIMIT = 0.0005
 MIN_OUTSIDE_SNR_DB = 24.0
 MAX_OUTSIDE_ABS_ERROR = 0.08
+MIN_GUARD_SNR_DB = 18.0
+MAX_GUARD_ABS_ERROR = 0.05
 
 
 @dataclass(frozen=True)
@@ -37,6 +39,8 @@ class QualityPolicy:
     silence_peak_limit: float = SILENCE_PEAK_LIMIT
     minimum_outside_snr_db: float = MIN_OUTSIDE_SNR_DB
     maximum_outside_abs_error: float = MAX_OUTSIDE_ABS_ERROR
+    minimum_guard_snr_db: float = MIN_GUARD_SNR_DB
+    maximum_guard_abs_error: float = MAX_GUARD_ABS_ERROR
 
     def __post_init__(self) -> None:
         if (
@@ -47,6 +51,10 @@ class QualityPolicy:
             or self.minimum_outside_snr_db < 0
             or not math.isfinite(self.maximum_outside_abs_error)
             or self.maximum_outside_abs_error < 0
+            or not math.isfinite(self.minimum_guard_snr_db)
+            or self.minimum_guard_snr_db < 0
+            or not math.isfinite(self.maximum_guard_abs_error)
+            or self.maximum_guard_abs_error < 0
         ):
             raise ValueError("invalid lossy-validation policy")
 
@@ -63,15 +71,12 @@ class RegionMetrics:
 class LossyMetrics:
     edited_region_peaks: tuple[float, ...]
     outside_regions: tuple[RegionMetrics, ...]
+    guard_regions: tuple[RegionMetrics, ...]
 
 
 def bitrate_is_approximately_preserved(source: int, rebuilt: int) -> bool:
-    """Allow modest libvorbis/header rounding, but no silent class change."""
-    return (
-        source > 0
-        and rebuilt > 0
-        and abs(source - rebuilt) <= max(16_000, source * 0.15)
-    )
+    """Allow at most ten-percent nominal header rounding; reject class changes."""
+    return source > 0 and rebuilt > 0 and abs(source - rebuilt) <= source * 0.10
 
 
 def native_validator_for(
@@ -140,6 +145,54 @@ def _outside_regions(
     return regions
 
 
+def _merge_ranges(ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        if merged and start <= merged[-1][1]:
+            prior_start, prior_end = merged[-1]
+            merged[-1] = (prior_start, max(prior_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _subtract_ranges(
+    regions: Sequence[tuple[int, int]], exclusions: Sequence[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    result: list[tuple[int, int]] = []
+    for start, end in regions:
+        cursor = start
+        for excluded_start, excluded_end in exclusions:
+            if excluded_end <= cursor:
+                continue
+            if excluded_start >= end:
+                break
+            if cursor < excluded_start:
+                result.append((cursor, min(end, excluded_start)))
+            cursor = max(cursor, excluded_end)
+            if cursor >= end:
+                break
+        if cursor < end:
+            result.append((cursor, end))
+    return result
+
+
+def _guard_regions(
+    frames: int, ranges: Sequence[tuple[int, int]], guard: int
+) -> list[tuple[int, int]]:
+    """Return unedited frames within one guard width of either edit edge."""
+    edits = _merge_ranges(ranges)
+    windows = _merge_ranges(
+        [(max(0, start - guard), start) for start, _ in edits if guard and start > 0]
+        + [
+            (end, min(frames, end + guard))
+            for _, end in edits
+            if guard and end < frames
+        ]
+    )
+    return _subtract_ranges(windows, edits)
+
+
 def _as_samples(pcm: bytes, info: PCMFormat) -> tuple[float, ...]:
     if info.representation != "f32" or len(pcm) != info.frames * info.frame_bytes:
         raise ValueError("decoded Vorbis PCM has invalid float frame count")
@@ -175,29 +228,38 @@ def measure_lossy_effects(
             max(abs(value) for value in decoded_samples[sample_start:sample_end])
         )
 
-    regions: list[RegionMetrics] = []
-    for start, end in _outside_regions(info.frames, ranges, policy.guard_frames):
-        sample_start = start * info.channels
-        sample_end = end * info.channels
-        source = original_samples[sample_start:sample_end]
-        output = decoded_samples[sample_start:sample_end]
-        if not source:
-            continue
-        error = [actual - expected for expected, actual in zip(source, output)]
-        peak_error = max(abs(value) for value in error)
-        signal_energy = math.fsum(value * value for value in source)
-        error_energy = math.fsum(value * value for value in error)
-        snr = (
-            math.inf
-            if error_energy == 0
-            else (
-                -math.inf
-                if signal_energy == 0
-                else 10.0 * math.log10(signal_energy / error_energy)
+    def measure(regions: Sequence[tuple[int, int]]) -> list[RegionMetrics]:
+        measured: list[RegionMetrics] = []
+        for start, end in regions:
+            sample_start = start * info.channels
+            sample_end = end * info.channels
+            source = original_samples[sample_start:sample_end]
+            output = decoded_samples[sample_start:sample_end]
+            if not source:
+                continue
+            error = [actual - expected for expected, actual in zip(source, output)]
+            peak_error = max(abs(value) for value in error)
+            signal_energy = math.fsum(value * value for value in source)
+            error_energy = math.fsum(value * value for value in error)
+            snr = (
+                math.inf
+                if error_energy == 0
+                else (
+                    -math.inf
+                    if signal_energy == 0
+                    else 10.0 * math.log10(signal_energy / error_energy)
+                )
             )
-        )
-        regions.append(RegionMetrics(start, end, snr, peak_error))
-    return LossyMetrics(tuple(mute_peaks), tuple(regions))
+            measured.append(RegionMetrics(start, end, snr, peak_error))
+        return measured
+
+    outside = measure(_outside_regions(info.frames, ranges, policy.guard_frames))
+    guards = measure(_guard_regions(info.frames, ranges, policy.guard_frames))
+    return LossyMetrics(tuple(mute_peaks), tuple(outside), tuple(guards))
+
+
+def _edit_covers_entire_clip(frames: int, ranges: Sequence[tuple[int, int]]) -> bool:
+    return _merge_ranges(ranges) == [(0, frames)]
 
 
 def verify_lossy_reconstruction(
@@ -210,7 +272,7 @@ def verify_lossy_reconstruction(
     *,
     policy: QualityPolicy = QualityPolicy(),
 ) -> None:
-    """Check exact frame count, edited silence, and unchanged-region quality."""
+    """Check exact frame count, edited silence, and bounded fidelity everywhere else."""
     del asset_id
     _as_samples(edited, info)
     measured = measure_lossy_effects(original, decoded, ranges, info, policy=policy)
@@ -219,6 +281,14 @@ def verify_lossy_reconstruction(
             raise ValueError(
                 f"edited-region peak {peak:.8f} exceeds {policy.silence_peak_limit:.8f}"
             )
+    verified_unedited_frames = sum(
+        region.end_frame - region.start_frame
+        for region in (*measured.outside_regions, *measured.guard_regions)
+    )
+    if verified_unedited_frames == 0 and not _edit_covers_entire_clip(
+        info.frames, ranges
+    ):
+        raise ValueError("no unedited frames were verified")
     for region_index, region in enumerate(measured.outside_regions):
         if region.maximum_absolute_error > policy.maximum_outside_abs_error:
             raise ValueError(
@@ -230,6 +300,18 @@ def verify_lossy_reconstruction(
             raise ValueError(
                 f"unaffected-region {region_index} SNR {region.snr_db:.2f} dB is below "
                 f"{policy.minimum_outside_snr_db:.2f} dB"
+            )
+    for region_index, region in enumerate(measured.guard_regions):
+        if region.maximum_absolute_error > policy.maximum_guard_abs_error:
+            raise ValueError(
+                f"unaffected guard-region {region_index} peak error "
+                f"{region.maximum_absolute_error:.8f} "
+                f"exceeds {policy.maximum_guard_abs_error:.8f}"
+            )
+        if region.snr_db < policy.minimum_guard_snr_db:
+            raise ValueError(
+                f"unaffected guard-region {region_index} SNR {region.snr_db:.2f} dB "
+                f"is below {policy.minimum_guard_snr_db:.2f} dB"
             )
 
 
