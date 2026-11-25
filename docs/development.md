@@ -2,12 +2,53 @@
 
 This guide records enduring contribution and review practices. Consult the [coordination snapshot](../.agents/current-state.md) and linked GitHub Issues/PRs for current work, proposed milestones, setup status and unfinished tasks; do not infer their existence from this guide.
 
+## Engineering principles
+
+Muteinous is an application with controlled internal callers, providers and exposed configuration, not a general-purpose framework. Implement approved requirements and supported behavior using the simplest maintainable solution. Trust controlled callers to honor documented programming contracts; do not add defensive complexity for arbitrary unsupported usage or speculative third-party consumers.
+
+Ownership does not make runtime failures impossible. Validate user-controlled inputs, external/provider data, persisted state and other trust boundaries as required. Handle realistically reachable provider, OS, concurrency, resource and other operational failures; maintain meaningful internal invariants and all established security, data integrity, fidelity, refusal and recovery guarantees. Explicit architectural contracts take precedence; follow [architecture governance](#architecture-documentation-governance) rather than silently reinterpreting them.
+
 ## Work unit and review policy
 
 - Prefer **cohesive feature/safety Issues**, not one per decision. Each Issue should identify goals, relevant decisions, acceptance/verification evidence, dependencies, and excluded/deferred features.
 - Organize milestones in GitHub as useful for the actual implementation. Investigate reusable native-format reconstruction and safe installation viability early, not only during final Apply integration.
 - Use a focused branch and testable PR for each coherent implementation slice. A few meaningful commits or local checkpoints are fine; **squash merge preferred** to avoid noisy permanent history. Parallel agents should avoid editing shared architecture/coordination files simultaneously.
 - PR descriptions: purpose and Issue, affected D-number decisions with actual implementation/verification evidence and unverified parts, scope/exclusions, tests and CI evidence, safety/compatibility implications, and remaining risks. The merger/coordinator reconciles the shared [decision-coverage ledger](architecture/decision-coverage.md) from accepted PR evidence at merge time or promptly afterward; parallel feature branches should not separately maintain the same table. When required checks are in place, review and branch protections should guard merge; don't represent these protections as already configured.
+
+### Actionable review findings
+
+For every actionable finding, establish in concise prose:
+
+1. **Contract:** the approved requirement, supported behavior, meaningful invariant or justified engineering expectation violated.
+2. **Reachability:** supported operating conditions in which the mechanism can occur, or an explicit contractual violation.
+3. **Impact:** a material consequence for the application or maintainers.
+4. **Evidence:** precise source references, reproduction or reliable analysis establishing the mechanism.
+5. **Correction:** the smallest sufficient correction, without introducing unsupported guarantees.
+
+These are eligibility criteria, not a required five-paragraph report template. Assess severity from actual impact and supported reachability. A synthetic reproduction is valid if it demonstrates a realistic failure mechanism or explicit contractual violation. A meaningful missing test protects a contract, not merely a line or mutation; use the [testing policy](testing.md#contract-based-testing). If an existing test demands unsupported behavior, correct the test rather than expanding production guarantees.
+
+Report confirmed defects and meaningful test deficiencies as actionable findings. Omit speculative concerns, unsupported usage and personal implementation preferences from ordinary review results. Report optional maintainability improvements separately only when materially useful; they do not block completion. Unavailable evidence or checks must be disclosed separately, not presented as confirmed defects or passes.
+
+### Delegation and independent review
+
+- **Supervisor:** owns scope, full discovery, coordination, validation, finding confirmation and completion. Independently evaluate the evidence and minimal correction before authorizing any fix; reviewer consensus or repeated reports alone are insufficient.
+- **Independent reviewer:** assess the assigned revision without relying on the implementer's conclusions; report evidence and a scoped verdict. A separate reviewer (agent/session or human) must not be the author of the changes under review.
+- **Implementation/fix agent:** implement only assigned requirements or confirmed corrections; report changes, evidence and limitations.
+- **Test reviewer:** when useful, examine contract coverage and test quality under the same actionable-finding rules.
+
+The user or execution environment selects models, reasoning effort and concurrency. Use independent subagents when supported and requested; do not hardcode models or presume parent context inheritance.
+
+For **full-task delegation**, supply the role, exact repository/ref, Issue/PR, scope, permissions and applicable workflow; the delegate completes normal [task-start discovery](../.agents/README.md#task-start-discovery). For **focused delegation**, the supervisor performs full discovery and supplies the exact target/ref, bounded assignment, applicable policy/decision links, relevant findings, coordination constraints, expected output and permissions. The delegate must access the universal entry point and applicable sources before acting, verify the target and evidence, and expand discovery if necessary; it need not repeat unrelated full-task reading. Independent review must have access to underlying evidence, not just a supervisor's conclusions.
+
+At assignment start, establish that each delegate has the required sources (e.g. read evidence or a short source acknowledgement); resolve missing access or conflicting instructions before work. Reuse unchanged context within an assignment rather than re-injecting policy each tool call. Do not require lengthy compliance transcripts. See [harness discovery verification](agent-discovery.md).
+
+Independent review is a completion gate for implementation, test cleanup and review/fix work. If independent review cannot be obtained, stop at the gate, request it from the maintainer/coordinator, and provide the exact revision, evidence and remaining checks. A pushed checkpoint or draft PR is not completion or merge readiness. A standalone independent review by a reviewer separate from the implementer satisfies the independence requirement for that reviewed scope; do not require a recursive review of every review.
+
+### Review-loop termination
+
+Repeat independent review, supervisor confirmation, minimal fixes and validation until no independently confirmed actionable findings remain within approved scope, supported conditions and documented contracts, and applicable validation requirements are satisfied. Re-review meaningful changes at the resulting revision. No arbitrary cycle limit may leave confirmed actionable defects unresolved. Do not prolong a loop solely for hypothetical hardening, mutation survival, optional improvements, implementation preference, unsupported usage or additional equivalent scenarios.
+
+The supervisor owns termination and must disclose unresolved findings, missing independence, and unavailable or unperformed checks. Stop at a blocked gate and request what is needed; do not substitute a self-review or claim merge readiness without required evidence.
 
 ## Local development
 

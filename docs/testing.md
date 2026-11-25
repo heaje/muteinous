@@ -1,5 +1,15 @@
 # Testing policy — D160–D161 and D165
 
+## Contract-based testing
+
+Test approved architecture decisions, acceptance criteria, supported application behavior, meaningful internal contracts/invariants, reachable operational failures and material regressions. Each test should establish a useful guarantee; prefer representative observable outcomes over implementation details. Use the [engineering principles](development.md#engineering-principles) to distinguish trusted caller contracts from external inputs and realistic failures.
+
+Avoid asserting private algorithms, data structures, identity where equivalent values suffice, exact callback counts, exact diagnostic text, or particular thread interleavings unless the contract requires them. Avoid unsupported internal settings, arbitrary trusted-caller misuse and redundant combinations of equivalent cases. Test actual boundary validation and meaningful invariants, including required rejection and cleanup behavior. Synthetic fixtures, controlled workers, fake clocks, synchronization and fault injection are appropriate when they demonstrate a real guarantee; artificial setup alone is not grounds for rejection.
+
+Mutation testing is optional diagnostic evidence. A surviving mutation alone is neither a defect nor a reason to expand behavior or coverage. Do not set arbitrary mutation scores, test-count or coverage targets. When an assertion imposes an unsupported guarantee, correct the test rather than add unnecessary production behavior.
+
+Simplify tests without losing meaningful coverage, including D160–D165 requirements and the safety-critical, CI and release checks below. For cleanup, use the [test cleanup workflow](../.agents/workflows/cleanup-tests.md); map retained coverage to applicable requirements and report unavailable checks.
+
 ## Required pull-request validation
 
 On the baseline **two-vCPU Windows runner**, target **five minutes or less of pytest session time**, excluding Task readiness checks, process startup/teardown, and packaging/setup outside pytest. The required-test plugin reports this session duration in the terminal and GitHub step summary. The workflow separately reports test-step wall time, which includes Task readiness checks and process overhead. Investigate overruns without weakening or skipping coverage. Enforce an independent **approximately ten-minute test-step timeout** that fails CI on timeout, test failure, or an incomplete run; a whole-job timeout is not a substitute. Track slow tests with `pytest --durations`, and benchmark serial against modest parallelism when selecting or revisiting worker counts.
