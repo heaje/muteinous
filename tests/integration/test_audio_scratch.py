@@ -6,6 +6,7 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -488,7 +489,11 @@ with audio_scratch(Path(sys.argv[1]), WaveStorage()) as scratch:
     assert directory is not None
     assert directory.is_dir()
     assert (directory / "source.pcmstore").exists()
-    cleanup_abandoned(tmp_path)
+    deadline = time.monotonic() + 5
+    while directory.exists() and time.monotonic() < deadline:
+        cleanup_abandoned(tmp_path)
+        if directory.exists():
+            threading.Event().wait(0.01)
     assert not directory.exists()
 
 
