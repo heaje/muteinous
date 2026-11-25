@@ -206,5 +206,6 @@ def test_percentage_requires_reliable_denominator(
 
 def test_percentage_handles_zero_complete_and_fractional_totals() -> None:
     assert WorkCount(0, 0, True).percentage is None
+    assert WorkCount(0, 3, True).percentage == 0.0
     assert WorkCount(3, 3, True).percentage == 100.0
     assert WorkCount(1, 3, True).percentage == pytest.approx(100 / 3)

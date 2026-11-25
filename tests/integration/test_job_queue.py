@@ -1186,6 +1186,54 @@ def test_validator_failure_is_not_execution_failure_or_retry() -> None:
         queue.close()
 
 
+def test_validator_baseexception_needs_attention_and_dispatcher_survives(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedValidatorAbort(BaseException):
+        pass
+
+    thread_errors: list[BaseException] = []
+    first_worker_called = Event()
+    later_worker_called = Event()
+
+    def capture_thread_exception(args: object) -> None:
+        error = getattr(args, "exc_value", None)
+        if isinstance(error, BaseException):
+            thread_errors.append(error)
+
+    def validate(submitted: JobPlan) -> str | None:
+        if submitted.input_json == '{"source":"validator-abort"}':
+            raise InjectedValidatorAbort("injected validator abort")
+        return None
+
+    def first_worker(submitted: JobPlan, context: JobContext) -> object:
+        first_worker_called.set()
+        return None
+
+    def later_worker(submitted: JobPlan, context: JobContext) -> object:
+        later_worker_called.set()
+        return submitted.input_json
+
+    monkeypatch.setattr(threading, "excepthook", capture_thread_exception)
+    queue = JobQueue({"cpu": 1}, validate)
+    try:
+        failed = queue.submit(plan("cpu", source="validator-abort"), first_worker)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(failed)
+        assert snapshot.state == JobState.NEEDS_ATTENTION
+        assert "Plan validation failed" in (snapshot.detail or "")
+        assert "InjectedValidatorAbort" in (snapshot.detail or "")
+        assert not first_worker_called.is_set()
+
+        later = queue.submit(plan("cpu", source="valid"), later_worker)
+        assert queue.drain(5)
+        assert queue.snapshot(later).state == JobState.COMPLETED
+        assert later_worker_called.is_set()
+        assert thread_errors == []
+    finally:
+        queue.close()
+
+
 @pytest.mark.parametrize(
     ("reason", "truncated"),
     [
