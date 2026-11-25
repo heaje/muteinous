@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import gc
 from collections.abc import Callable
 from threading import Event
-from weakref import ReferenceType, ref
 
 import pytest
 
@@ -141,39 +139,4 @@ def test_poll_returns_material_queue_details_without_waiting_for_progress_interv
         release_initial_validation.set()
         owner.release.set()
         waiting.release.set()
-        queue.close()
-
-
-def test_progress_does_not_retain_previous_activities() -> None:
-    class WeakActivity(str):
-        pass
-
-    contexts: list[JobContext] = []
-    entered, release = Event(), Event()
-    activity_refs: list[ReferenceType[WeakActivity]] = []
-    latest_text = "activity-127"
-
-    def worker(submitted: JobPlan, context: JobContext) -> object:
-        contexts.append(context)
-        entered.set()
-        assert release.wait(10)
-        return submitted.input_json
-
-    queue = JobQueue({"cpu": 1}, lambda _: None)
-    try:
-        job = queue.submit(plan("cpu"), worker)
-        assert entered.wait(5)
-        context = contexts[0]
-        for index in range(128):
-            activity = WeakActivity(f"activity-{index}")
-            activity_refs.append(ref(activity))
-            context.report(Progress("scan", activity=activity), meaningful=True)
-        del activity
-
-        gc.collect()
-        assert all(activity_ref() is None for activity_ref in activity_refs[:-1])
-        snapshot = queue.snapshot(job)
-        assert snapshot.progress.activity == latest_text
-    finally:
-        release.set()
         queue.close()

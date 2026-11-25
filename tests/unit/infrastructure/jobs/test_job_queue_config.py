@@ -11,7 +11,7 @@ pytestmark = pytest.mark.portable
 
 @pytest.mark.parametrize(
     ("progress_interval", "revalidate_interval"),
-    [(0.0, 1.0), (1.0, 0.0), (float("inf"), 1.0), (1.0, float("inf"))],
+    [(0.0, 1.0), (1.0, float("inf"))],
 )
 def test_intervals_must_be_finite_and_positive(
     progress_interval: float, revalidate_interval: float

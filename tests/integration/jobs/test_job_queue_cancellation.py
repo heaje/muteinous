@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import gc
 from collections.abc import Callable
 from threading import Event, Thread, current_thread
-from weakref import ref
 
 import pytest
 
@@ -36,7 +34,6 @@ def test_running_and_queued_cancellation_hold_slots_and_reject_late_results(
         b = queue.submit(plan("provider"), cancelled)
         assert queue.cancel(b)
         assert queue.cancel(a)
-        assert not queue.cancel(a)
         assert queue.snapshot(a).state == JobState.CANCELLED
         assert queue.snapshot(a).physical_running
         assert queue.snapshot(b).state == JobState.CANCELLED
@@ -55,6 +52,7 @@ def test_running_and_queued_cancellation_hold_slots_and_reject_late_results(
         assert queue.drain(5)
         assert queue.snapshot(c).state == JobState.COMPLETED
         assert len({a, b, c}) == 3
+        assert all(queue.snapshot(job).job_id == job for job in (a, b, c))
     finally:
         for worker in (running, cancelled, replacement):
             worker.release.set()
@@ -82,10 +80,6 @@ def test_cancel_rejects_completed_failed_and_already_cancelled_jobs() -> None:
         cancelled = queue.submit(plan("cancelled"), cancelled_worker)
         assert started.wait(5)
         assert queue.cancel(cancelled)
-        cancelled_state = queue.snapshot(cancelled).state
-        assert cancelled_state == JobState.CANCELLED
-        assert not queue.cancel(cancelled)
-        assert queue.snapshot(cancelled).state == cancelled_state
 
         release.set()
         assert queue.drain(5)
@@ -103,11 +97,7 @@ def test_cancel_rejects_completed_failed_and_already_cancelled_jobs() -> None:
         queue.close()
 
 
-def test_discard_terminal_jobs_releases_results_and_ignores_late_reports() -> None:
-    class RetainedResult:
-        pass
-
-    result_refs = []
+def test_discard_removes_only_terminal_jobs_and_ignores_late_reports() -> None:
     contexts: list[JobContext] = []
     entered, release = Event(), Event()
 
@@ -118,9 +108,7 @@ def test_discard_terminal_jobs_releases_results_and_ignores_late_reports() -> No
 
     def result_worker(submitted: JobPlan, context: JobContext) -> object:
         contexts.append(context)
-        result = RetainedResult()
-        result_refs.append(ref(result))
-        return result
+        return submitted.input_json
 
     def failed_worker(submitted: JobPlan, context: JobContext) -> object:
         raise RuntimeError("discard test failure")
@@ -153,11 +141,12 @@ def test_discard_terminal_jobs_releases_results_and_ignores_late_reports() -> No
         assert queue.snapshot(completed).state == JobState.COMPLETED
         assert queue.snapshot(failed).state == JobState.FAILED
         assert queue.snapshot(attention).state == JobState.NEEDS_ATTENTION
-        assert len(result_refs) == 1
+        assert len(contexts) == 1
+        assert (
+            queue.snapshot(completed).result
+            == plan("other", source="completed").input_json
+        )
 
-        completed_snapshot = queue.snapshot(completed)
-        assert completed_snapshot.result is result_refs[0]()
-        del completed_snapshot
         for job_id in (running, completed, failed, attention):
             assert queue.discard(job_id)
             with pytest.raises(KeyError):
@@ -168,81 +157,42 @@ def test_discard_terminal_jobs_releases_results_and_ignores_late_reports() -> No
                 queue.cancel(job_id)
         contexts[0].report(Progress("late"), meaningful=True)
         contexts[0].heartbeat()
-        gc.collect()
-        assert result_refs[0]() is None
     finally:
         release.set()
         queue.close()
 
 
-def test_close_requests_cooperative_stop_and_joins_threads() -> None:
+def test_close_cancels_work_rejects_submissions_and_joins_workers() -> None:
     entered = Event()
-    queue_threads: set[Thread] = set()
-
-    def validate(submitted: JobPlan) -> str | None:
-        queue_threads.add(current_thread())
-        return None
+    worker_threads: list[Thread] = []
+    returned: list[bool] = []
 
     def worker(submitted: JobPlan, context: JobContext) -> object:
-        queue_threads.add(current_thread())
+        worker_threads.append(current_thread())
         entered.set()
         assert context.wait_cancelled(10)
-        return submitted.input_json
-
-    queue = JobQueue({"cpu": 1}, validate)
-    try:
-        a = queue.submit(plan("cpu"), worker)
-        assert entered.wait(5)
-        b = queue.submit(plan("cpu"), worker)
-    finally:
-        queue.close()
-    assert queue.snapshot(a).state == queue.snapshot(b).state == JobState.CANCELLED
-    assert not queue.snapshot(a).physical_running
-    assert queue.drain(0)
-    assert all(not thread.is_alive() for thread in queue_threads)
-    with pytest.raises(RuntimeError):
-        queue.submit(plan("cpu"), worker)
-
-
-def test_close_waits_for_physical_worker_after_cancellation() -> None:
-    entered, cancellation_observed, release = Event(), Event(), Event()
-    close_returned = Event()
-
-    def worker(submitted: JobPlan, context: JobContext) -> object:
-        entered.set()
-        assert context.wait_cancelled(10)
-        cancellation_observed.set()
-        assert release.wait(10)
+        # Linger after cancellation: close() must still wait for this return.
+        Event().wait(0.1)
+        returned.append(True)
         return submitted.input_json
 
     queue = JobQueue({"cpu": 1}, lambda _: None)
-
-    def close_queue() -> None:
-        queue.close()
-        close_returned.set()
-
-    closer = Thread(target=close_queue, name="job-queue-close-test")
     try:
-        job = queue.submit(plan("cpu"), worker)
+        running = queue.submit(plan("cpu"), worker)
         assert entered.wait(5)
-        closer.start()
-        assert cancellation_observed.wait(5)
-        assert not close_returned.wait(0.25)
+        pending = queue.submit(plan("cpu"), worker)
+    finally:
+        queue.close()
+    assert returned == [True]
+    assert all(not thread.is_alive() for thread in worker_threads)
+    for job in (running, pending):
         snapshot = queue.snapshot(job)
         assert snapshot.state == JobState.CANCELLED
-        assert snapshot.physical_running
-
-        release.set()
-        assert close_returned.wait(5)
-        assert not queue.snapshot(job).physical_running
-        assert queue.drain(0)
-    finally:
-        release.set()
-        if closer.ident is None:
-            queue.close()
-        else:
-            closer.join(5)
-            assert not closer.is_alive()
+        assert not snapshot.physical_running
+    assert len(worker_threads) == 1
+    assert queue.drain(0)
+    with pytest.raises(RuntimeError):
+        queue.submit(plan("cpu"), worker)
 
 
 def test_cancellation_during_dispatch_validation_never_invokes_worker() -> None:

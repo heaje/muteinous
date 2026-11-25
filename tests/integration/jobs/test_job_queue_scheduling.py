@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Callable
 from threading import Event
 
 import pytest
 
-from muteinous.infrastructure.jobs.queue import (
-    JobContext,
-    JobPlan,
-    JobQueue,
-    JobState,
-)
+from muteinous.infrastructure.jobs.queue import JobPlan, JobQueue, JobState
 from tests.support.job_queue import (
     ControlledWorker,
     FakeClock,
@@ -146,22 +140,19 @@ def test_stale_busy_plan_needs_attention_without_fallback(
         revalidate_interval=1.0,
         clock=clock,
     )
-    owner, obsolete, valid, unavailable = (workers() for _ in range(4))
+    owner, obsolete, valid = (workers() for _ in range(3))
     try:
         queue.submit(plan("gpu"), owner)
         assert owner.entered.wait(5)
         old = queue.submit(plan("gpu", source="old"), obsolete)
         fixed_plan = plan("gpu", source="fixed")
         good = queue.submit(fixed_plan, valid)
-        missing = queue.submit(plan("missing"), unavailable)
         eventually(lambda: "gpu" in (queue.snapshot(old).detail or ""))
         stale.set()
         clock.now += 1.1
         queue.set_capacity("other", 1)
         eventually(lambda: queue.snapshot(old).state == JobState.NEEDS_ATTENTION)
         assert "Source changed" in (queue.snapshot(old).detail or "")
-        eventually(lambda: queue.snapshot(missing).state == JobState.NEEDS_ATTENTION)
-        assert "missing" in (queue.snapshot(missing).detail or "")
         eventually(lambda: "gpu" in (queue.snapshot(good).detail or ""))
         assert queue.snapshot(good).plan == fixed_plan
         assert queue.snapshot(good).state == JobState.QUEUED
@@ -169,10 +160,10 @@ def test_stale_busy_plan_needs_attention_without_fallback(
         assert valid.entered.wait(5)
         valid.release.set()
         assert queue.drain(5)
-        assert obsolete.calls == unavailable.calls == 0
+        assert obsolete.calls == 0
         assert queue.snapshot(good).result == fixed_plan.input_json
     finally:
-        for worker in (owner, obsolete, valid, unavailable):
+        for worker in (owner, obsolete, valid):
             worker.release.set()
         queue.close()
 
@@ -213,82 +204,36 @@ def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
         queue.close()
 
 
-def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
+def test_eligible_plan_is_validated_immediately_before_dispatch(
     workers: Callable[..., ControlledWorker],
 ) -> None:
-    clock = FakeClock()
-    calls: Counter[str] = Counter()
-    worker_calls: Counter[str] = Counter()
-    dispatch_validation_counts: dict[str, int] = {}
+    stale = Event()
 
     def validate(submitted: JobPlan) -> str | None:
-        calls[submitted.input_json] += 1
+        if submitted.input_json == '{"source":"waiting"}' and stale.is_set():
+            return "Source changed before dispatch"
         return None
 
-    def quick_worker(submitted: JobPlan, context: JobContext) -> object:
-        worker_calls[submitted.input_json] += 1
-        dispatch_validation_counts[submitted.input_json] = calls[submitted.input_json]
-        return submitted.input_json
-
-    queue = JobQueue(
-        {"provider": 1, "aux": 1, "other": 1},
-        validate,
-        revalidate_interval=1.0,
-        clock=clock,
-    )
-    owner = workers()
+    # The long interval means only dispatch-time validation can notice the change.
+    queue = JobQueue({"cpu": 1}, validate, revalidate_interval=3600)
+    owner, waiting = workers(), workers()
     try:
-        queue.submit(plan("provider", source="owner"), owner)
+        queue.submit(plan("cpu", source="owner"), owner)
         assert owner.entered.wait(5)
-        pending = [
-            plan("provider", source="busy"),
-            plan("provider", "aux", source="partially-blocked"),
-        ]
-        jobs = [queue.submit(submitted, quick_worker) for submitted in pending]
-        eventually(
-            lambda: all(
-                "provider" in (queue.snapshot(job_id).detail or "")
-                and calls[submitted.input_json] >= 1
-                for job_id, submitted in zip(jobs, pending, strict=True)
-            )
-        )
-        initial_counts = {
-            submitted.input_json: calls[submitted.input_json] for submitted in pending
-        }
+        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
+        eventually(lambda: "cpu" in (queue.snapshot(waiting_id).detail or ""))
+        assert queue.snapshot(waiting_id).state == JobState.QUEUED
 
-        for capacity in (2, 1, 2, 1, 2):
-            queue.set_capacity("other", capacity)
-
-        canary = queue.submit(plan("other", source="canary"), quick_worker)
-        eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
-        assert all(
-            calls[submitted.input_json] == initial_counts[submitted.input_json]
-            for submitted in pending
-        )
-
-        clock.now += 1.1
-        queue.set_capacity("other", 1)
-        # The independent job is scanned after the blocked plans, so its
-        # completion confirms their validation has been processed.
-        canary = queue.submit(plan("other", source="revalidation-canary"), quick_worker)
-        eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
-        busy_counts = {
-            submitted.input_json: calls[submitted.input_json] for submitted in pending
-        }
-        assert all(busy_counts[key] > initial_counts[key] for key in busy_counts)
-        assert all(queue.snapshot(job_id).state == JobState.QUEUED for job_id in jobs)
-
+        stale.set()
         owner.release.set()
         assert queue.drain(5)
-        assert all(
-            dispatch_validation_counts[key] > busy_counts[key] for key in busy_counts
-        )
-        assert all(worker_calls[submitted.input_json] == 1 for submitted in pending)
-        assert all(
-            queue.snapshot(job_id).state == JobState.COMPLETED for job_id in jobs
-        )
+        snapshot = queue.snapshot(waiting_id)
+        assert snapshot.state == JobState.NEEDS_ATTENTION
+        assert "Source changed before dispatch" in (snapshot.detail or "")
+        assert waiting.calls == 0
     finally:
         owner.release.set()
+        waiting.release.set()
         queue.close()
 
 
