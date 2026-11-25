@@ -704,3 +704,198 @@ with audio_scratch(Path(sys.argv[1]), WaveStorage()) as scratch:
     assert (directory / "source.pcmstore").exists()
     cleanup_abandoned(tmp_path)
     assert not directory.exists()
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        pytest.param(
+            b"x" * len(b"muteinous-audio-v1\n"), id="wrong-content-same-length"
+        ),
+        pytest.param(b"muteinous-audio-v1", id="wrong-length"),
+    ],
+)
+def test_abandoned_cleanup_preserves_invalid_ready_marker(
+    tmp_path: Path, marker: bytes
+) -> None:
+    root = tmp_path / "scratch-root"
+    root.mkdir()
+    abandoned = root / "audio-invalid-marker"
+    abandoned.mkdir()
+    (abandoned / "owner.lock").write_bytes(b"1")
+    (abandoned / "ready").write_bytes(marker)
+    (abandoned / "source.pcmstore").write_bytes(b"old audio")
+
+    cleanup_abandoned(root)
+
+    assert abandoned.is_dir()
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == marker
+    assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
+
+
+def test_abandoned_cleanup_preserves_unexpected_entries(tmp_path: Path) -> None:
+    root = tmp_path / "scratch-root"
+    root.mkdir()
+    abandoned = root / "audio-extra-entry"
+    abandoned.mkdir()
+    (abandoned / "owner.lock").write_bytes(b"1")
+    (abandoned / "ready").write_bytes(b"muteinous-audio-v1\n")
+    (abandoned / "source.pcmstore").write_bytes(b"old audio")
+    (abandoned / "notes.txt").write_bytes(b"keep this")
+
+    cleanup_abandoned(root)
+
+    assert abandoned.is_dir()
+    assert {path.name for path in abandoned.iterdir()} == {
+        "owner.lock",
+        "ready",
+        "source.pcmstore",
+        "notes.txt",
+    }
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
+    assert (abandoned / "notes.txt").read_bytes() == b"keep this"
+
+
+def test_abandoned_cleanup_preserves_expected_entry_that_is_a_directory(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "scratch-root"
+    root.mkdir()
+    abandoned = root / "audio-directory-entry"
+    abandoned.mkdir()
+    (abandoned / "owner.lock").write_bytes(b"1")
+    (abandoned / "ready").write_bytes(b"muteinous-audio-v1\n")
+    source = abandoned / "source.pcmstore"
+    source.mkdir()
+    (source / "keep.txt").write_bytes(b"not a regular audio file")
+
+    cleanup_abandoned(root)
+
+    assert abandoned.is_dir()
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert source.is_dir()
+    assert (source / "keep.txt").read_bytes() == b"not a regular audio file"
+
+
+def _create_test_link(link: Path, target: Path) -> None:
+    """Create a directory junction on Windows or a plain symlink elsewhere."""
+    if os.name == "nt":
+        if not target.is_dir():
+            raise AssertionError("Windows test links must target directories")
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    else:
+        os.symlink(target, link, target_is_directory=target.is_dir())
+
+
+def _write_abandoned_scratch(directory: Path) -> None:
+    directory.mkdir(parents=True)
+    (directory / "owner.lock").write_bytes(b"1")
+    (directory / "ready").write_bytes(b"muteinous-audio-v1\n")
+    (directory / "source.pcmstore").write_bytes(b"old audio")
+
+
+def test_abandoned_cleanup_does_not_follow_candidate_directory_links(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "scratch-root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+
+    # Exact layout ensures removing the candidate-link guard would reclaim this
+    # target. The second target verifies that even an extra file stays intact.
+    exact_target = outside / "exact-scratch"
+    _write_abandoned_scratch(exact_target)
+    keep_target = outside / "scratch-with-extra"
+    _write_abandoned_scratch(keep_target)
+    (keep_target / "keep.txt").write_bytes(b"outside data")
+    exact_link = root / "audio-linked-exact"
+    keep_link = root / "audio-linked-with-extra"
+    _create_test_link(exact_link, exact_target)
+    _create_test_link(keep_link, keep_target)
+
+    cleanup_abandoned(root)
+
+    assert exact_target.is_dir()
+    assert (exact_target / "owner.lock").read_bytes() == b"1"
+    assert (exact_target / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert (exact_target / "source.pcmstore").read_bytes() == b"old audio"
+    assert keep_target.is_dir()
+    assert (keep_target / "owner.lock").read_bytes() == b"1"
+    assert (keep_target / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert (keep_target / "source.pcmstore").read_bytes() == b"old audio"
+    assert (keep_target / "keep.txt").read_bytes() == b"outside data"
+    assert exact_link.is_dir()
+    assert keep_link.is_dir()
+
+
+def test_scratch_root_links_are_refused_or_ignored(tmp_path: Path) -> None:
+    target_root = tmp_path / "real-root"
+    target_root.mkdir()
+    abandoned = target_root / "audio-abandoned"
+    _write_abandoned_scratch(abandoned)
+    linked_root = tmp_path / "linked-root"
+    _create_test_link(linked_root, target_root)
+
+    cleanup_abandoned(linked_root)
+
+    assert abandoned.is_dir()
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
+
+    with pytest.raises(ValueError, match="scratch root must not be a link"):
+        with audio_scratch(linked_root, WaveStorage()):
+            pytest.fail("audio_scratch must reject a linked root")
+
+    assert abandoned.is_dir()
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
+
+
+def test_abandoned_cleanup_preserves_entry_links_and_outside_data(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "scratch-root"
+    root.mkdir()
+    abandoned = root / "audio-linked-entry"
+    abandoned.mkdir()
+    (abandoned / "owner.lock").write_bytes(b"1")
+    (abandoned / "ready").write_bytes(b"muteinous-audio-v1\n")
+
+    if os.name == "nt":
+        outside = tmp_path / "outside-directory"
+        outside.mkdir()
+        (outside / "keep.txt").write_bytes(b"outside data")
+        (abandoned / "source.pcmstore").write_bytes(b"old audio")
+        entry_link = abandoned / "edited.pcmstore"
+    else:
+        outside = tmp_path / "outside-file.pcmstore"
+        outside.write_bytes(b"outside data")
+        entry_link = abandoned / "source.pcmstore"
+
+    _create_test_link(entry_link, outside)
+
+    cleanup_abandoned(root)
+
+    assert abandoned.is_dir()
+    assert (abandoned / "owner.lock").read_bytes() == b"1"
+    assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
+    if os.name == "nt":
+        assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
+        assert entry_link.is_dir()
+        assert (outside / "keep.txt").read_bytes() == b"outside data"
+    else:
+        assert entry_link.is_symlink()
+        assert entry_link.read_bytes() == b"outside data"
+        assert outside.read_bytes() == b"outside data"
