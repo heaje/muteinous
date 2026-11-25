@@ -266,6 +266,45 @@ def test_stale_busy_plan_needs_attention_without_fallback(
         queue.close()
 
 
+def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    stale = Event()
+    stale_revalidated = Event()
+    calls: Counter[str] = Counter()
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        if submitted.input_json == '{"source":"waiting"}' and stale.is_set():
+            stale_revalidated.set()
+            return "Source changed"
+        return None
+
+    queue = JobQueue({"cpu": 1}, validate, revalidate_interval=0.05)
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
+        eventually(
+            lambda: (
+                queue.snapshot(waiting_id).detail == "Waiting for: cpu"
+                and calls['{"source":"waiting"}'] == 1
+            )
+        )
+
+        stale.set()
+        # No queue operation after this flag change may wake the dispatcher.
+        assert stale_revalidated.wait(5)
+        eventually(lambda: queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION)
+        assert queue.snapshot(waiting_id).detail == "Source changed"
+        assert calls['{"source":"waiting"}'] == 2
+    finally:
+        owner.release.set()
+        waiting.release.set()
+        queue.close()
+
+
 def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
     workers: Callable[..., ControlledWorker],
 ) -> None:
@@ -375,6 +414,52 @@ def test_busy_wait_does_not_expire_after_large_clock_advance(
     finally:
         owner.release.set()
         waiting.release.set()
+        queue.close()
+
+
+def test_partially_blocked_multiresource_plan_ignores_unrelated_wakes(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    calls: Counter[str] = Counter()
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        return None
+
+    def quick_worker(submitted: JobPlan, context: JobContext) -> object:
+        return submitted.input_json
+
+    queue = JobQueue(
+        {"x": 1, "y": 1, "z": 1},
+        validate,
+        revalidate_interval=3600,
+        clock=clock,
+    )
+    owner, partial = workers(), workers()
+    try:
+        queue.submit(plan("x", source="owner"), owner)
+        assert owner.entered.wait(5)
+        partial_plan = plan("x", "y", source="partial")
+        partial_id = queue.submit(partial_plan, partial)
+        eventually(
+            lambda: (
+                queue.snapshot(partial_id).detail == "Waiting for: x"
+                and calls[partial_plan.input_json] == 1
+            )
+        )
+
+        for capacity in (2, 3, 4):
+            queue.set_capacity("z", capacity)
+        canary = queue.submit(plan("z", source="canary"), quick_worker)
+        eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
+
+        assert calls[partial_plan.input_json] == 1
+        assert clock.now == 0
+        assert queue.snapshot(partial_id).state == JobState.QUEUED
+    finally:
+        owner.release.set()
+        partial.release.set()
         queue.close()
 
 
@@ -641,6 +726,50 @@ def test_worker_start_baseexception_releases_slot_and_scheduler_continues(
             thread.join(5)
 
 
+def test_worker_baseexception_fails_job_and_releases_capacity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedWorkerAbort(BaseException):
+        pass
+
+    thread_errors: list[BaseException] = []
+
+    def capture_thread_exception(args: object) -> None:
+        error = getattr(args, "exc_value", None)
+        if isinstance(error, BaseException):
+            thread_errors.append(error)
+
+    monkeypatch.setattr(threading, "excepthook", capture_thread_exception)
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+    later_entered = Event()
+    later_calls = 0
+
+    def abort_worker(submitted: JobPlan, context: JobContext) -> object:
+        raise InjectedWorkerAbort("injected worker abort")
+
+    def later_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal later_calls
+        later_calls += 1
+        later_entered.set()
+        return submitted.input_json
+
+    try:
+        failed = queue.submit(plan("cpu", source="failed"), abort_worker)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(failed)
+        assert snapshot.state == JobState.FAILED
+        assert "InjectedWorkerAbort" in (snapshot.detail or "")
+
+        later = queue.submit(plan("cpu", source="later"), later_worker)
+        assert later_entered.wait(5)
+        assert queue.drain(5)
+        assert queue.snapshot(later).state == JobState.COMPLETED
+        assert later_calls == 1
+        assert thread_errors == []
+    finally:
+        queue.close()
+
+
 def test_scheduler_pass_baseexception_marks_job_and_dispatcher_survives() -> None:
     class InjectedSchedulerClockFailure(BaseException):
         pass
@@ -813,6 +942,69 @@ def test_progress_coalescing_and_terminal_snapshot() -> None:
         assert final.result is None and final.progress == terminal.progress
     finally:
         release.set()
+        queue.close()
+
+
+def test_poll_returns_material_queue_details_without_waiting_for_progress_interval(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    stale = Event()
+    initial_validation_entered, release_initial_validation = Event(), Event()
+    stale_revalidated = Event()
+    calls: Counter[str] = Counter()
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        if submitted.input_json == '{"source":"waiting"}':
+            if calls[submitted.input_json] == 1:
+                initial_validation_entered.set()
+                assert release_initial_validation.wait(10)
+            if stale.is_set():
+                stale_revalidated.set()
+                return "Source changed"
+        return None
+
+    queue = JobQueue(
+        {"cpu": 1},
+        validate,
+        progress_interval=3600,
+        revalidate_interval=3600,
+        clock=clock,
+    )
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
+        assert initial_validation_entered.wait(5)
+        queued = queue.snapshot(waiting_id)
+        assert queued.state == JobState.QUEUED
+        assert queue.poll(waiting_id, queued.revision) is None
+
+        release_initial_validation.set()
+        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
+        waiting_detail = queue.snapshot(waiting_id)
+        waiting_update = queue.poll(waiting_id, queued.revision)
+        assert waiting_update is not None
+        assert waiting_update.detail == "Waiting for: cpu"
+
+        stale.set()
+        owner.release.set()
+        assert stale_revalidated.wait(5)
+        assert queue.drain(5)
+        attention = queue.snapshot(waiting_id)
+        attention_update = queue.poll(waiting_id, waiting_detail.revision)
+        assert attention.state == JobState.NEEDS_ATTENTION
+        assert attention_update is not None
+        assert attention_update.state == JobState.NEEDS_ATTENTION
+        assert attention_update.detail == "Source changed"
+        assert clock.now == 0
+        assert waiting.calls == 0
+    finally:
+        release_initial_validation.set()
+        owner.release.set()
+        waiting.release.set()
         queue.close()
 
 
@@ -1102,6 +1294,59 @@ def test_capacity_release_during_validation_restarts_fifo(
         assert queue.drain(5)
     finally:
         release_check.set()
+        for worker in (owner, older, younger):
+            worker.release.set()
+        queue.close()
+
+
+def test_capacity_increase_during_younger_validation_preserves_fifo(
+    monkeypatch: pytest.MonkeyPatch,
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    younger_validation_entered, release_validation = Event(), Event()
+    start_lock = threading.Lock()
+    launch_order: list[str] = []
+
+    class RecordingThread(Thread):
+        def start(self) -> None:
+            if self.name.startswith("job-"):
+                with start_lock:
+                    launch_order.append(self.name)
+            super().start()
+
+    monkeypatch.setattr(queue_module, "Thread", RecordingThread)
+
+    def validate(submitted: JobPlan) -> str | None:
+        if submitted.input_json == '{"source":"younger"}':
+            if not younger_validation_entered.is_set():
+                younger_validation_entered.set()
+                assert release_validation.wait(10)
+        return None
+
+    queue = JobQueue({"x": 1, "y": 1}, validate)
+    owner, older, younger = (workers() for _ in range(3))
+    try:
+        queue.submit(plan("x", source="owner"), owner)
+        assert owner.entered.wait(5)
+        older_id = queue.submit(plan("x", source="older"), older)
+        eventually(lambda: queue.snapshot(older_id).detail == "Waiting for: x")
+        younger_id = queue.submit(plan("y", source="younger"), younger)
+        assert younger_validation_entered.wait(5)
+
+        queue.set_capacity("x", 2)
+        release_validation.set()
+        assert older.entered.wait(5)
+        assert younger.entered.wait(5)
+        with start_lock:
+            launches = list(launch_order)
+        assert launches.index(f"job-{older_id}") < launches.index(f"job-{younger_id}")
+
+        owner.release.set()
+        older.release.set()
+        younger.release.set()
+        assert queue.drain(5)
+    finally:
+        release_validation.set()
         for worker in (owner, older, younger):
             worker.release.set()
         queue.close()

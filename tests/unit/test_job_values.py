@@ -45,6 +45,11 @@ def test_reject_wrong_job_plan_field_types(
         JobPlan(provider, backend, resources, input_json)  # type: ignore[arg-type]
 
 
+def test_reject_list_job_plan_resources() -> None:
+    with pytest.raises(ValueError, match="declared string types"):
+        JobPlan("fake", "cpu", ["cpu"], "{}")  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(("provider", "backend"), [("", "cpu"), ("fake", "")])
 def test_reject_empty_provider_or_backend(provider: str, backend: str) -> None:
     with pytest.raises(ValueError, match="Provider and backend"):
@@ -197,3 +202,9 @@ def test_percentage_requires_reliable_denominator(
     count: WorkCount, percentage: float | None
 ) -> None:
     assert count.percentage == percentage
+
+
+def test_percentage_handles_zero_complete_and_fractional_totals() -> None:
+    assert WorkCount(0, 0, True).percentage is None
+    assert WorkCount(3, 3, True).percentage == 100.0
+    assert WorkCount(1, 3, True).percentage == pytest.approx(100 / 3)
