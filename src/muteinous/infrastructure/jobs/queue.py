@@ -14,6 +14,8 @@ from uuid import uuid4
 
 _MAX_DETAIL = 4096
 _DETAIL_TRUNCATION_SUFFIX = "... [truncated]"
+# Keep deadline addition above the resolution where positive delays can round to zero.
+_MIN_REVALIDATE_INTERVAL = 0.001
 
 
 class JobState(StrEnum):
@@ -207,8 +209,11 @@ class JobQueue:
             self._check_capacity(name, capacity)
         if not 0 < progress_interval < float("inf"):
             raise ValueError("Progress interval must be finite and positive")
-        if not 0 < revalidate_interval < float("inf"):
-            raise ValueError("Revalidation interval must be finite and positive")
+        if not _MIN_REVALIDATE_INTERVAL <= revalidate_interval < float("inf"):
+            raise ValueError(
+                "Revalidation interval must be finite and at least "
+                f"{_MIN_REVALIDATE_INTERVAL} seconds"
+            )
         self._capacities = dict(capacities)
         self._validate = validate
         self._progress_interval = progress_interval

@@ -231,6 +231,45 @@ def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
         queue.close()
 
 
+def test_minimum_revalidation_interval_does_not_spin_for_busy_plans(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    calls: Counter[str] = Counter()
+    calls_lock = threading.Lock()
+    waiting_plan = plan("cpu", source="minimum-interval")
+    waiting_validated = Event()
+
+    def validate(submitted: JobPlan) -> str | None:
+        with calls_lock:
+            calls[submitted.input_json] += 1
+            if submitted == waiting_plan:
+                waiting_validated.set()
+        return None
+
+    queue = JobQueue({"cpu": 1}, validate, revalidate_interval=0.001)
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(waiting_plan, waiting)
+        assert waiting_validated.wait(5)
+        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
+
+        with calls_lock:
+            before = calls[waiting_plan.input_json]
+        # This is a measurement window, not an ordering delay. The generous
+        # ceiling distinguishes the 1 ms revalidation cadence from a tight loop.
+        Event().wait(0.2)
+        with calls_lock:
+            revalidations = calls[waiting_plan.input_json] - before
+        assert revalidations < 2000
+        assert waiting.calls == 0
+    finally:
+        owner.release.set()
+        waiting.release.set()
+        queue.close()
+
+
 def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
     workers: Callable[..., ControlledWorker],
 ) -> None:

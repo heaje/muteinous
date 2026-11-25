@@ -39,11 +39,32 @@ def test_non_string_validator_reasons_are_coerced_to_text(reason: object) -> Non
 
 
 @pytest.mark.parametrize(
-    "interval", [0.0, -1.0, float("inf"), float("-inf"), float("nan")]
+    "interval",
+    [
+        0.0,
+        -1.0,
+        1e-300,
+        0.0005,
+        float("inf"),
+        float("-inf"),
+        float("nan"),
+    ],
 )
-def test_revalidation_interval_must_be_finite_and_positive(interval: float) -> None:
-    with pytest.raises(ValueError, match="Revalidation interval"):
-        JobQueue({}, lambda _: None, revalidate_interval=interval)
+def test_revalidation_interval_must_be_finite_and_at_least_minimum(
+    interval: float,
+) -> None:
+    queue: JobQueue | None = None
+    try:
+        with pytest.raises(ValueError, match=r"Revalidation interval.*0\.001"):
+            queue = JobQueue({}, lambda _: None, revalidate_interval=interval)
+    finally:
+        if queue is not None:
+            queue.close()
+
+
+def test_revalidation_interval_accepts_exact_minimum() -> None:
+    queue = JobQueue({}, lambda _: None, revalidate_interval=0.001)
+    queue.close()
 
 
 @pytest.mark.parametrize(
