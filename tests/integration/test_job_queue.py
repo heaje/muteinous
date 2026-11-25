@@ -6,7 +6,7 @@ import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from threading import Event, Thread, current_thread
-from weakref import ref
+from weakref import ReferenceType, ref
 
 import pytest
 
@@ -339,26 +339,41 @@ def test_busy_wait_does_not_expire_after_large_clock_advance(
 def test_worker_start_baseexception_releases_slot_and_scheduler_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class InjectedThreadStartFailure(BaseException):
+    class InjectedPostLaunchFailure(BaseException):
         pass
 
-    original_thread = getattr(queue_module, "Thread")
+    failure_raised = Event()
+    launched_threads: list[Thread] = []
+    thread_errors: list[BaseException] = []
+
+    def capture_thread_exception(args: object) -> None:
+        error = getattr(args, "exc_value", None)
+        if isinstance(error, BaseException):
+            thread_errors.append(error)
 
     class FailingWorkerThread(Thread):
         def start(self) -> None:
-            if self.name.startswith("job-"):
-                raise InjectedThreadStartFailure("injected worker-start failure")
             super().start()
+            if self.name.startswith("job-"):
+                launched_threads.append(self)
+                if not failure_raised.is_set():
+                    failure_raised.set()
+                    raise InjectedPostLaunchFailure("injected post-launch failure")
 
+    monkeypatch.setattr(threading, "excepthook", capture_thread_exception)
     monkeypatch.setattr(queue_module, "Thread", FailingWorkerThread)
+    before = set(threading.enumerate())
     queue = JobQueue({"cpu": 1}, lambda _: None)
     first_calls = 0
     later_calls = 0
+    first_entered, first_release = Event(), Event()
     later_entered = Event()
 
     def first_worker(submitted: JobPlan, context: JobContext) -> object:
         nonlocal first_calls
         first_calls += 1
+        first_entered.set()
+        assert first_release.wait(10)
         return None
 
     def later_worker(submitted: JobPlan, context: JobContext) -> object:
@@ -368,22 +383,39 @@ def test_worker_start_baseexception_releases_slot_and_scheduler_continues(
         return submitted.input_json
 
     try:
-        failed = queue.submit(plan("cpu", source="first"), first_worker)
-        eventually(lambda: queue.snapshot(failed).state == JobState.FAILED)
-        failed_snapshot = queue.snapshot(failed)
-        assert "InjectedThreadStartFailure" in (failed_snapshot.detail or "")
-        assert not failed_snapshot.physical_running
-        assert first_calls == 0
-        assert queue.drain(5)
+        first = queue.submit(plan("cpu", source="first"), first_worker)
+        assert first_entered.wait(5)
+        first_snapshot = queue.snapshot(first)
+        assert first_snapshot.state == JobState.RUNNING
+        assert first_snapshot.physical_running
+        assert failure_raised.is_set()
 
-        monkeypatch.setattr(queue_module, "Thread", original_thread)
         later = queue.submit(plan("cpu", source="later"), later_worker)
+        eventually(lambda: queue.snapshot(later).detail == "Waiting for: cpu")
+        assert not later_entered.is_set()
+        assert queue._used["cpu"] == 1
+
+        first_release.set()
         assert later_entered.wait(5)
         assert queue.drain(5)
-        assert later_calls == 1
+        queue.close()
+        for thread in launched_threads:
+            thread.join(5)
+            assert not thread.is_alive()
+        assert first_calls == later_calls == 1
+        assert queue._used["cpu"] == 0
+        assert thread_errors == []
+        assert not any(
+            thread.name == "muteinous-jobs" or thread.name.startswith("job-")
+            for thread in set(threading.enumerate()) - before
+        )
+        assert queue.snapshot(first).state == JobState.COMPLETED
         assert queue.snapshot(later).state == JobState.COMPLETED
     finally:
+        first_release.set()
         queue.close()
+        for thread in launched_threads:
+            thread.join(5)
 
 
 def test_scheduler_pass_baseexception_marks_job_and_dispatcher_survives() -> None:
@@ -561,6 +593,47 @@ def test_progress_coalescing_and_terminal_snapshot() -> None:
         queue.close()
 
 
+def test_progress_retains_only_the_latest_weakrefable_activity() -> None:
+    class WeakActivity(str):
+        pass
+
+    contexts: list[JobContext] = []
+    entered, release = Event(), Event()
+    activity_refs: list[ReferenceType[WeakActivity]] = []
+    latest_ref: ReferenceType[WeakActivity] | None = None
+    latest_text = "activity-127"
+
+    def worker(submitted: JobPlan, context: JobContext) -> object:
+        contexts.append(context)
+        entered.set()
+        assert release.wait(10)
+        return submitted.input_json
+
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+    try:
+        job = queue.submit(plan("cpu"), worker)
+        assert entered.wait(5)
+        context = contexts[0]
+        for index in range(128):
+            activity = WeakActivity(f"activity-{index}")
+            if index < 127:
+                activity_refs.append(ref(activity))
+            else:
+                latest_ref = ref(activity)
+            context.report(Progress("scan", activity=activity), meaningful=True)
+        del activity
+
+        gc.collect()
+        assert all(activity_ref() is None for activity_ref in activity_refs)
+        snapshot = queue.snapshot(job)
+        assert latest_ref is not None
+        assert latest_ref() is snapshot.progress.activity
+        assert snapshot.progress.activity == latest_text
+    finally:
+        release.set()
+        queue.close()
+
+
 def test_close_requests_cooperative_stop_and_joins_threads() -> None:
     entered = Event()
 
@@ -583,6 +656,68 @@ def test_close_requests_cooperative_stop_and_joins_threads() -> None:
     assert not set(threading.enumerate()) - before
     with pytest.raises(RuntimeError, match="closed"):
         queue.submit(plan("cpu"), worker)
+
+
+def test_close_waits_for_physical_worker_after_cancellation() -> None:
+    entered, cancellation_observed, release = Event(), Event(), Event()
+    close_started, close_returned = Event(), Event()
+
+    def worker(submitted: JobPlan, context: JobContext) -> object:
+        entered.set()
+        assert context.wait_cancelled(10)
+        cancellation_observed.set()
+        assert release.wait(10)
+        return submitted.input_json
+
+    before = set(threading.enumerate())
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+
+    def close_queue() -> None:
+        close_started.set()
+        queue.close()
+        close_returned.set()
+
+    closer = Thread(target=close_queue, name="job-queue-close-test")
+    try:
+        job = queue.submit(plan("cpu"), worker)
+        assert entered.wait(5)
+        closer.start()
+        assert close_started.wait(5)
+        assert cancellation_observed.wait(5)
+        queue._dispatcher.join(5)
+        assert not queue._dispatcher.is_alive()
+        closer.join(0.25)
+        assert closer.is_alive()
+        assert not close_returned.is_set()
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.CANCELLED
+        assert snapshot.physical_running
+
+        release.set()
+        assert close_returned.wait(5)
+        closer.join(5)
+        assert not closer.is_alive()
+        assert not queue.snapshot(job).physical_running
+        assert queue.drain(0)
+        assert not any(
+            thread.name == "muteinous-jobs" or thread.name.startswith("job-")
+            for thread in set(threading.enumerate()) - before
+        )
+    finally:
+        release.set()
+        queue.drain(5)
+        if closer.ident is None:
+            queue.close()
+        else:
+            closer.join(5)
+            if closer.is_alive():
+                queue.close()
+                closer.join(5)
+            assert not closer.is_alive()
+        for thread in queue._threads:
+            if thread.ident is not None:
+                thread.join(5)
+                assert not thread.is_alive()
 
 
 def test_cancellation_during_dispatch_validation_never_invokes_worker() -> None:

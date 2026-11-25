@@ -48,6 +48,19 @@ def test_reject_non_object_or_invalid_json(payload: str) -> None:
         JobPlan("fake", "cpu", ("cpu",), payload)
 
 
+@pytest.mark.parametrize("payload", ['{"n":1e999}', '{"n":-1e999}'])
+def test_reject_non_finite_json_floats(payload: str) -> None:
+    with pytest.raises(ValueError, match="non-finite"):
+        JobPlan("fake", "cpu", ("cpu",), payload)
+
+
+@pytest.mark.parametrize("depth", [20_000, 40_000])
+def test_reject_pathologically_nested_json_as_value_error(depth: int) -> None:
+    payload = "[" * depth + "0" + "]" * depth
+    with pytest.raises(ValueError, match="too deeply nested"):
+        JobPlan("fake", "cpu", ("cpu",), payload)
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -81,6 +94,8 @@ def test_revalidation_interval_must_be_finite_and_positive(interval: float) -> N
         (WorkCount(True, 2, True), None),
         (WorkCount(1, True, True), None),
         (WorkCount(1, 2, 1), None),  # type: ignore[arg-type]
+        (WorkCount(1, 2.5, True), None),  # type: ignore[arg-type]
+        (WorkCount(1, 2.0, True), None),  # type: ignore[arg-type]
     ],
 )
 def test_percentage_requires_reliable_denominator(

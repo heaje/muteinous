@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
@@ -30,6 +31,13 @@ def _error_detail(error: BaseException) -> str:
 
 def _reject_constant(value: str) -> None:
     raise ValueError(f"Invalid JSON constant: {value}")
+
+
+def _reject_nonfinite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError(f"Invalid non-finite JSON number: {value}")
+    return parsed
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -67,14 +75,16 @@ class JobPlan:
             or len(set(self.resources)) != len(self.resources)
         ):
             raise ValueError("Declare distinct, nonempty resource names")
-        if not isinstance(
-            json.loads(
+        try:
+            parsed_input = json.loads(
                 self.input_json,
                 parse_constant=_reject_constant,
+                parse_float=_reject_nonfinite_float,
                 object_pairs_hook=_reject_duplicate_keys,
-            ),
-            dict,
-        ):
+            )
+        except RecursionError as error:
+            raise ValueError("Job input is too deeply nested") from error
+        if not isinstance(parsed_input, dict):
             raise ValueError("Job input must be a JSON object")
 
 
@@ -492,6 +502,9 @@ class JobQueue:
             self._threads.add(thread)
             thread.start()
         except BaseException as error:
+            if thread is not None and thread.ident is not None:
+                # Swallow post-launch errors; _run owns this reservation now.
+                return
             self._fail_job(
                 job_id,
                 f"Worker start failed: {_error_detail(error)}",
