@@ -76,6 +76,27 @@ def test_successful_publish_consumes_stage_inside_owning_context(
 
 
 @pytest.mark.portable
+def test_stage_preserves_oserror_after_manifest_commit(store: ResultStore) -> None:
+    error = OSError(errno.ENOSPC, "caller failed after publication")
+    with pytest.raises(OSError) as raised:
+        with store.stage("post-commit-caller-error") as stage:
+            (stage.path / "payload.bin").write_bytes(b"committed")
+            selected = store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=None,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+            raise error
+
+    assert raised.value is error
+    assert store.selection("scan") == selected
+    assert read(store) == b"committed"
+
+
+@pytest.mark.portable
 def test_stage_after_context_exit_cannot_be_published(store: ResultStore) -> None:
     expected = store.selection("scan")
     with store.stage("closed-stage") as stage:

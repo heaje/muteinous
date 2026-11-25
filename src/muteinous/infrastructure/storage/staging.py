@@ -73,6 +73,7 @@ class StagingArea:
         self.space_assessments = assessments
         self._active = True
         self._published = False
+        self._committed = False
         self._publisher_files: set[str] = set()
 
     @property
@@ -107,6 +108,7 @@ class Staging:
         )
         directory = self.root / token
         lease = self.leases / f"{token}.lock"
+        area: StagingArea | None = None
         try:
             checked_directory(self.root, root=self.controlled_root)
             checked_directory(self.leases, root=self.controlled_root)
@@ -124,6 +126,8 @@ class Staging:
                 finally:
                     area._active = False
         except OSError as exc:
+            if area is not None and area._committed:
+                raise
             translate_write_error(exc)
 
     def cleanup_abandoned(self) -> CleanupReport:

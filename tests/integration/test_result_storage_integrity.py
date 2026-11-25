@@ -176,6 +176,39 @@ def test_current_manifest_rejects_invalid_digest_for_every_operation(
 
 
 @pytest.mark.portable
+@pytest.mark.parametrize("bundle", ["short", "A" * 32, "../x", 123])
+@pytest.mark.parametrize("operation", ["selection", "open", "publish"])
+def test_current_manifest_rejects_invalid_bundle_for_every_operation(
+    store: ResultStore, bundle: object, operation: str
+) -> None:
+    selected = publish(store)
+    manifest_path = store.root / "current" / "scan.json"
+    manifest_path.write_bytes(
+        canonical_json({"schema": 1, "bundle": bundle, "metadata_sha256": "0" * 64})
+    )
+
+    if operation == "selection":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            store.selection("scan")
+    elif operation == "open":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
+                pytest.fail("Invalid manifest bundle was exposed")
+    else:
+        with store.stage("invalid-manifest-bundle") as stage:
+            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
+            with pytest.raises(StorageError, match="Invalid current result manifest"):
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=selected,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+
+
+@pytest.mark.portable
 def test_missing_selected_bundle_refuses_open_without_fallback(
     store: ResultStore,
 ) -> None:

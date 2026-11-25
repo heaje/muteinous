@@ -5,6 +5,7 @@ from __future__ import annotations
 import errno
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Never
 
 import pytest
 
@@ -221,8 +222,11 @@ def test_publication_rejects_payload_file_on_another_device(
 
 
 @pytest.mark.portable
+@pytest.mark.parametrize("mismatched_directory", ["current", "stage-leases"])
 def test_stage_refuses_mismatched_destination_devices_before_creation(
-    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+    store: ResultStore,
+    monkeypatch: pytest.MonkeyPatch,
+    mismatched_directory: str,
 ) -> None:
     staging = store.root / "staging"
     leases = store.root / "stage-leases"
@@ -230,18 +234,24 @@ def test_stage_refuses_mismatched_destination_devices_before_creation(
     leases_before = set(leases.iterdir())
     original_checked_directory = checked_directory
 
-    def different_current_device(path: Path, *, root: Path | None = None) -> object:
+    def different_directory_device(path: Path, *, root: Path | None = None) -> object:
         info = original_checked_directory(path, root=root)
-        if path == store.root / "current":
+        if path == store.root / mismatched_directory:
             return SimpleNamespace(st_dev=info.st_dev + 1)
         return info
 
+    def unexpected_preflight(*args: object, **kwargs: object) -> Never:
+        raise AssertionError("Stage device validation must precede preflight")
+
     monkeypatch.setattr(
         "muteinous.infrastructure.storage.bundles.checked_directory",
-        different_current_device,
+        different_directory_device,
+    )
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.bundles.preflight", unexpected_preflight
     )
     with pytest.raises(StorageError, match="destination-filesystem staging"):
-        with store.stage("mismatched-destination-device"):
+        with store.stage(f"mismatched-{mismatched_directory}-device"):
             pytest.fail("A stage was yielded on a mismatched destination device")
 
     assert set(staging.iterdir()) == staging_before

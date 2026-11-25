@@ -179,7 +179,7 @@ class ResultStore:
         staging_device = checked_directory(self._staging.root, root=self.root).st_dev
         if any(
             checked_directory(directory, root=self.root).st_dev != staging_device
-            for directory in (self._bundles, self._current)
+            for directory in (self._bundles, self._current, self._staging.leases)
         ):
             raise StorageError("Staging requires destination-filesystem staging")
         requirements = (
@@ -349,6 +349,7 @@ class ResultStore:
                 if self._selection(result) != expected or is_current() is not True:
                     raise StorageError("Result producer was superseded")
                 os.replace(candidate_manifest, self._manifest_path(result))
+                staging._committed = True
             return selection
         except OSError as exc:
             translate_write_error(exc)
