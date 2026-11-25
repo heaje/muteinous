@@ -243,14 +243,23 @@ class ResultStore:
     ) -> Selection:
         """Commit one result; never replace an existing bundle directory.
 
+        All writers/workers using the payload must have stopped and closed their
+        files before this call. Publication validates a snapshot; concurrent
+        payload mutation through the manifest switch violates the caller
+        contract and is not defended against here. Every open_current call
+        rehashes and refuses detected later modifications.
+
         The caller supplies a final authoritative generation/freshness check,
         synchronized with its source/configuration changes. The callback and
         expected-manifest comparisons run inside the selection guard. The guard
-        waits briefly for contention and then refuses retryably. Refusals before
-        the directory rename leave this stage writable; once renamed, any later
-        failure consumes the stage and may leave an unreferenced bundle, so the
-        caller must produce and stage again. Domain validators must be read-only
-        and raise on invalid results.
+        waits briefly for contention and then refuses retryably. An ordinary
+        refusal before rename leaves this stage retryable; after rename, any
+        failure consumes it and may leave an unreferenced bundle. After an
+        asynchronous BaseException, discard this stage and stage again because
+        publisher metadata may have been left behind. Atomic manifest
+        replacement is the commit point; after an ambiguous interruption,
+        callers must reread selection(). Domain validators must be read-only and
+        raise on invalid results.
         """
         _result_key(result)
         if staging._manager is not self._staging:

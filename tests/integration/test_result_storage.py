@@ -94,6 +94,36 @@ def test_partial_stage_never_becomes_current_and_old_reader_is_safe(
 
 
 @pytest.mark.portable
+def test_successful_publish_consumes_stage_inside_owning_context(
+    store: ResultStore,
+) -> None:
+    expected = store.selection("scan")
+    with store.stage("successful-publish") as stage:
+        (stage.path / "payload.bin").write_bytes(b"published")
+        selected = store.publish(
+            stage,
+            "scan",
+            IDENTITY,
+            expected=expected,
+            is_current=lambda: True,
+            validate_domain=validate_domain,
+        )
+        with pytest.raises(StorageError, match="no longer writable"):
+            _ = stage.path
+        with pytest.raises(StorageError, match="no longer writable"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=selected,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+    assert store.selection("scan") == selected
+    assert read(store) == b"published"
+
+
+@pytest.mark.portable
 @pytest.mark.parametrize("operation", ["rename", "replace"])
 def test_atomic_operation_failure_preserves_previous_selection(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch, operation: str

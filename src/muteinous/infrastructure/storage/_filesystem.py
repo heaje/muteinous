@@ -160,11 +160,14 @@ def _enumerate_windows_streams(path: Path) -> tuple[str, ...]:
 
     data = _Win32FindStreamData()
     invalid_handle = ctypes.c_void_p(-1).value
-    ctypes.set_last_error(0)
-    handle = find_first(_extended_windows_path(path), 0, ctypes.byref(data), 0)
-    if handle is None or handle == invalid_handle:
+    try:
+        ctypes.set_last_error(0)
+        handle = find_first(_extended_windows_path(path), 0, ctypes.byref(data), 0)
+    except Exception as exc:
+        raise StorageError(f"Cannot enumerate data streams for {path}") from exc
+    if not handle or handle == invalid_handle:
         error = ctypes.get_last_error()
-        if error in {38, 1, 50, 87, 120}:
+        if error in {38, 87}:
             return ()
         raise StorageError(
             f"Cannot enumerate data streams for {path} (Windows error {error})"
@@ -183,9 +186,19 @@ def _enumerate_windows_streams(path: Path) -> tuple[str, ...]:
                 )
             streams.append(str(data.cStreamName))
         return tuple(streams)
+    except StorageError:
+        raise
+    except Exception as exc:
+        raise StorageError(f"Cannot enumerate data streams for {path}") from exc
     finally:
-        ctypes.set_last_error(0)
-        if not find_close(handle):
+        try:
+            ctypes.set_last_error(0)
+            closed = find_close(handle)
+        except Exception as exc:
+            raise StorageError(
+                f"Cannot close data-stream enumeration for {path}"
+            ) from exc
+        if not closed:
             error = ctypes.get_last_error()
             raise StorageError(
                 f"Cannot close data-stream enumeration for {path} "

@@ -1,12 +1,17 @@
 """Deterministic result integrity and safe-path unit checks."""
 
+import ctypes
 import hashlib
-from collections.abc import Iterator
+import os
+import stat
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
+import muteinous.infrastructure.storage._filesystem as filesystem
 from muteinous.infrastructure.storage._filesystem import (
     InsufficientSpace,
     StorageError,
@@ -22,6 +27,72 @@ from muteinous.infrastructure.storage.bundles import ResultIdentity, _metadata
 from muteinous.infrastructure.storage.space import SpaceRequirement, preflight
 
 pytestmark = pytest.mark.portable
+
+
+class _FakeWinFunction:
+    def __init__(self, callback: Callable[..., object]) -> None:
+        self.callback = callback
+        self.argtypes: object = None
+        self.restype: object = None
+
+    def __call__(self, *args: object) -> object:
+        return self.callback(*args)
+
+
+def _install_fake_stream_api(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    first_error: int | None = None,
+    next_error: int = 38,
+    next_raises: bool = False,
+    close_error: int | None = None,
+) -> dict[str, int]:
+    state = {"last_error": 0, "close_calls": 0}
+
+    def find_first(*args: object) -> object:
+        if first_error is not None:
+            state["last_error"] = first_error
+            return ctypes.c_void_p(-1).value
+        return 1234
+
+    def find_next(*args: object) -> object:
+        if next_raises:
+            raise OSError("synthetic FindNextStreamW failure")
+        state["last_error"] = next_error
+        return 0
+
+    def find_close(*args: object) -> object:
+        state["close_calls"] += 1
+        if close_error is not None:
+            state["last_error"] = close_error
+            return 0
+        return 1
+
+    kernel32 = SimpleNamespace(
+        FindFirstStreamW=_FakeWinFunction(find_first),
+        FindNextStreamW=_FakeWinFunction(find_next),
+        FindClose=_FakeWinFunction(find_close),
+    )
+    monkeypatch.setattr(filesystem, "sys", SimpleNamespace(platform="win32"))
+    monkeypatch.setattr(
+        ctypes,
+        "WinDLL",
+        lambda name, *, use_last_error: kernel32,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ctypes,
+        "get_last_error",
+        lambda: state["last_error"],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        ctypes,
+        "set_last_error",
+        lambda error: state.__setitem__("last_error", error),
+        raising=False,
+    )
+    return state
 
 
 def test_metadata_has_exact_canonical_bytes_and_order(tmp_path: Path) -> None:
@@ -62,6 +133,59 @@ def test_metadata_has_exact_canonical_bytes_and_order(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    ("error", "no_streams"),
+    [(38, True), (87, True), (5, False), (120, False), (1, False), (50, False)],
+)
+def test_windows_stream_first_call_error_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: int,
+    no_streams: bool,
+) -> None:
+    state = _install_fake_stream_api(monkeypatch, first_error=error)
+    if no_streams:
+        assert filesystem._enumerate_windows_streams(tmp_path) == ()
+    else:
+        with pytest.raises(StorageError, match="Windows error"):
+            filesystem._enumerate_windows_streams(tmp_path)
+    assert state["close_calls"] == 0
+
+
+@pytest.mark.parametrize(("error", "refused"), [(38, False), (5, True), (87, True)])
+def test_windows_stream_next_error_mapping_and_handle_close(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    error: int,
+    refused: bool,
+) -> None:
+    state = _install_fake_stream_api(monkeypatch, next_error=error)
+    if refused:
+        with pytest.raises(StorageError, match="Windows error"):
+            filesystem._enumerate_windows_streams(tmp_path)
+    else:
+        filesystem._enumerate_windows_streams(tmp_path)
+    assert state["close_calls"] == 1
+
+
+def test_windows_stream_next_exception_closes_handle_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _install_fake_stream_api(monkeypatch, next_raises=True)
+    with pytest.raises(StorageError, match="Cannot enumerate data streams"):
+        filesystem._enumerate_windows_streams(tmp_path)
+    assert state["close_calls"] == 1
+
+
+def test_windows_stream_close_failure_is_storage_error_and_closed_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state = _install_fake_stream_api(monkeypatch, close_error=5)
+    with pytest.raises(StorageError, match="Cannot close data-stream enumeration"):
+        filesystem._enumerate_windows_streams(tmp_path)
+    assert state["close_calls"] == 1
+
+
+@pytest.mark.parametrize(
     "raw",
     [
         b'{"a":1,"a":1}',
@@ -99,6 +223,90 @@ def test_invalid_or_noncanonical_json_is_rejected(raw: bytes) -> None:
 def test_unsafe_path_components_are_rejected(name: str) -> None:
     with pytest.raises(StorageError):
         safe_name(name)
+
+
+def test_safe_name_rejects_unencodable_utf8_component() -> None:
+    with pytest.raises(StorageError, match="valid UTF-8"):
+        safe_name("\ud800")
+
+
+def test_walk_files_rejects_unencodable_utf8_component(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    unsafe = tmp_path / "\ud800"
+
+    def unsafe_listing(path: Path) -> Iterator[Path]:
+        if path == tmp_path:
+            return iter([unsafe])
+        return path.iterdir()
+
+    monkeypatch.setattr("pathlib.Path.iterdir", unsafe_listing)
+    with pytest.raises(StorageError, match="valid UTF-8"):
+        walk_files(tmp_path, controlled_root=tmp_path)
+
+
+def test_checked_stat_rejects_fifo_as_nonregular_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entry = tmp_path / "fifo"
+    synthetic = os.stat_result((stat.S_IFIFO | 0o600, 1, 1, 1, 0, 0, 0, 0, 0, 0))
+    fifo = cast(
+        os.stat_result,
+        SimpleNamespace(
+            st_mode=synthetic.st_mode,
+            st_nlink=synthetic.st_nlink,
+            st_file_attributes=0,
+        ),
+    )
+    original_lstat = Path.lstat
+
+    def synthetic_lstat(path: Path) -> os.stat_result:
+        if path == entry:
+            return fifo
+        return original_lstat(path)
+
+    monkeypatch.setattr(Path, "lstat", synthetic_lstat)
+    with pytest.raises(StorageError, match="Unexpected filesystem entry"):
+        checked_stat(entry, directory=False)
+
+
+def test_checked_stat_rejects_directory_where_file_expected(tmp_path: Path) -> None:
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    with pytest.raises(StorageError, match="Unexpected filesystem entry"):
+        checked_stat(directory, directory=False)
+
+
+@pytest.mark.parametrize(
+    ("minimum", "estimate"),
+    [
+        (-1, None),
+        (True, None),
+        (1.5, None),
+        (5, 4),
+        (1, True),
+        (1, 1.5),
+    ],
+)
+def test_space_requirement_rejects_invalid_bounds(
+    tmp_path: Path, minimum: int, estimate: int | None
+) -> None:
+    with pytest.raises(ValueError, match="Invalid space requirement"):
+        SpaceRequirement(tmp_path, minimum, estimate)
+
+
+@pytest.mark.parametrize("field_index", [0, 1, 2])
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [("", ValueError), (None, ValueError), ("\ud800", UnicodeEncodeError)],
+)
+def test_result_identity_rejects_invalid_values_in_each_field(
+    field_index: int, value: object, error: type[Exception]
+) -> None:
+    values: list[object] = ["source", "configuration", "generation"]
+    values[field_index] = value
+    with pytest.raises(error):
+        ResultIdentity(*cast(tuple[str, str, str], tuple(values)))
 
 
 def test_walk_files_rejects_casefold_collisions(
@@ -277,6 +485,17 @@ def test_checked_directory_rejects_parent_components(tmp_path: Path, mode: str) 
         checked_directory(checked_path, root=boundary)
 
 
+def test_checked_directory_rejects_path_outside_controlled_root(
+    tmp_path: Path,
+) -> None:
+    controlled = tmp_path / "inside"
+    outside = tmp_path / "outside"
+    controlled.mkdir()
+    outside.mkdir()
+    with pytest.raises(StorageError, match="outside controlled root"):
+        checked_directory(outside, root=controlled)
+
+
 def test_preflight_rejects_parent_components_before_normalizing(tmp_path: Path) -> None:
     root = tmp_path / "root"
     (root / "staging").mkdir(parents=True)
@@ -317,3 +536,71 @@ def test_preflight_exact_space_boundaries(
     assert assessment.available == available
     assert assessment.minimum == minimum
     assert assessment.uncertain is uncertain
+
+
+def test_preflight_uses_lowest_free_space_report_on_same_device(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    free = {first: 20, second: 8}
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.checked_directory",
+        lambda path, *, root=None: SimpleNamespace(st_dev=7),
+    )
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=free[path]),
+    )
+    (assessment,) = preflight(
+        [
+            SpaceRequirement(first, 2, 3),
+            SpaceRequirement(second, 3, 4),
+        ]
+    )
+    assert assessment.available == 8
+    assert assessment.minimum == 5
+    assert assessment.estimate == 7
+
+
+def test_preflight_groups_and_checks_each_device_independently(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "device-one-a"
+    second = tmp_path / "device-one-b"
+    third = tmp_path / "device-two"
+    first.mkdir()
+    second.mkdir()
+    third.mkdir()
+    devices = {first: 11, second: 11, third: 22}
+    free = {first: 8, second: 12, third: 7}
+
+    def checked_device(path: Path, *, root: Path | None = None) -> SimpleNamespace:
+        return SimpleNamespace(st_dev=devices[path])
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.checked_directory", checked_device
+    )
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=free[path]),
+    )
+    assessments = preflight(
+        [
+            SpaceRequirement(first, 2, 3),
+            SpaceRequirement(second, 3, 4),
+            SpaceRequirement(third, 6, 7),
+        ]
+    )
+    assert [
+        (
+            assessment.directory,
+            assessment.available,
+            assessment.minimum,
+            assessment.estimate,
+        )
+        for assessment in assessments
+    ] == [(first, 8, 5, 7), (third, 7, 6, 7)]
