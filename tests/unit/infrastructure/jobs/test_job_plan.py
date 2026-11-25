@@ -21,7 +21,10 @@ def test_plan_is_serializable_and_preserves_resolved_choices() -> None:
     assert restored == plan
 
 
-@pytest.mark.parametrize("resources", [(), ("cpu", "cpu"), ("",)])
+@pytest.mark.parametrize(
+    "resources",
+    [(), ("cpu", "cpu"), ("",), ("cpu", ""), ("", "cpu")],
+)
 def test_reject_invalid_resource_declarations(resources: tuple[str, ...]) -> None:
     with pytest.raises(ValueError):
         JobPlan("fake", "cpu", resources, "{}")

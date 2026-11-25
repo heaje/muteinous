@@ -6,7 +6,8 @@ import json
 import threading
 from collections import Counter
 from collections.abc import Callable
-from threading import Event, Thread
+from queue import Queue
+from threading import Condition, Event, Thread, current_thread
 
 import pytest
 
@@ -292,6 +293,94 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
         )
     finally:
         owner.release.set()
+        queue.close()
+
+
+def test_staggered_busy_plan_deadlines_wake_for_the_earliest(
+    monkeypatch: pytest.MonkeyPatch,
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    calls: Counter[str] = Counter()
+    first_plan = plan("cpu", source="first")
+    second_plan = plan("cpu", source="second")
+    first_validation_entered, release_first_validation = Event(), Event()
+    second_validation_entered, release_second_validation = Event(), Event()
+    first_revalidated, second_revalidated = Event(), Event()
+    capture_waits = Event()
+    selected_delays: Queue[float | None] = Queue()
+
+    class CapturingCondition(Condition):
+        def wait(self, timeout: float | None = None) -> bool:
+            if current_thread().name == "muteinous-jobs" and capture_waits.is_set():
+                selected_delays.put(timeout)
+                # The test advances the fake clock and sends an unrelated queue
+                # wake explicitly; do not let a real-time timeout order events.
+                return super().wait(timeout=None)
+            return super().wait(timeout=timeout)
+
+    monkeypatch.setattr(queue_module, "Condition", CapturingCondition)
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        count = calls[submitted.input_json]
+        if submitted == first_plan and count == 1:
+            first_validation_entered.set()
+            assert release_first_validation.wait(5)
+        elif submitted == second_plan and count == 1:
+            second_validation_entered.set()
+            assert release_second_validation.wait(5)
+        elif submitted == first_plan and count == 2:
+            first_revalidated.set()
+        elif submitted == second_plan and count == 2:
+            second_revalidated.set()
+        return None
+
+    queue = JobQueue(
+        {"cpu": 1, "other": 1},
+        validate,
+        revalidate_interval=1.0,
+        clock=clock,
+    )
+    owner = workers()
+    first_worker, second_worker = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        queue.submit(first_plan, first_worker)
+        queue.submit(second_plan, second_worker)
+
+        assert first_validation_entered.wait(5)
+        release_first_validation.set()
+        assert second_validation_entered.wait(5)
+        clock.now = 0.5
+        capture_waits.set()
+        release_second_validation.set()
+
+        # Deadlines are t=1.0 and t=1.5; at t=0.5 the selected
+        # condition timeout must target the first one.
+        assert selected_delays.get(timeout=5) == 0.5
+        assert calls[first_plan.input_json] == calls[second_plan.input_json] == 1
+
+        clock.now = 1.0
+        queue.set_capacity("other", 2)
+        assert first_revalidated.wait(5)
+        assert selected_delays.get(timeout=5) == 0.5
+        assert calls[first_plan.input_json] == 2
+        assert calls[second_plan.input_json] == 1
+
+        clock.now = 1.5
+        queue.set_capacity("other", 3)
+        assert second_revalidated.wait(5)
+        assert selected_delays.get(timeout=5) == 0.5
+        assert calls[first_plan.input_json] == 2
+        assert calls[second_plan.input_json] == 2
+    finally:
+        release_first_validation.set()
+        release_second_validation.set()
+        owner.release.set()
+        first_worker.release.set()
+        second_worker.release.set()
         queue.close()
 
 

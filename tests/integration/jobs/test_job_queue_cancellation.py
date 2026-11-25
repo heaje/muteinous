@@ -10,6 +10,7 @@ from weakref import ref
 
 import pytest
 
+import muteinous.infrastructure.jobs.queue as queue_module
 from muteinous.infrastructure.jobs.queue import (
     JobContext,
     JobPlan,
@@ -260,6 +261,70 @@ def test_close_waits_for_physical_worker_after_cancellation() -> None:
             if thread.ident is not None:
                 thread.join(5)
                 assert not thread.is_alive()
+
+
+def test_close_waits_for_blocked_validator_and_joins_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    validator_entered, release_validator = Event(), Event()
+    close_started, close_returned = Event(), Event()
+    dispatcher_threads: list[Thread] = []
+    worker_calls = 0
+
+    class CaptureDispatcherThread(Thread):
+        def start(self) -> None:
+            if self.name == "muteinous-jobs":
+                dispatcher_threads.append(self)
+            super().start()
+
+    monkeypatch.setattr(queue_module, "Thread", CaptureDispatcherThread)
+
+    def validate(submitted: JobPlan) -> str | None:
+        validator_entered.set()
+        assert release_validator.wait(10)
+        return None
+
+    queue = JobQueue({"cpu": 1}, validate)
+
+    def worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal worker_calls
+        worker_calls += 1
+        return submitted.input_json
+
+    def close_queue() -> None:
+        close_started.set()
+        queue.close()
+        close_returned.set()
+
+    closer = Thread(target=close_queue, name="job-queue-close-validator-test")
+    try:
+        queue.submit(plan("cpu"), worker)
+        assert validator_entered.wait(5)
+        closer.start()
+        assert close_started.wait(5)
+
+        # A closed queue cannot return from close while its dispatcher is
+        # blocked in this validator; this is only a negative assertion window.
+        assert not close_returned.wait(0.05)
+        assert closer.is_alive()
+        assert worker_calls == 0
+
+        release_validator.set()
+        assert close_returned.wait(5)
+        closer.join(5)
+        assert not closer.is_alive()
+        assert len(dispatcher_threads) == 1
+        assert not dispatcher_threads[0].is_alive()
+        assert worker_calls == 0
+    finally:
+        release_validator.set()
+        if closer.ident is None:
+            queue.close()
+        else:
+            closer.join(5)
+        for thread in dispatcher_threads:
+            if thread.ident is not None:
+                thread.join(5)
 
 
 def test_cancellation_during_dispatch_validation_never_invokes_worker() -> None:

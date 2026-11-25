@@ -785,3 +785,65 @@ def test_worker_and_validator_failure_details_are_bounded() -> None:
         assert not validator_worker_called.is_set()
     finally:
         queue.close()
+
+
+@pytest.mark.parametrize("target_length", [4096, 4097], ids=["at-limit", "over-limit"])
+def test_worker_and_validator_details_preserve_exact_truncation_boundary(
+    target_length: int,
+) -> None:
+    worker_prefix = "RuntimeError: "
+    worker_message = "w" * (target_length - len(worker_prefix))
+    validator_reason = "v" * target_length
+    validator_worker_called = Event()
+
+    def validate(submitted: JobPlan) -> str | None:
+        if submitted.input_json == '{"source":"validator-boundary"}':
+            return validator_reason
+        return None
+
+    def worker_failure(submitted: JobPlan, context: JobContext) -> object:
+        raise RuntimeError(worker_message)
+
+    def validator_worker(submitted: JobPlan, context: JobContext) -> object:
+        validator_worker_called.set()
+        return submitted.input_json
+
+    queue = JobQueue({"worker": 1, "validator": 1}, validate)
+    try:
+        worker_job = queue.submit(
+            plan("worker", source="worker-boundary"), worker_failure
+        )
+        validator_job = queue.submit(
+            plan("validator", source="validator-boundary"), validator_worker
+        )
+        assert queue.drain(5)
+
+        expected_worker_detail = f"{worker_prefix}{worker_message}"
+        expected_validator_detail = validator_reason
+        if target_length > queue_module._MAX_DETAIL:
+            suffix = queue_module._DETAIL_TRUNCATION_SUFFIX
+            expected_worker_detail = (
+                expected_worker_detail[: queue_module._MAX_DETAIL - len(suffix)]
+                + suffix
+            )
+            expected_validator_detail = (
+                expected_validator_detail[: queue_module._MAX_DETAIL - len(suffix)]
+                + suffix
+            )
+
+        worker_detail = queue.snapshot(worker_job).detail
+        validator_detail = queue.snapshot(validator_job).detail
+        assert queue.snapshot(worker_job).state == JobState.FAILED
+        assert queue.snapshot(validator_job).state == JobState.NEEDS_ATTENTION
+        assert worker_detail == expected_worker_detail
+        assert validator_detail == expected_validator_detail
+        assert len(worker_detail) == len(validator_detail) == queue_module._MAX_DETAIL
+        assert worker_detail.endswith(queue_module._DETAIL_TRUNCATION_SUFFIX) is (
+            target_length > queue_module._MAX_DETAIL
+        )
+        assert validator_detail.endswith(queue_module._DETAIL_TRUNCATION_SUFFIX) is (
+            target_length > queue_module._MAX_DETAIL
+        )
+        assert not validator_worker_called.is_set()
+    finally:
+        queue.close()
