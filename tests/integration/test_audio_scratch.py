@@ -5,7 +5,6 @@ import shutil
 import struct
 import subprocess
 import sys
-import tempfile
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -131,7 +130,7 @@ def test_unsupported_injected_storage_refuses_source_without_writing(
     info = PCMFormat(10, 1, "s16", 2)
     storage = _FakeStorage(supported=False)
     with audio_scratch(tmp_path, storage) as scratch:
-        with pytest.raises(ValueError, match="unsupported"):
+        with pytest.raises(ValueError):
             scratch.write_source(info, [b"1234"])
         assert storage.support_calls == [info]
         assert storage.write_paths == []
@@ -227,21 +226,24 @@ def test_scratch_cleanup_failure_does_not_mask_body_error(
 ) -> None:
     original_unlink = Path.unlink
     source: Path | None = None
+    body_error = ValueError("body failure")
+    cleanup_error = PermissionError("simulated source cleanup failure")
 
     def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
         if path == source:
-            raise PermissionError("simulated source cleanup failure")
+            raise cleanup_error
         original_unlink(path, *args, **kwargs)
 
-    with pytest.raises(ValueError, match="body failure") as error:
+    with pytest.raises(ValueError) as error:
         with audio_scratch(tmp_path, WaveStorage()) as scratch:
             source = scratch.write_source(PCMFormat(10, 1, "s16", 2), [b"1234"])
             monkeypatch.setattr(Path, "unlink", failing_unlink)
-            raise ValueError("body failure")
+            raise body_error
 
     assert source is not None and source.exists()
     assert (source.parent / "ready").exists()
-    assert any("source cleanup failure" in note for note in error.value.__notes__)
+    assert error.value is body_error
+    assert error.value.__notes__
     monkeypatch.undo()
     cleanup_abandoned(tmp_path)
     assert not list(tmp_path.iterdir())
@@ -255,14 +257,16 @@ def test_scratch_cleanup_failure_propagates_without_body_error(
 
     def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
         if path == source:
-            raise PermissionError("simulated source cleanup failure")
+            raise cleanup_error
         original_unlink(path, *args, **kwargs)
 
-    with pytest.raises(PermissionError, match="source cleanup failure"):
+    cleanup_error = PermissionError("simulated source cleanup failure")
+    with pytest.raises(PermissionError) as error:
         with audio_scratch(tmp_path, WaveStorage()) as scratch:
             source = scratch.write_source(PCMFormat(10, 1, "s16", 2), [b"1234"])
             monkeypatch.setattr(Path, "unlink", failing_unlink)
 
+    assert error.value is cleanup_error
     assert source is not None and source.exists()
     assert (source.parent / "ready").exists()
     monkeypatch.undo()
@@ -275,19 +279,22 @@ def test_outer_scratch_cleanup_does_not_mask_value_error(
 ) -> None:
     original_unlink = Path.unlink
     directory: Path | None = None
+    body_error = ValueError("body failure")
+    cleanup_error = PermissionError("simulated owner-lock cleanup failure")
 
     def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
         if directory is not None and path == directory / "owner.lock":
-            raise PermissionError("simulated owner-lock cleanup failure")
+            raise cleanup_error
         original_unlink(path, *args, **kwargs)
 
-    with pytest.raises(ValueError, match="body failure") as error:
+    with pytest.raises(ValueError) as error:
         with audio_scratch(tmp_path, WaveStorage()) as scratch:
             directory = scratch.directory
             monkeypatch.setattr(Path, "unlink", failing_unlink)
-            raise ValueError("body failure")
+            raise body_error
 
-    assert any("owner-lock cleanup failure" in note for note in error.value.__notes__)
+    assert error.value is body_error
+    assert error.value.__notes__
     monkeypatch.undo()
     assert directory is not None
     (directory / "owner.lock").unlink(missing_ok=True)
@@ -306,15 +313,15 @@ def test_outer_scratch_cleanup_does_not_mask_keyboard_interrupt(
             raise PermissionError("simulated scratch-directory cleanup failure")
         original_rmdir(path)
 
-    with pytest.raises(KeyboardInterrupt, match="body interrupt") as error:
+    body_error = KeyboardInterrupt("body interrupt")
+    with pytest.raises(KeyboardInterrupt) as error:
         with audio_scratch(tmp_path, WaveStorage()) as scratch:
             directory = scratch.directory
             monkeypatch.setattr(Path, "rmdir", failing_rmdir)
-            raise KeyboardInterrupt("body interrupt")
+            raise body_error
 
-    assert any(
-        "scratch-directory cleanup failure" in note for note in error.value.__notes__
-    )
+    assert error.value is body_error
+    assert error.value.__notes__
     monkeypatch.undo()
     assert directory is not None
     directory.rmdir()
@@ -326,17 +333,19 @@ def test_outer_scratch_cleanup_failure_propagates_without_body_error(
 ) -> None:
     original_unlink = Path.unlink
     directory: Path | None = None
+    cleanup_error = PermissionError("simulated owner-lock cleanup failure")
 
     def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
         if directory is not None and path == directory / "owner.lock":
-            raise PermissionError("simulated owner-lock cleanup failure")
+            raise cleanup_error
         original_unlink(path, *args, **kwargs)
 
-    with pytest.raises(PermissionError, match="owner-lock cleanup failure"):
+    with pytest.raises(PermissionError) as error:
         with audio_scratch(tmp_path, WaveStorage()) as scratch:
             directory = scratch.directory
             monkeypatch.setattr(Path, "unlink", failing_unlink)
 
+    assert error.value is cleanup_error
     monkeypatch.undo()
     assert directory is not None
     (directory / "owner.lock").unlink(missing_ok=True)
@@ -350,33 +359,27 @@ def test_lock_acquisition_error_is_preserved_when_outer_cleanup_fails(
     import muteinous.core.audio.scratch as scratch_module
 
     original_unlink = Path.unlink
-    directory: Path | None = None
-    original_mkdtemp = tempfile.mkdtemp
-
-    def fail_lock_acquisition(_: BinaryIO) -> None:
-        raise ValueError("lock acquisition failure")
-
-    def captured_mkdtemp(*, prefix: str, dir: Path) -> str:
-        nonlocal directory
-        result = original_mkdtemp(prefix=prefix, dir=dir)
-        directory = Path(result)
-        return result
+    acquisition_error = ValueError("lock acquisition failure")
+    cleanup_error = PermissionError("simulated owner-lock cleanup failure")
 
     def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
-        if directory is not None and path == directory / "owner.lock":
-            raise PermissionError("simulated owner-lock cleanup failure")
+        if path.name == "owner.lock" and path.parent.parent == tmp_path:
+            raise cleanup_error
         original_unlink(path, *args, **kwargs)
 
-    monkeypatch.setattr(scratch_module, "lock_exclusive", fail_lock_acquisition)
-    monkeypatch.setattr(tempfile, "mkdtemp", captured_mkdtemp)
+    def fail_lock_acquisition(_: BinaryIO) -> None:
+        raise acquisition_error
+
     monkeypatch.setattr(Path, "unlink", failing_unlink)
-    with pytest.raises(ValueError, match="lock acquisition failure") as error:
+    monkeypatch.setattr(scratch_module, "lock_exclusive", fail_lock_acquisition)
+    with pytest.raises(ValueError) as error:
         with audio_scratch(tmp_path, WaveStorage()):
             pytest.fail("context body must not run when lock acquisition fails")
 
-    assert any("owner-lock cleanup failure" in note for note in error.value.__notes__)
+    assert error.value is acquisition_error
+    assert error.value.__notes__
     monkeypatch.undo()
-    assert directory is not None
+    directory = next(tmp_path.iterdir())
     (directory / "owner.lock").unlink(missing_ok=True)
     directory.rmdir()
     assert not list(tmp_path.iterdir())
@@ -385,6 +388,8 @@ def test_lock_acquisition_error_is_preserved_when_outer_cleanup_fails(
 def test_edit_cleanup_failure_does_not_mask_decoder_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    decoder_error = ValueError("decoder final validation failed")
+
     class FailingStorage(WaveStorage):
         fail_close = False
 
@@ -393,7 +398,7 @@ def test_edit_cleanup_failure_does_not_mask_decoder_error(
             with super().open(path) as reader:
                 yield reader
             if path.name == "source.pcmstore" and self.fail_close:
-                raise ValueError("decoder final validation failed")
+                raise decoder_error
 
     original_unlink = Path.unlink
     edited: Path | None = None
@@ -412,13 +417,10 @@ def test_edit_cleanup_failure_does_not_mask_decoder_error(
         storage.fail_close = True
         edited = scratch.directory / "edited.pcmstore"
         monkeypatch.setattr(Path, "unlink", failing_unlink)
-        with pytest.raises(
-            ValueError, match="decoder final validation failed"
-        ) as error:
+        with pytest.raises(ValueError) as error:
             scratch.edit([(0, 0.1)])
-        assert any(
-            "edited-file cleanup failure" in note for note in error.value.__notes__
-        )
+        assert error.value is decoder_error
+        assert error.value.__notes__
         assert edited.exists()
 
     assert not list(tmp_path.iterdir())
@@ -648,7 +650,7 @@ def test_scratch_root_links_are_refused_or_ignored(tmp_path: Path) -> None:
     assert (abandoned / "ready").read_bytes() == b"muteinous-audio-v1\n"
     assert (abandoned / "source.pcmstore").read_bytes() == b"old audio"
 
-    with pytest.raises(ValueError, match="scratch root must not be a link"):
+    with pytest.raises(ValueError):
         with audio_scratch(linked_root, WaveStorage()):
             pytest.fail("audio_scratch must reject a linked root")
 

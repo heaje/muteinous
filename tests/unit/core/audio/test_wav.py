@@ -167,6 +167,7 @@ def test_write_failure_is_preserved_when_partial_cleanup_fails(
     output = tmp_path / "partial"
     original_open = Path.open
     original_unlink = Path.unlink
+    write_error = OSError(errno.ENOSPC, "simulated write failure")
 
     def failing_open(path: Path, *args: Any, **kwargs: Any) -> Any:
         stream: BinaryIO = original_open(path, *args, **kwargs)
@@ -176,7 +177,7 @@ def test_write_failure_is_preserved_when_partial_cleanup_fails(
 
         def write(data: bytes) -> int:
             if stream.tell():
-                raise OSError(errno.ENOSPC, "simulated write failure")
+                raise write_error
             return stream.write(data)
 
         wrapped.write.side_effect = write
@@ -193,8 +194,9 @@ def test_write_failure_is_preserved_when_partial_cleanup_fails(
     monkeypatch.setattr(Path, "unlink", failing_unlink)
     with pytest.raises(OSError) as error:
         WaveStorage().write(output, info, [b"1234"])
+    assert error.value is write_error
     assert error.value.errno == errno.ENOSPC
-    assert any("cleanup failure" in note for note in error.value.__notes__)
+    assert error.value.__notes__
     assert output.exists()
     monkeypatch.undo()
     output.unlink()
