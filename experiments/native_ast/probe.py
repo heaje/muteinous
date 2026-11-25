@@ -91,7 +91,7 @@ def _probe_wrapper_limits() -> None:
         )
     if any(size > tools.output_tail_bytes for _, size in tools.tail_observations):
         raise AssertionError("wrapper read more than its configured output tail")
-    print("PASS: wrapper bounds subprocess stderr capture and diagnostics")
+    print("PASS: wrapper reads bounded stderr tails and emits bounded diagnostics")
 
     if os.name != "nt":
         print("NOTE: Windows process-tree timeout control was not run on this host")
@@ -145,7 +145,10 @@ def _probe_wrapper_limits() -> None:
             for pid in pids:
                 if _windows_pid_exists(pid):
                     _windows_kill_tree(pid)
-    print("PASS: wrapper timeout terminated the Windows subprocess tree")
+    print(
+        "PASS: best-effort Windows taskkill timeout control terminated this "
+        "test process tree"
+    )
 
 
 def _pcm_fixture() -> bytes:

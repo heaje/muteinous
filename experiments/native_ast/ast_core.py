@@ -256,6 +256,8 @@ def validate_fixture(
     def refuse(reason: str) -> None:
         raise NativeValidationError(asset_id, reason)
 
+    if info.frames <= 0:
+        refuse("zero-frame AST is unsupported")
     if len(expected_pcm) != info.frames * info.frame_bytes:
         refuse("invalid expected PCM length")
     parsed = parse_ast(native, asset_id=asset_id, info=info)

@@ -1,4 +1,4 @@
-"""Trusted, bounded subprocess wrapper used only by manual AST experiments."""
+"""Trusted FFmpeg wrapper with bounded tail reads and diagnostics for manual AST tests."""
 
 import os
 import shutil
