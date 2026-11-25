@@ -121,7 +121,9 @@ print(repr(report.removed))
         )
         assert abandoned.name in child.stdout
         assert not abandoned.exists()
+        assert not (store.root / "stage-leases" / f"{abandoned.name}.lock").exists()
         assert (active / "payload" / "payload.bin").read_bytes() == b"live"
+        assert (store.root / "stage-leases" / f"{active.name}.lock").is_file()
         report = store.cleanup_abandoned()
         assert {name for name, _ in report.retained} == {
             active.name,
@@ -361,6 +363,7 @@ def test_cleanup_accepts_valid_marker_with_process_id_one(store: ResultStore) ->
 
     assert directory.name in report.removed
     assert not directory.exists()
+    assert not (store.root / "stage-leases" / f"{directory.name}.lock").exists()
 
 
 @pytest.mark.portable
@@ -481,7 +484,7 @@ def test_store_root_under_linked_parent_works_and_cleans_up(
         assert (path / "payload.bin").read_bytes() == b"root-under-link"
     report = store.cleanup_abandoned()
     assert stage_directory.name in report.removed
-    assert (root / "stage-leases" / f"{stage_directory.name}.lock").is_file()
+    assert not (root / "stage-leases" / f"{stage_directory.name}.lock").exists()
 
 
 @pytest.mark.portable

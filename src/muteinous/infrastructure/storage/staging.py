@@ -187,6 +187,12 @@ class Staging:
                         controlled_root=self.controlled_root,
                     )
                     shutil.rmtree(directory)
+                try:
+                    lease.unlink()
+                except OSError:
+                    # The stage is gone; lease cleanup is best-effort and must
+                    # happen only after the OS-held handle has been closed.
+                    pass
                 removed.append(directory.name)
             except (OSError, StorageError) as exc:
                 retained.append((directory.name, str(exc)))
