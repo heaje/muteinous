@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
 import os
 import re
 import stat
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -115,6 +117,95 @@ def checked_directory(path: Path, *, root: Path | None = None) -> os.stat_result
     return info
 
 
+class _Win32FindStreamData(ctypes.Structure):
+    _fields_ = [
+        ("StreamSize", ctypes.c_longlong),
+        ("cStreamName", ctypes.c_wchar * 296),
+    ]
+
+
+def _extended_windows_path(path: Path) -> str:
+    raw = os.fspath(path)
+    if raw.startswith("\\\\?\\"):
+        return raw
+    value = os.path.abspath(raw)
+    if value.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + value[2:]
+    return "\\\\?\\" + value
+
+
+def _enumerate_windows_streams(path: Path) -> tuple[str, ...]:
+    """Enumerate NTFS streams; fail closed except for known unsupported filesystems."""
+    if sys.platform != "win32":
+        return ()
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        find_first = getattr(kernel32, "FindFirstStreamW")
+        find_next = getattr(kernel32, "FindNextStreamW")
+        find_close = getattr(kernel32, "FindClose")
+    except (AttributeError, OSError) as exc:
+        raise StorageError(f"Cannot enumerate data streams: {path}") from exc
+
+    find_first.argtypes = [
+        ctypes.c_wchar_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_uint32,
+    ]
+    find_first.restype = ctypes.c_void_p
+    find_next.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Win32FindStreamData)]
+    find_next.restype = ctypes.c_int
+    find_close.argtypes = [ctypes.c_void_p]
+    find_close.restype = ctypes.c_int
+
+    data = _Win32FindStreamData()
+    invalid_handle = ctypes.c_void_p(-1).value
+    ctypes.set_last_error(0)
+    handle = find_first(_extended_windows_path(path), 0, ctypes.byref(data), 0)
+    if handle is None or handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error in {38, 1, 50, 87, 120}:
+            return ()
+        raise StorageError(
+            f"Cannot enumerate data streams for {path} (Windows error {error})"
+        )
+
+    try:
+        streams = [str(data.cStreamName)]
+        while True:
+            ctypes.set_last_error(0)
+            if not find_next(handle, ctypes.byref(data)):
+                error = ctypes.get_last_error()
+                if error == 38:
+                    break
+                raise StorageError(
+                    f"Cannot enumerate data streams for {path} (Windows error {error})"
+                )
+            streams.append(str(data.cStreamName))
+        return tuple(streams)
+    finally:
+        ctypes.set_last_error(0)
+        if not find_close(handle):
+            error = ctypes.get_last_error()
+            raise StorageError(
+                f"Cannot close data-stream enumeration for {path} "
+                f"(Windows error {error})"
+            )
+
+
+def _enumerate_streams(path: Path) -> tuple[str, ...]:
+    """Return stream names on Windows; other platforms have no NTFS stream API."""
+    if sys.platform == "win32":
+        return _enumerate_windows_streams(path)
+    return ()
+
+
+def _reject_alternate_streams(path: Path) -> None:
+    for stream in _enumerate_streams(path):
+        if stream.casefold() != "::$data":
+            raise StorageError(f"Unexpected alternate data stream on {path}: {stream}")
+
+
 def read_regular(path: Path, *, root: Path | None = None) -> bytes:
     checked_directory(path.parent, root=root)
     checked_stat(path, directory=False)
@@ -133,6 +224,7 @@ def walk_files(
     def visit(directory: Path) -> None:
         if checked_stat(directory, directory=True).st_dev != device:
             raise StorageError(f"Unexpected filesystem boundary: {directory}")
+        _reject_alternate_streams(directory)
         entries = sorted(directory.iterdir())
         if not entries and not allow_empty:
             raise StorageError(f"Unexpected empty directory: {directory}")
@@ -147,8 +239,10 @@ def walk_files(
             if stat.S_ISDIR(info.st_mode):
                 visit(path)
             else:
-                if checked_stat(path, directory=False).st_dev != device:
+                info = checked_stat(path, directory=False)
+                if info.st_dev != device:
                     raise StorageError(f"Unexpected filesystem boundary: {path}")
+                _reject_alternate_streams(path)
                 files.append(path)
 
     visit(root)

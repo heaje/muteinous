@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from muteinous.infrastructure.storage._filesystem import (
+    InsufficientSpace,
     StorageError,
     canonical_json,
     checked_directory,
@@ -134,6 +135,47 @@ def test_walk_files_rejects_unsafe_inventory_names(
         walk_files(tmp_path, controlled_root=tmp_path)
 
 
+@pytest.mark.parametrize("entry_type", ["file", "directory"])
+def test_walk_files_rejects_alternate_streams(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry_type: str
+) -> None:
+    if entry_type == "file":
+        target = tmp_path / "payload.bin"
+        target.write_bytes(b"payload")
+    else:
+        target = tmp_path / "nested"
+        target.mkdir()
+        (target / "payload.bin").write_bytes(b"payload")
+
+    def streams(path: Path) -> tuple[str, ...]:
+        if path == target:
+            return ("::$DATA", ":review:$DATA")
+        return ("::$DATA",)
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage._filesystem._enumerate_streams",
+        streams,
+        raising=False,
+    )
+    with pytest.raises(StorageError, match="alternate data stream"):
+        walk_files(tmp_path, controlled_root=tmp_path)
+
+
+def test_walk_files_fails_closed_on_stream_enumeration_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_enumeration(path: Path) -> tuple[str, ...]:
+        raise StorageError(f"Cannot enumerate streams: {path}")
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage._filesystem._enumerate_streams",
+        fail_enumeration,
+        raising=False,
+    )
+    with pytest.raises(StorageError, match="Cannot enumerate streams"):
+        walk_files(tmp_path, allow_empty=True, controlled_root=tmp_path)
+
+
 def test_metadata_rejects_case_variant_integrity_metadata(tmp_path: Path) -> None:
     (tmp_path / "Integrity.JSON").write_bytes(b"producer metadata")
     with pytest.raises(StorageError, match="Ambiguous reserved"):
@@ -241,3 +283,37 @@ def test_preflight_rejects_parent_components_before_normalizing(tmp_path: Path) 
     traversing_directory = root / "staging" / ".." / "staging"
     with pytest.raises(StorageError, match="parent|traversal"):
         preflight([SpaceRequirement(traversing_directory, 0)], root=root)
+
+
+@pytest.mark.parametrize(
+    ("available", "minimum", "estimate", "shortage", "uncertain"),
+    [
+        (10, 10, 10, False, False),
+        (9, 10, None, True, None),
+        (10, 1, 10, False, False),
+        (10, 1, 11, False, True),
+    ],
+)
+def test_preflight_exact_space_boundaries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    available: int,
+    minimum: int,
+    estimate: int | None,
+    shortage: bool,
+    uncertain: bool | None,
+) -> None:
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=available),
+    )
+    requirement = SpaceRequirement(tmp_path, minimum, estimate)
+    if shortage:
+        with pytest.raises(InsufficientSpace):
+            preflight([requirement])
+        return
+
+    (assessment,) = preflight([requirement])
+    assert assessment.available == available
+    assert assessment.minimum == minimum
+    assert assessment.uncertain is uncertain

@@ -5,9 +5,11 @@ from __future__ import annotations
 import errno
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -17,6 +19,7 @@ from typing import BinaryIO
 
 import pytest
 
+import muteinous.infrastructure.storage.bundles as storage_bundles
 from muteinous.infrastructure.storage._filesystem import (
     InsufficientSpace,
     StorageError,
@@ -228,6 +231,68 @@ def test_stale_producer_and_final_generation_change_cannot_win(
 
 
 @pytest.mark.portable
+def test_final_expected_selection_recheck_refuses_superseded_publisher(
+    store: ResultStore,
+) -> None:
+    previous = publish(store, b"previous")
+    validating = threading.Event()
+    continue_validation = threading.Event()
+
+    def publish_slowly() -> Selection:
+        calls = 0
+
+        def slow_validator(path: Path) -> None:
+            nonlocal calls
+            calls += 1
+            validate_domain(path)
+            if calls == 2:
+                validating.set()
+                if not continue_validation.wait(5):
+                    raise TimeoutError("Test did not resume post-rename validation")
+
+        with store.stage("publisher-one") as stage:
+            (stage.path / "payload.bin").write_bytes(b"publisher-one")
+            return store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=slow_validator,
+            )
+
+    def publish_second() -> Selection:
+        with store.stage("publisher-two") as stage:
+            (stage.path / "payload.bin").write_bytes(b"publisher-two")
+            return store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first_future = executor.submit(publish_slowly)
+        assert validating.wait(5), "First publisher did not reach committed validation"
+        second = publish_second()
+        try:
+            continue_validation.set()
+            with pytest.raises(StorageError, match="superseded"):
+                first_future.result(timeout=5)
+        finally:
+            continue_validation.set()
+
+    assert store.selection("scan") == second
+    assert read(store) == b"publisher-two"
+    assert len(list((store.root / "bundles").iterdir())) == 3
+    assert (store.root / "bundles" / previous.bundle / "payload.bin").read_bytes() == (
+        b"previous"
+    )
+
+
+@pytest.mark.portable
 @pytest.mark.parametrize("damage", ["missing", "extra", "altered", "empty-directory"])
 def test_reuse_rehashes_and_refuses_damaged_exact_bundle(
     store: ResultStore, damage: str
@@ -306,6 +371,97 @@ def test_current_manifest_is_authoritative_without_fallback(
         )
     with pytest.raises(StorageError):
         read(ResultStore(store.root, atomic_rename_supported=True))
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("damage", ["boolean-schema", "unknown-field"])
+@pytest.mark.parametrize("operation", ["selection", "open", "publish"])
+def test_current_manifest_requires_exact_schema_for_all_operations(
+    store: ResultStore, damage: str, operation: str
+) -> None:
+    selected = publish(store)
+    manifest_path = store.root / "current" / "scan.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    if damage == "boolean-schema":
+        manifest["schema"] = True
+    else:
+        manifest["unexpected"] = "not allowed"
+    manifest_path.write_bytes(canonical_json(manifest))
+
+    if operation == "selection":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            store.selection("scan")
+    elif operation == "open":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
+                pytest.fail("Invalid current manifest was exposed")
+    else:
+        with store.stage("invalid-current-manifest") as stage:
+            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
+            with pytest.raises(StorageError, match="Invalid current result manifest"):
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=selected,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+
+
+@pytest.mark.portable
+def test_missing_selected_bundle_refuses_open_without_fallback(
+    store: ResultStore,
+) -> None:
+    older = publish(store, b"older")
+    selected = publish(store, b"selected")
+    shutil.rmtree(store.root / "bundles" / selected.bundle)
+
+    with pytest.raises(StorageError, match="Committed result cannot be verified"):
+        read(store)
+    assert store.selection("scan") == selected
+    assert (
+        store.root / "bundles" / older.bundle / "payload.bin"
+    ).read_bytes() == b"older"
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize(
+    ("result", "error"),
+    [
+        ("Uppercase", ValueError),
+        ("x" * 65, ValueError),
+        ("bad/name", ValueError),
+        ("con", StorageError),
+        ("", ValueError),
+    ],
+)
+@pytest.mark.parametrize("operation", ["selection", "publish", "open"])
+def test_invalid_logical_result_keys_are_refused_by_public_operations(
+    store: ResultStore,
+    result: str,
+    error: type[Exception],
+    operation: str,
+) -> None:
+    if operation == "selection":
+        with pytest.raises(error):
+            store.selection(result)
+    elif operation == "open":
+        with pytest.raises(error):
+            with store.open_current(result, IDENTITY, validate_domain=validate_domain):
+                pytest.fail("Invalid logical result key was exposed")
+    else:
+        with store.stage("invalid-result-key") as stage:
+            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
+            with pytest.raises(error):
+                store.publish(
+                    stage,
+                    result,
+                    IDENTITY,
+                    expected=None,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
 
 
 @pytest.mark.parametrize(
@@ -537,6 +693,44 @@ def test_selection_guard_waits_for_brief_contention(
         holder.join(timeout=5)
     assert not holder.is_alive()
     assert not holder_errors
+
+
+@pytest.mark.portable
+def test_selection_guard_wait_is_bounded_by_configured_timeout(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert storage_bundles.SELECTION_GUARD_TIMEOUT_SECONDS <= 5.0
+    timeout = 0.3
+    monkeypatch.setattr(storage_bundles, "SELECTION_GUARD_TIMEOUT_SECONDS", timeout)
+    acquired = threading.Event()
+    release = threading.Event()
+    holder_errors: list[BaseException] = []
+
+    def hold_guard() -> None:
+        try:
+            with try_lock(store.root / "selection.lock") as held:
+                if held is None:
+                    raise AssertionError("Could not acquire test selection guard")
+                acquired.set()
+                if not release.wait(3):
+                    raise TimeoutError("Test did not release bounded guard holder")
+        except BaseException as exc:
+            holder_errors.append(exc)
+
+    holder = threading.Thread(target=hold_guard)
+    holder.start()
+    try:
+        assert acquired.wait(5), "Test selection guard was not acquired"
+        started = time.monotonic()
+        with pytest.raises(StorageError, match="busy"):
+            store.selection("scan")
+        elapsed = time.monotonic() - started
+    finally:
+        release.set()
+        holder.join(timeout=5)
+    assert not holder.is_alive()
+    assert not holder_errors
+    assert timeout <= elapsed < 2.5
 
 
 @pytest.mark.portable
@@ -1014,6 +1208,7 @@ def test_links_in_storage_directories_are_refused(
         ResultStore(root, atomic_rename_supported=True)
 
 
+@pytest.mark.portable
 def test_hardlinked_payload_is_refused(store: ResultStore, tmp_path: Path) -> None:
     target = tmp_path / "unrelated.bin"
     target.write_bytes(b"untouched")
@@ -1030,6 +1225,76 @@ def test_hardlinked_payload_is_refused(store: ResultStore, tmp_path: Path) -> No
             )
     assert target.read_bytes() == b"untouched"
     assert store.selection("scan") is None
+
+
+@pytest.mark.portable
+def test_alternate_data_streams_are_refused_during_publish_and_open(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = publish(store, b"previous")
+    stream_target: list[Path | None] = [None]
+
+    if sys.platform != "win32":
+
+        def injected_streams(path: Path) -> tuple[str, ...]:
+            if path == stream_target[0]:
+                return ("::$DATA", ":review:$DATA")
+            return ("::$DATA",)
+
+        monkeypatch.setattr(
+            "muteinous.infrastructure.storage._filesystem._enumerate_streams",
+            injected_streams,
+            raising=False,
+        )
+
+    def add_review_stream(path: Path) -> None:
+        if sys.platform == "win32":
+            stream = Path(f"{path}:review")
+            stream.write_bytes(b"unhashed review stream")
+            assert stream.read_bytes() == b"unhashed review stream"
+        else:
+            stream_target[0] = path
+
+    with store.stage("alternate-stream-file") as stage:
+        payload = stage.path / "payload.bin"
+        payload.write_bytes(b"candidate")
+        add_review_stream(payload)
+        with pytest.raises(StorageError, match="alternate data stream"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+    assert store.selection("scan") == previous
+    assert read(store) == b"previous"
+
+    with store.stage("alternate-stream-directory") as stage:
+        payload = stage.path / "payload.bin"
+        payload.write_bytes(b"candidate")
+        nested = stage.path / "nested"
+        nested.mkdir()
+        (nested / "member.bin").write_bytes(b"nested payload")
+        add_review_stream(nested)
+        with pytest.raises(StorageError, match="alternate data stream"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+    assert store.selection("scan") == previous
+    assert read(store) == b"previous"
+
+    published_payload = store.root / "bundles" / previous.bundle / "payload.bin"
+    add_review_stream(published_payload)
+    with pytest.raises(StorageError, match="alternate data stream"):
+        read(store)
+    assert store.selection("scan") == previous
 
 
 @pytest.mark.portable
