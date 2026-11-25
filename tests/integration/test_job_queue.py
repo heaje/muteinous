@@ -1,12 +1,16 @@
 """Controlled thread/resource boundaries; deadlines are test guards only."""
 
+import gc
 import threading
 import time
+from collections import Counter
 from collections.abc import Callable, Iterator
-from threading import Event
+from threading import Event, Thread, current_thread
+from weakref import ref
 
 import pytest
 
+import muteinous.infrastructure.jobs.queue as queue_module
 from muteinous.infrastructure.jobs.queue import (
     JobContext,
     JobPlan,
@@ -28,6 +32,14 @@ def eventually(predicate: Callable[[], bool]) -> None:
     while not predicate():
         assert time.monotonic() < deadline, "Condition did not become true"
         Event().wait(0.001)
+
+
+class FakeClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
 
 
 class ControlledWorker:
@@ -110,6 +122,8 @@ def test_running_and_queued_cancellation_hold_slots_and_reject_late_results(
         assert not queue.cancel(a)
         assert queue.snapshot(a).state == JobState.CANCELLED
         assert queue.snapshot(a).physical_running
+        assert queue.snapshot(b).state == JobState.CANCELLED
+        assert not queue.snapshot(b).physical_running
         c = queue.submit(plan("provider"), replacement)
         eventually(lambda: queue.snapshot(c).detail == "Waiting for: provider")
         assert not queue.drain(0)
@@ -168,13 +182,19 @@ def test_stale_busy_plan_needs_attention_without_fallback(
     workers: Callable[..., ControlledWorker],
 ) -> None:
     stale = Event()
+    clock = FakeClock()
 
     def validate(submitted: JobPlan) -> str | None:
         if stale.is_set() and submitted.input_json == '{"source":"old"}':
             return "Source changed"
         return None
 
-    queue = JobQueue({"gpu": 1}, validate)
+    queue = JobQueue(
+        {"gpu": 1, "other": 1},
+        validate,
+        revalidate_interval=1.0,
+        clock=clock,
+    )
     owner, obsolete, valid, unavailable = (workers() for _ in range(4))
     try:
         queue.submit(plan("gpu"), owner)
@@ -185,6 +205,8 @@ def test_stale_busy_plan_needs_attention_without_fallback(
         missing = queue.submit(plan("missing"), unavailable)
         eventually(lambda: queue.snapshot(old).detail == "Waiting for: gpu")
         stale.set()
+        clock.now += 1.1
+        queue.set_capacity("other", 1)
         eventually(lambda: queue.snapshot(old).state == JobState.NEEDS_ATTENTION)
         assert queue.snapshot(old).detail == "Source changed"
         assert queue.snapshot(missing).state == JobState.NEEDS_ATTENTION
@@ -199,6 +221,287 @@ def test_stale_busy_plan_needs_attention_without_fallback(
     finally:
         for worker in (owner, obsolete, valid, unavailable):
             worker.release.set()
+        queue.close()
+
+
+def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    calls: Counter[str] = Counter()
+    dispatch_validation_counts: dict[str, int] = {}
+    queued_count = 6
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        return None
+
+    def quick_worker(submitted: JobPlan, context: JobContext) -> object:
+        dispatch_validation_counts[submitted.input_json] = calls[submitted.input_json]
+        return submitted.input_json
+
+    queue = JobQueue(
+        {"provider": 1, "other": 1},
+        validate,
+        revalidate_interval=1.0,
+        clock=clock,
+    )
+    owner = workers()
+    try:
+        queue.submit(plan("provider", source="owner"), owner)
+        assert owner.entered.wait(5)
+        pending = [
+            plan("provider", source=f"busy-{index}") for index in range(queued_count)
+        ]
+        jobs = [queue.submit(submitted, quick_worker) for submitted in pending]
+        eventually(
+            lambda: all(
+                queue.snapshot(job_id).detail == "Waiting for: provider"
+                and calls[submitted.input_json] == 1
+                for job_id, submitted in zip(jobs, pending, strict=True)
+            )
+        )
+
+        for capacity in (2, 1, 2, 1, 2):
+            queue.set_capacity("other", capacity)
+
+        canary = queue.submit(plan("other", source="canary"), quick_worker)
+        eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
+        assert all(calls[submitted.input_json] == 1 for submitted in pending)
+
+        clock.now += 1.1
+        queue.set_capacity("other", 1)
+        eventually(
+            lambda: all(calls[submitted.input_json] == 2 for submitted in pending)
+        )
+        owner.release.set()
+        assert queue.drain(5)
+        assert all(calls[submitted.input_json] == 3 for submitted in pending)
+        assert all(
+            dispatch_validation_counts[submitted.input_json] == 3
+            for submitted in pending
+        )
+        assert all(
+            queue.snapshot(job_id).state == JobState.COMPLETED for job_id in jobs
+        )
+    finally:
+        owner.release.set()
+        queue.close()
+
+
+def test_busy_wait_does_not_expire_after_large_clock_advance(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    clock = FakeClock()
+    calls: Counter[str] = Counter()
+
+    def validate(submitted: JobPlan) -> str | None:
+        calls[submitted.input_json] += 1
+        return None
+
+    queue = JobQueue(
+        {"provider": 1, "other": 1},
+        validate,
+        revalidate_interval=1.0,
+        clock=clock,
+    )
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("provider", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(plan("provider", source="waiting"), waiting)
+        eventually(
+            lambda: (
+                queue.snapshot(waiting_id).detail == "Waiting for: provider"
+                and calls['{"source":"waiting"}'] == 1
+            )
+        )
+
+        clock.now += 365 * 24 * 60 * 60
+        queue.set_capacity("other", 1)
+        eventually(lambda: calls['{"source":"waiting"}'] == 2)
+        waiting_snapshot = queue.snapshot(waiting_id)
+        assert waiting_snapshot.state == JobState.QUEUED
+        assert waiting_snapshot.detail == "Waiting for: provider"
+
+        owner.release.set()
+        assert waiting.entered.wait(5)
+        waiting.release.set()
+        assert queue.drain(5)
+        assert waiting.calls == 1
+        assert queue.snapshot(waiting_id).state == JobState.COMPLETED
+    finally:
+        owner.release.set()
+        waiting.release.set()
+        queue.close()
+
+
+def test_worker_start_baseexception_releases_slot_and_scheduler_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedThreadStartFailure(BaseException):
+        pass
+
+    original_thread = getattr(queue_module, "Thread")
+
+    class FailingWorkerThread(Thread):
+        def start(self) -> None:
+            if self.name.startswith("job-"):
+                raise InjectedThreadStartFailure("injected worker-start failure")
+            super().start()
+
+    monkeypatch.setattr(queue_module, "Thread", FailingWorkerThread)
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+    first_calls = 0
+    later_calls = 0
+    later_entered = Event()
+
+    def first_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal first_calls
+        first_calls += 1
+        return None
+
+    def later_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal later_calls
+        later_calls += 1
+        later_entered.set()
+        return submitted.input_json
+
+    try:
+        failed = queue.submit(plan("cpu", source="first"), first_worker)
+        eventually(lambda: queue.snapshot(failed).state == JobState.FAILED)
+        failed_snapshot = queue.snapshot(failed)
+        assert "InjectedThreadStartFailure" in (failed_snapshot.detail or "")
+        assert not failed_snapshot.physical_running
+        assert first_calls == 0
+        assert queue.drain(5)
+
+        monkeypatch.setattr(queue_module, "Thread", original_thread)
+        later = queue.submit(plan("cpu", source="later"), later_worker)
+        assert later_entered.wait(5)
+        assert queue.drain(5)
+        assert later_calls == 1
+        assert queue.snapshot(later).state == JobState.COMPLETED
+    finally:
+        queue.close()
+
+
+def test_scheduler_pass_baseexception_marks_job_and_dispatcher_survives() -> None:
+    class InjectedSchedulerClockFailure(BaseException):
+        pass
+
+    armed = Event()
+    raised = Event()
+
+    def clock() -> float:
+        if armed.is_set() and current_thread().name == "muteinous-jobs":
+            armed.clear()
+            raised.set()
+            raise InjectedSchedulerClockFailure("injected scheduler-pass failure")
+        return time.monotonic()
+
+    queue = JobQueue({"cpu": 1}, lambda _: None, clock=clock)
+    first_calls = 0
+    later_calls = 0
+
+    def first_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal first_calls
+        first_calls += 1
+        return None
+
+    def later_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal later_calls
+        later_calls += 1
+        return submitted.input_json
+
+    try:
+        armed.set()
+        failed = queue.submit(plan("cpu", source="first"), first_worker)
+        assert raised.wait(5)
+        eventually(lambda: queue.snapshot(failed).state == JobState.FAILED)
+        failed_snapshot = queue.snapshot(failed)
+        assert "InjectedSchedulerClockFailure" in (failed_snapshot.detail or "")
+        assert not failed_snapshot.physical_running
+        assert first_calls == 0
+        assert queue.drain(5)
+
+        later = queue.submit(plan("cpu", source="later"), later_worker)
+        assert queue.drain(5)
+        assert later_calls == 1
+        assert queue.snapshot(later).state == JobState.COMPLETED
+    finally:
+        queue.close()
+
+
+def test_discard_terminal_jobs_releases_results_and_ignores_late_reports() -> None:
+    class RetainedResult:
+        pass
+
+    result_refs = []
+    contexts: list[JobContext] = []
+    entered, release = Event(), Event()
+
+    def running_worker(submitted: JobPlan, context: JobContext) -> object:
+        entered.set()
+        assert release.wait(10)
+        return submitted.input_json
+
+    def result_worker(submitted: JobPlan, context: JobContext) -> object:
+        contexts.append(context)
+        result = RetainedResult()
+        result_refs.append(ref(result))
+        return result
+
+    def failed_worker(submitted: JobPlan, context: JobContext) -> object:
+        raise RuntimeError("discard test failure")
+
+    queue = JobQueue({"cpu": 1, "other": 3}, lambda _: None)
+    try:
+        running = queue.submit(plan("cpu", source="running"), running_worker)
+        assert entered.wait(5)
+        queued = queue.submit(plan("cpu", source="queued"), result_worker)
+        assert not queue.discard(running)
+        assert not queue.discard(queued)
+        assert queue.cancel(queued)
+        assert queue.snapshot(queued).state == JobState.CANCELLED
+        assert not queue.snapshot(queued).physical_running
+        assert queue.discard(queued)
+
+        assert queue.cancel(running)
+        assert queue.snapshot(running).state == JobState.CANCELLED
+        assert queue.snapshot(running).physical_running
+        assert not queue.discard(running)
+        release.set()
+
+        completed = queue.submit(plan("other", source="completed"), result_worker)
+        failed = queue.submit(plan("other", source="failed"), failed_worker)
+        attention = queue.submit(plan("missing", source="attention"), result_worker)
+        assert queue.drain(5)
+        queue.close()
+
+        assert not queue.snapshot(running).physical_running
+        assert queue.snapshot(completed).state == JobState.COMPLETED
+        assert queue.snapshot(failed).state == JobState.FAILED
+        assert queue.snapshot(attention).state == JobState.NEEDS_ATTENTION
+        assert len(result_refs) == 1
+
+        completed_snapshot = queue.snapshot(completed)
+        assert completed_snapshot.result is result_refs[0]()
+        del completed_snapshot
+        for job_id in (running, completed, failed, attention):
+            assert queue.discard(job_id)
+            with pytest.raises(KeyError):
+                queue.snapshot(job_id)
+            with pytest.raises(KeyError):
+                queue.poll(job_id)
+            with pytest.raises(KeyError):
+                queue.cancel(job_id)
+        contexts[0].report(Progress("late"), meaningful=True)
+        contexts[0].heartbeat()
+        gc.collect()
+        assert result_refs[0]() is None
+    finally:
+        release.set()
         queue.close()
 
 
