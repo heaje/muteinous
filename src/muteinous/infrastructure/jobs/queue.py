@@ -226,7 +226,13 @@ class JobQueue:
         self._dispatcher = Thread(
             target=self._schedule, name="muteinous-jobs", daemon=False
         )
-        self._dispatcher.start()
+        try:
+            self._dispatcher.start()
+        except BaseException:
+            with self._condition:
+                self._closed = True
+                self._wake()
+            raise
 
     @staticmethod
     def _check_capacity(name: str, capacity: int) -> None:
