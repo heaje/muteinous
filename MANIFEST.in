@@ -1,4 +1,0 @@
-prune experiments
-exclude tests/unit/test_native_ast.py
-exclude tests/integration/test_native_ast_prepare.py
-exclude tests/integration/test_native_ogg_prepare.py
