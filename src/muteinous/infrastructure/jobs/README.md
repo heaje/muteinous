@@ -55,6 +55,9 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
   not from a worker or validator. The dispatcher and workers are non-daemon
   threads, so the owner MUST call `close()` or they will keep the interpreter
   alive. This is not application shutdown policy.
+- Deterministic regressions live in the
+  [queue-scheduling tests](../../../../tests/integration/test_job_queue_scheduling.py)
+  and [queue-failure tests](../../../../tests/integration/test_job_queue_failures.py).
 
 ## Remaining integration
 
