@@ -29,21 +29,27 @@ _FAKE_STORAGE_MARKER = b"fake-pcm-storage-v1\n"
 
 
 class _FakeReader:
-    def __init__(self, info: PCMFormat, data: bytes) -> None:
+    def __init__(
+        self, info: PCMFormat, data: bytes, events: list[str] | None = None
+    ) -> None:
         self.info = info
         self._data = data
+        self._events = events
 
     def blocks(self) -> Iterator[bytes]:
         block_size = BLOCK_FRAMES * self.info.frame_bytes
-        for offset in range(0, len(self._data), block_size):
+        for index, offset in enumerate(range(0, len(self._data), block_size)):
+            if self._events is not None:
+                self._events.append(f"read:{index}")
             yield self._data[offset : offset + block_size]
 
 
 class _FakeStorage:
     """Tiny marker-based backend that proves Scratch uses its injected Storage."""
 
-    def __init__(self, supported: bool = True) -> None:
+    def __init__(self, supported: bool = True, events: list[str] | None = None) -> None:
         self.supported = supported
+        self.events = events
         self.support_calls: list[PCMFormat] = []
         self.write_paths: list[Path] = []
         self.open_paths: list[Path] = []
@@ -57,7 +63,9 @@ class _FakeStorage:
         self.write_paths.append(path)
         with path.open("xb") as stream:
             stream.write(_FAKE_STORAGE_MARKER)
-            for block in blocks:
+            for index, block in enumerate(blocks):
+                if self.events is not None:
+                    self.events.append(f"write:{index}")
                 stream.write(block)
         self._infos[path] = info
 
@@ -68,7 +76,9 @@ class _FakeStorage:
             encoded = stream.read()
         if not encoded.startswith(_FAKE_STORAGE_MARKER):
             raise ValueError("not a fake-storage file")
-        yield _FakeReader(self._infos[path], encoded[len(_FAKE_STORAGE_MARKER) :])
+        yield _FakeReader(
+            self._infos[path], encoded[len(_FAKE_STORAGE_MARKER) :], self.events
+        )
 
 
 @pytest.mark.parametrize(
@@ -139,6 +149,33 @@ def test_scratch_uses_injected_storage_for_source_edit_and_read(
         assert storage.support_calls == [info]
         assert storage.write_paths == [source, edited]
         assert storage.open_paths == [source, edited]
+
+    assert not list(tmp_path.iterdir())
+
+
+def test_scratch_edit_reads_and_writes_blocks_incrementally(tmp_path: Path) -> None:
+    info = PCMFormat(BLOCK_FRAMES, 1, "s16", 2 * BLOCK_FRAMES + 3)
+    frame = b"\x34\x12"
+    events: list[str] = []
+    storage = _FakeStorage(events=events)
+
+    with audio_scratch(tmp_path, storage) as scratch:
+        scratch.write_source(
+            info,
+            [frame * BLOCK_FRAMES, frame * BLOCK_FRAMES, frame * 3],
+        )
+        events.clear()
+
+        scratch.edit([(4095 / BLOCK_FRAMES, 4097 / BLOCK_FRAMES)])
+
+        assert events == [
+            "read:0",
+            "write:0",
+            "read:1",
+            "write:1",
+            "read:2",
+            "write:2",
+        ]
 
     assert not list(tmp_path.iterdir())
 
@@ -266,6 +303,58 @@ def test_wave_write_preflight_includes_header_and_padding(
     monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=required))
     storage.write(exact, info, [payload])
     assert exact.stat().st_size == required
+
+
+def test_wave_write_requests_each_block_after_writing_the_previous_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = PCMFormat(48000, 1, "s16", 2 * BLOCK_FRAMES + 3)
+    blocks = (
+        bytes([0x11]) * (BLOCK_FRAMES * info.frame_bytes),
+        bytes([0x22]) * (BLOCK_FRAMES * info.frame_bytes),
+        bytes([0x33]) * (3 * info.frame_bytes),
+    )
+    output = tmp_path / "streamed.pcmstore"
+    events: list[tuple[str, int, int]] = []
+    output_stream: BinaryIO | None = None
+    original_open = Path.open
+
+    def observed_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        nonlocal output_stream
+        stream: BinaryIO = original_open(path, *args, **kwargs)
+        if path != output or args != ("xb",):
+            return stream
+        output_stream = stream
+        wrapped = Mock()
+
+        def write(data: bytes) -> int:
+            written = stream.write(data)
+            events.append(("write", len(data), stream.tell()))
+            return written
+
+        wrapped.write.side_effect = write
+        wrapped.__enter__ = Mock(return_value=wrapped)
+        wrapped.__exit__ = Mock(side_effect=lambda *_: stream.close())
+        return wrapped
+
+    def source() -> Iterator[bytes]:
+        for index, block in enumerate(blocks):
+            assert output_stream is not None
+            events.append(("request", index, output_stream.tell()))
+            yield block
+
+    monkeypatch.setattr(Path, "open", observed_open)
+    WaveStorage().write(output, info, source())
+
+    assert [event[0] for event in events] == [
+        "write",
+        *(kind for _ in blocks for kind in ("request", "write")),
+    ]
+    writes = [event for event in events if event[0] == "write"]
+    requests = [event for event in events if event[0] == "request"]
+    assert [event[1] for event in writes[1:]] == [len(block) for block in blocks]
+    assert [event[2] for event in requests] == [event[2] for event in writes[:-1]]
+    assert requests[0][2] > 0  # The canonical header was written before block 0.
 
 
 def test_exclusive_write_and_abandoned_cleanup(tmp_path: Path) -> None:

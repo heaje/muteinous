@@ -1,5 +1,6 @@
 import math
 import struct
+from collections.abc import Iterator
 from typing import cast
 
 import pytest
@@ -45,6 +46,41 @@ def test_outward_rounding_and_all_channels() -> None:
     original = bytes(range(20))
     edited = b"".join(censor_blocks(info, [original[:8], original[8:]], [(0.11, 0.29)]))
     assert edited == original[:4] + bytes(8) + original[12:]
+
+
+def test_censor_blocks_yields_before_requesting_next_input_block() -> None:
+    info = PCMFormat(4096, 1, "s16", 2 * 4096 + 3)
+    frame = b"\x34\x12"
+    blocks = (
+        frame * 4096,
+        frame * 4096,
+        frame * 3,
+    )
+    events: list[str] = []
+
+    def source() -> Iterator[bytes]:
+        for index, block in enumerate(blocks):
+            events.append(f"read:{index}")
+            yield block
+
+    edited = censor_blocks(info, source(), [(4095 / 4096, 4097 / 4096)])
+    expected = (
+        blocks[0][: -info.frame_bytes] + bytes(info.frame_bytes),
+        bytes(info.frame_bytes) + blocks[1][info.frame_bytes :],
+        blocks[2],
+    )
+
+    for index, expected_block in enumerate(expected):
+        assert next(edited) == expected_block
+        events.append(f"yield:{index}")
+        assert events == [
+            event
+            for block_index in range(index + 1)
+            for event in (f"read:{block_index}", f"yield:{block_index}")
+        ]
+
+    with pytest.raises(StopIteration):
+        next(edited)
 
 
 @pytest.mark.parametrize(
