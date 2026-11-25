@@ -185,7 +185,15 @@ def _parse_comment(packet: bytes) -> tuple[str, tuple[tuple[str, str], ...]]:
 
 def _parse_pages(
     native: bytes,
-) -> tuple[list[bytes], int, int, int, int, list[tuple[int, int, int]]]:
+) -> tuple[
+    list[bytes],
+    int,
+    int,
+    int,
+    int,
+    int | None,
+    tuple[int, int] | None,
+]:
     if not native:
         _refuse("empty Ogg stream")
     if len(native) > MAX_FILE_BYTES:
@@ -203,7 +211,8 @@ def _parse_pages(
     page_count = 0
     final_granule = -1
     packet_start_location: tuple[int, int] | None = None
-    packet_locations: list[tuple[int, int, int]] = []
+    setup_end_page: int | None = None
+    first_audio_start: tuple[int, int] | None = None
 
     while cursor < len(native):
         if eos_seen:
@@ -275,13 +284,10 @@ def _parse_pages(
                     _refuse("Ogg packet count exceeds limit")
                 if packet_start_location is None:
                     _refuse("invalid Ogg packet placement")
-                packet_locations.append(
-                    (
-                        packet_start_location[0],
-                        packet_start_location[1],
-                        page_index,
-                    )
-                )
+                if packet_count == 3:
+                    setup_end_page = page_index
+                elif packet_count == 4:
+                    first_audio_start = packet_start_location
                 packet_start_location = None
                 page_packet_completions += 1
                 if packet_count <= 3:
@@ -333,7 +339,8 @@ def _parse_pages(
         page_count,
         final_granule,
         audio_packet_count,
-        packet_locations,
+        setup_end_page,
+        first_audio_start,
     )
 
 
@@ -347,7 +354,8 @@ def parse_ogg_vorbis(
         page_count,
         frames,
         audio_packet_count,
-        packet_locations,
+        setup_end_page,
+        first_audio_start,
     ) = _parse_pages(native)
     if len(packets) < 3 or audio_packet_count < 1:
         _refuse("Ogg Vorbis stream is missing headers or audio packets")
@@ -365,11 +373,9 @@ def parse_ogg_vorbis(
         _refuse("missing or malformed Vorbis setup header")
     if not packets[2][7:]:
         _refuse("empty Vorbis setup header")
-    first_audio_location = packet_locations[3]
-    if (
-        first_audio_location[0] <= packet_locations[2][2]
-        or first_audio_location[1] != 0
-    ):
+    if setup_end_page is None or first_audio_start is None:
+        _refuse("Ogg Vorbis stream is missing headers or audio packets")
+    if first_audio_start[0] <= setup_end_page or first_audio_start[1] != 0:
         _refuse("first Vorbis audio packet must begin on a fresh page")
     if frames <= 0:
         _refuse("invalid final Ogg granule position")

@@ -12,7 +12,8 @@ from experiments.native_ast.ast_core import (
     Encoder,
     NativeValidationError,
     NativeValidator,
-    group_edits,
+    SegmentBoundedRange,
+    group_edits_with_segment_bounds,
     prepare,
 )
 from muteinous.core.audio.pcm import PCMFormat
@@ -170,6 +171,33 @@ def _padded_ranges(
     return _merge_ranges(
         [(max(0, start - padding), min(frames, end + padding)) for start, end in ranges]
     )
+
+
+def _padded_segment_ranges(
+    ranges: Sequence[SegmentBoundedRange], frames: int, padding: int
+) -> list[tuple[int, int]]:
+    """Pad each edit only within its own segment, before any asset-level merge."""
+    if (
+        frames <= 0
+        or padding < 0
+        or any(
+            type(item.start) is not int
+            or type(item.end) is not int
+            or type(item.segment_start) is not int
+            or type(item.segment_end) is not int
+            or not 0 <= item.segment_start < item.segment_end <= frames
+            or not item.segment_start <= item.start < item.end <= item.segment_end
+            for item in ranges
+        )
+    ):
+        raise ValueError("invalid Ogg segment edit padding bounds")
+    return [
+        (
+            max(item.segment_start, item.start - padding),
+            min(item.segment_end, item.end + padding),
+        )
+        for item in ranges
+    ]
 
 
 def _validate_ranges(ranges: Sequence[tuple[int, int]], frames: int) -> None:
@@ -365,10 +393,18 @@ def prepare_ogg(
 ) -> dict[str, bytes]:
     """Parse each source, then reuse AST's private all-or-nothing PCM workflow."""
     sources: dict[str, VorbisInfo] = {}
-    requested_ranges = group_edits(assets, edits, total_frames=info.frames)
+    segment_ranges = group_edits_with_segment_bounds(
+        assets, edits, total_frames=info.frames
+    )
+    requested_ranges = {
+        asset_id: _merge_ranges([(item.start, item.end) for item in ranges])
+        for asset_id, ranges in segment_ranges.items()
+    }
     padded_ranges = {
-        asset_id: _padded_ranges(ranges, info.frames, quality.padding_frames)
-        for asset_id, ranges in requested_ranges.items()
+        asset_id: _merge_ranges(
+            _padded_segment_ranges(ranges, info.frames, quality.padding_frames)
+        )
+        for asset_id, ranges in segment_ranges.items()
     }
     padded_edits = tuple(
         Edit(asset_id, 0, info.frames, start, end)

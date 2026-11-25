@@ -16,6 +16,7 @@ from experiments.native_ast.ast_core import (
     NativeStageError,
     NativeValidationError,
     ReconstructionError,
+    group_edits_with_segment_bounds,
 )
 from experiments.native_ogg.ogg_core import (
     build_ogg_fixture,
@@ -24,6 +25,7 @@ from experiments.native_ogg.ogg_core import (
 from experiments.native_ogg.ogg_prepare import (
     QualityPolicy,
     _padded_ranges,
+    _padded_segment_ranges,
     prepare_ogg,
     verify_lossy_reconstruction,
 )
@@ -283,6 +285,109 @@ def test_prepare_merges_edits_pads_and_rebuilds_each_affected_asset_once(
     ]
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
+
+
+def test_padding_is_clamped_to_interior_segment_and_neighbors_stay_bit_exact(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, _, pcm_for_native = _fake_codecs(assets, originals)
+    edits = (Edit("a", 1_000, 1_000, 0, 1_000),)
+
+    staged = prepare_ogg(
+        tmp_path,
+        assets,
+        originals,
+        edits,
+        decoder=decoder,
+        encoder=encoder,
+        info=INFO,
+        quality=QUALITY,
+    )
+
+    output = pcm_for_native[staged["a"]]
+    expected = _silenced(originals["a"], [(1_000, 2_000)])
+    assert output == expected
+    assert (
+        output[: 1_000 * INFO.frame_bytes] == originals["a"][: 1_000 * INFO.frame_bytes]
+    )
+    assert (
+        output[2_000 * INFO.frame_bytes :] == originals["a"][2_000 * INFO.frame_bytes :]
+    )
+
+
+def test_segment_boundary_padding_that_leaks_at_requested_edge_is_refused(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    base_decoder, encoder, _, encode_calls, _ = _fake_codecs(assets, originals)
+    edits = (Edit("a", 1_000, 1_000, 0, 100),)
+    before = _snapshot(tmp_path)
+
+    def leaking_decoder(
+        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
+    ) -> None:
+        base_decoder(asset_id, native_path, pcm_path, info)
+        if native_path.name == "rebuilt.ogg":
+            decoded = bytearray(pcm_path.read_bytes())
+            start = 1_000 * info.frame_bytes
+            end = start + info.frame_bytes
+            decoded[start:end] = originals[asset_id][start:end]
+            pcm_path.write_bytes(decoded)
+
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            edits,
+            decoder=leaking_decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+
+    assert type(error.value) is ReconstructionError
+    assert error.value.asset_id == "a"
+    assert "requested-range silence peak" in error.value.detail
+    assert encode_calls == ["a"]
+    assert _snapshot(tmp_path) == before
+    assert not list(tmp_path.glob("native-prepare-*"))
+
+
+def test_adjacent_segment_padding_is_clamped_before_asset_ranges_merge(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    edits = (
+        Edit("a", 1_000, 1_000, 900, 1_000),
+        Edit("a", 2_000, 1_000, 0, 100),
+    )
+    segment_ranges = group_edits_with_segment_bounds(
+        assets, edits, total_frames=INFO.frames
+    )["a"]
+    assert _padded_segment_ranges(segment_ranges, INFO.frames, 64) == [
+        (1_836, 2_000),
+        (2_000, 2_164),
+    ]
+    decoder, encoder, _, _, pcm_for_native = _fake_codecs(assets, originals)
+
+    staged = prepare_ogg(
+        tmp_path,
+        assets,
+        originals,
+        edits,
+        decoder=decoder,
+        encoder=encoder,
+        info=INFO,
+        quality=QUALITY,
+    )
+
+    expected = _silenced(originals["a"], [(1_836, 2_164)])
+    assert pcm_for_native[staged["a"]] == expected
+    assert expected[2_000 * INFO.frame_bytes : 2_164 * INFO.frame_bytes] == bytes(
+        164 * INFO.frame_bytes
+    )
 
 
 @pytest.mark.parametrize(

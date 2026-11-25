@@ -72,6 +72,16 @@ class Edit:
 
 
 @dataclass(frozen=True)
+class SegmentBoundedRange:
+    """An asset-relative edit range plus the segment bounds that contain it."""
+
+    start: int
+    end: int
+    segment_start: int
+    segment_end: int
+
+
+@dataclass(frozen=True)
 class ParsedAST:
     codec: int
     bits: int
@@ -329,16 +339,16 @@ def _merge_ranges(ranges: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
-def group_edits(
+def group_edits_with_segment_bounds(
     assets: Mapping[str, bytes],
     edits: Sequence[Edit],
     *,
     total_frames: int = FRAMES,
-) -> dict[str, list[tuple[int, int]]]:
-    """Map segment-relative ranges to native assets and merge touching spans."""
+) -> dict[str, list[SegmentBoundedRange]]:
+    """Map segment-relative edits while retaining each segment's asset bounds."""
     if not edits or total_frames <= 0:
         raise ValueError("no required edits")
-    groups: dict[str, list[tuple[int, int]]] = {}
+    groups: dict[str, list[SegmentBoundedRange]] = {}
     for edit in edits:
         if edit.asset not in assets:
             raise NativeValidationError(edit.asset, "unknown required asset")
@@ -349,9 +359,28 @@ def group_edits(
         ):
             raise NativeValidationError(edit.asset, "invalid segment mapping or edit")
         groups.setdefault(edit.asset, []).append(
-            (edit.segment_start + edit.start, edit.segment_start + edit.end)
+            SegmentBoundedRange(
+                start=edit.segment_start + edit.start,
+                end=edit.segment_start + edit.end,
+                segment_start=edit.segment_start,
+                segment_end=edit.segment_start + edit.segment_frames,
+            )
         )
-    return {asset: _merge_ranges(ranges) for asset, ranges in groups.items()}
+    return groups
+
+
+def group_edits(
+    assets: Mapping[str, bytes],
+    edits: Sequence[Edit],
+    *,
+    total_frames: int = FRAMES,
+) -> dict[str, list[tuple[int, int]]]:
+    """Map segment-relative ranges to native assets and merge touching spans."""
+    groups = group_edits_with_segment_bounds(assets, edits, total_frames=total_frames)
+    return {
+        asset: _merge_ranges((item.start, item.end) for item in ranges)
+        for asset, ranges in groups.items()
+    }
 
 
 def _pcm_blocks_for(path: Path, info: PCMFormat) -> Iterable[bytes]:
