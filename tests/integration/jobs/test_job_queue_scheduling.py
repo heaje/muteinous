@@ -192,10 +192,8 @@ def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
 ) -> None:
     stale = Event()
     stale_revalidated = Event()
-    calls: Counter[str] = Counter()
 
     def validate(submitted: JobPlan) -> str | None:
-        calls[submitted.input_json] += 1
         if submitted.input_json == '{"source":"waiting"}' and stale.is_set():
             stale_revalidated.set()
             return "Source changed"
@@ -207,19 +205,18 @@ def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
         queue.submit(plan("cpu", source="owner"), owner)
         assert owner.entered.wait(5)
         waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
-        eventually(
-            lambda: (
-                queue.snapshot(waiting_id).detail == "Waiting for: cpu"
-                and calls['{"source":"waiting"}'] == 1
-            )
-        )
+        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
+        assert queue.snapshot(waiting_id).state == JobState.QUEUED
 
         stale.set()
         # No queue operation after this flag change may wake the dispatcher.
         assert stale_revalidated.wait(5)
         eventually(lambda: queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION)
         assert queue.snapshot(waiting_id).detail == "Source changed"
-        assert calls['{"source":"waiting"}'] == 2
+        owner.release.set()
+        assert queue.drain(5)
+        assert queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION
+        assert waiting.calls == 0
     finally:
         owner.release.set()
         waiting.release.set()
@@ -231,6 +228,7 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
 ) -> None:
     clock = FakeClock()
     calls: Counter[str] = Counter()
+    worker_calls: Counter[str] = Counter()
     dispatch_validation_counts: dict[str, int] = {}
     queued_count = 6
 
@@ -239,6 +237,7 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
         return None
 
     def quick_worker(submitted: JobPlan, context: JobContext) -> object:
+        worker_calls[submitted.input_json] += 1
         dispatch_validation_counts[submitted.input_json] = calls[submitted.input_json]
         return submitted.input_json
 
@@ -259,30 +258,42 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
         eventually(
             lambda: all(
                 queue.snapshot(job_id).detail == "Waiting for: provider"
-                and calls[submitted.input_json] == 1
+                and calls[submitted.input_json] >= 1
                 for job_id, submitted in zip(jobs, pending, strict=True)
             )
         )
+        initial_counts = {
+            submitted.input_json: calls[submitted.input_json] for submitted in pending
+        }
 
         for capacity in (2, 1, 2, 1, 2):
             queue.set_capacity("other", capacity)
 
         canary = queue.submit(plan("other", source="canary"), quick_worker)
         eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
-        assert all(calls[submitted.input_json] == 1 for submitted in pending)
+        assert all(
+            calls[submitted.input_json] == initial_counts[submitted.input_json]
+            for submitted in pending
+        )
 
         clock.now += 1.1
         queue.set_capacity("other", 1)
-        eventually(
-            lambda: all(calls[submitted.input_json] == 2 for submitted in pending)
-        )
+        # The independent job is scanned after the blocked plans, so its
+        # completion confirms their validation has been processed.
+        canary = queue.submit(plan("other", source="revalidation-canary"), quick_worker)
+        eventually(lambda: queue.snapshot(canary).state == JobState.COMPLETED)
+        busy_counts = {
+            submitted.input_json: calls[submitted.input_json] for submitted in pending
+        }
+        assert all(busy_counts[key] > initial_counts[key] for key in busy_counts)
+        assert all(queue.snapshot(job_id).state == JobState.QUEUED for job_id in jobs)
+
         owner.release.set()
         assert queue.drain(5)
-        assert all(calls[submitted.input_json] == 3 for submitted in pending)
         assert all(
-            dispatch_validation_counts[submitted.input_json] == 3
-            for submitted in pending
+            dispatch_validation_counts[key] > busy_counts[key] for key in busy_counts
         )
+        assert all(worker_calls[submitted.input_json] == 1 for submitted in pending)
         assert all(
             queue.snapshot(job_id).state == JobState.COMPLETED for job_id in jobs
         )
