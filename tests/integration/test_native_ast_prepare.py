@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from experiments.native_ast import ast_core
 from experiments.native_ast.ast_core import (
     FRAMES,
     INFO,
@@ -106,6 +107,29 @@ class TamperingWaveStorage(WaveStorage):
                     self.info,
                     self.tamper_frame,
                 )
+            else:
+                yield reader
+
+
+class _SourceMutatingReader:
+    def __init__(self, reader: Reader, source_path: Path) -> None:
+        self._reader = reader
+        self._source_path = source_path
+        self.info = reader.info
+
+    def blocks(self) -> Iterator[bytes]:
+        yield from self._reader.blocks()
+        self._source_path.write_bytes(b"source changed during edit")
+
+
+class SourceMutatingWaveStorage(WaveStorage):
+    @contextmanager
+    def open(self, path: Path) -> Iterator[Reader]:
+        with super().open(path) as reader:
+            if path.name == "edited.pcmstore":
+                private_asset = path.parent.parent.parent
+                source_path = private_asset / "source.ast"
+                yield _SourceMutatingReader(reader, source_path)
             else:
                 yield reader
 
@@ -381,6 +405,126 @@ def test_extraction_failure_is_atomic_in_both_asset_orders(
     )
     assert decode_calls == (["b"] if failing_asset_first else ["a", "a", "b"])
     assert encode_calls == ([] if failing_asset_first else ["a"])
+
+
+def test_extraction_pcm_mismatch_inside_requested_mute_is_refused_before_encode(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
+
+    def altered_decoder(
+        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
+    ) -> None:
+        decoder(asset_id, native_path, pcm_path, info)
+        if native_path.name == "source.ast" and asset_id == "a":
+            changed = bytearray(pcm_path.read_bytes())
+            changed[1001 * info.frame_bytes] ^= 1
+            pcm_path.write_bytes(changed)
+
+    with pytest.raises(ExtractionError) as error:
+        prepare(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=altered_decoder,
+            encoder=encoder,
+        )
+    assert error.value.asset_id == "a"
+    assert error.value.detail == "extracted PCM differs from verified source"
+    assert encode_calls == []
+
+
+def test_source_change_after_edit_is_refused_atomically(tmp_path: Path) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
+    _assert_atomic_failure(
+        tmp_path,
+        assets,
+        originals,
+        _edits(),
+        decoder,
+        encoder,
+        EditError,
+        "required asset a: PCM edit: native source changed during PCM edit",
+        storage=SourceMutatingWaveStorage(),
+    )
+    assert encode_calls == []
+
+
+def test_source_change_after_rebuild_is_refused_atomically(tmp_path: Path) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, normal_encoder, _, encode_calls = _fake_codecs(assets, originals)
+
+    def tampering_encoder(
+        asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
+    ) -> None:
+        normal_encoder(asset_id, pcm_path, native_path, info)
+        (native_path.parent / "source.ast").write_bytes(b"source changed after rebuild")
+
+    _assert_atomic_failure(
+        tmp_path,
+        assets,
+        originals,
+        _edits(),
+        decoder,
+        tampering_encoder,
+        ReconstructionError,
+        "required asset a: reconstruction: native source changed during reconstruction",
+    )
+    assert encode_calls == ["a"]
+
+
+def test_default_ast_validator_rejects_caller_supplied_nonprofile_sample_rate(
+    tmp_path: Path,
+) -> None:
+    nonprofile = PCMFormat(44_100, 2, "s16", FRAMES, 3)
+    decode_calls: list[str] = []
+    encode_calls: list[str] = []
+    with pytest.raises(
+        ValueError, match="default AST validation requires the canonical PCM profile"
+    ):
+        prepare(
+            tmp_path,
+            {},
+            {},
+            (),
+            decoder=lambda *_: decode_calls.append("decode"),
+            encoder=lambda *_: encode_calls.append("encode"),
+            info=nonprofile,
+        )
+    assert decode_calls == []
+    assert encode_calls == []
+
+
+def test_native_path_escape_is_refused_before_codec_invocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decode_calls: list[str] = []
+    encode_calls: list[str] = []
+
+    def escaping_path(directory: Path, filename: str) -> Path:
+        if filename == "source.ast":
+            return tmp_path / "outside.ast"
+        return directory / filename
+
+    monkeypatch.setattr(ast_core, "_native_path", escaping_path)
+    with pytest.raises(
+        ValueError, match="native path escaped private working directory"
+    ):
+        prepare(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=lambda *_: decode_calls.append("decode"),
+            encoder=lambda *_: encode_calls.append("encode"),
+        )
+    assert decode_calls == []
+    assert encode_calls == []
+    assert not (tmp_path / "outside.ast").exists()
 
 
 @pytest.mark.parametrize("failing_asset_first", [False, True])

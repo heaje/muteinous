@@ -38,7 +38,10 @@ def _expect_refusal(operation: object, reason: str) -> None:
 def main() -> None:
     tools = FFmpegTools.discover()
     print(f"PASS: {tools.version}")
-    print("PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available")
+    print(
+        "PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar "
+        "decoder/encoder are available"
+    )
     expected = _pcm_fixture()
 
     with TemporaryDirectory(prefix="muteinous-ast-probe-") as scratch:

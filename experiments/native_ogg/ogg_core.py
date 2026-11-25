@@ -183,7 +183,9 @@ def _parse_comment(packet: bytes) -> tuple[str, tuple[tuple[str, str], ...]]:
     return vendor, tuple(comments)
 
 
-def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
+def _parse_pages(
+    native: bytes,
+) -> tuple[list[bytes], int, int, int, int, list[tuple[int, int, int]]]:
     if not native:
         _refuse("empty Ogg stream")
     if len(native) > MAX_FILE_BYTES:
@@ -200,6 +202,8 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
     eos_seen = False
     page_count = 0
     final_granule = -1
+    packet_start_location: tuple[int, int] | None = None
+    packet_locations: list[tuple[int, int, int]] = []
 
     while cursor < len(native):
         if eos_seen:
@@ -250,7 +254,16 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
 
         body_offset = table_end
         completed_packet = False
-        for lace in lacing:
+        page_index = page_count - 1
+        page_has_audio_packet = False
+        page_packet_starts = 0
+        page_packet_completions = 0
+        for segment_index, lace in enumerate(lacing):
+            if not partial:
+                packet_start_location = (page_index, segment_index)
+                page_packet_starts += 1
+            if packet_count >= 3:
+                page_has_audio_packet = True
             end = body_offset + lace
             partial.extend(native[body_offset:end])
             if len(partial) > MAX_PACKET_BYTES:
@@ -260,6 +273,17 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
                 packet_count += 1
                 if packet_count > MAX_PACKETS:
                     _refuse("Ogg packet count exceeds limit")
+                if packet_start_location is None:
+                    _refuse("invalid Ogg packet placement")
+                packet_locations.append(
+                    (
+                        packet_start_location[0],
+                        packet_start_location[1],
+                        page_index,
+                    )
+                )
+                packet_start_location = None
+                page_packet_completions += 1
                 if packet_count <= 3:
                     packets.append(bytes(partial))
                 else:
@@ -275,6 +299,8 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
             _refuse("Ogg completed packet has no granule position")
         if not completed_packet and granule >= 0:
             _refuse("Ogg page without completed packets has a granule position")
+        if not page_has_audio_packet and granule >= 0 and granule != 0:
+            _refuse("Vorbis header page granule position must be zero")
         if granule >= 0:
             if granule < prior_granule:
                 _refuse("Ogg granule position moved backwards")
@@ -287,6 +313,12 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
             if partial:
                 _refuse("incomplete packet at Ogg EOS")
             eos_seen = True
+        if page_index == 0 and (
+            segment_count != 1
+            or page_packet_starts != 1
+            or page_packet_completions != 1
+        ):
+            _refuse("Vorbis identification header must be alone on the BOS page")
         cursor = page_end
 
     if not eos_seen:
@@ -295,14 +327,28 @@ def _parse_pages(native: bytes) -> tuple[list[bytes], int, int, int, int]:
         _refuse("incomplete final Ogg packet")
     if serial is None:
         _refuse("missing Ogg logical stream")
-    return packets, serial, page_count, final_granule, audio_packet_count
+    return (
+        packets,
+        serial,
+        page_count,
+        final_granule,
+        audio_packet_count,
+        packet_locations,
+    )
 
 
 def parse_ogg_vorbis(
     native: bytes, *, expected_frames: int | None = None
 ) -> VorbisInfo:
     """Validate pages/headers and return metadata for stereo 44.1-kHz Vorbis."""
-    packets, serial, page_count, frames, audio_packet_count = _parse_pages(native)
+    (
+        packets,
+        serial,
+        page_count,
+        frames,
+        audio_packet_count,
+        packet_locations,
+    ) = _parse_pages(native)
     if len(packets) < 3 or audio_packet_count < 1:
         _refuse("Ogg Vorbis stream is missing headers or audio packets")
     (
@@ -319,6 +365,12 @@ def parse_ogg_vorbis(
         _refuse("missing or malformed Vorbis setup header")
     if not packets[2][7:]:
         _refuse("empty Vorbis setup header")
+    first_audio_location = packet_locations[3]
+    if (
+        first_audio_location[0] <= packet_locations[2][2]
+        or first_audio_location[1] != 0
+    ):
+        _refuse("first Vorbis audio packet must begin on a fresh page")
     if frames <= 0:
         _refuse("invalid final Ogg granule position")
     if frames > 0x7FFFFFFFFFFFFFFF:
@@ -389,34 +441,54 @@ def build_ogg_fixture(
     comment_packet.append(1)
     packets = [identification, bytes(comment_packet), setup_packet, *audio_packets]
 
-    segments: list[tuple[int, bytes, bool, bool]] = []
+    segments: list[tuple[int, bytes, bool, int]] = []
     for packet_index, packet in enumerate(packets):
         offset = 0
         while len(packet) - offset >= 255:
-            segments.append(
-                (255, packet[offset : offset + 255], False, packet_index >= 3)
-            )
+            segments.append((255, packet[offset : offset + 255], False, packet_index))
             offset += 255
         tail = packet[offset:]
-        segments.append((len(tail), tail, True, packet_index >= 3))
+        segments.append((len(tail), tail, True, packet_index))
+
+    page_segments: list[tuple[int, bytes, bool, int]] = []
+    pages: list[tuple[list[tuple[int, bytes, bool, int]], bool]] = []
+    continued = False
+
+    def finish_page() -> None:
+        nonlocal continued, page_segments
+        if not page_segments:
+            return
+        pages.append((page_segments, continued))
+        continued = not page_segments[-1][2]
+        page_segments = []
+
+    for segment in segments:
+        lace, _, packet_complete, packet_index = segment
+        del lace
+        if (
+            packet_index >= 3
+            and page_segments
+            and not any(item[3] >= 3 for item in page_segments)
+        ):
+            finish_page()
+        page_segments.append(segment)
+        if (
+            len(page_segments) >= max_segments_per_page
+            or (packet_index == 0 and packet_complete)
+            or (packet_index == 2 and packet_complete)
+        ):
+            finish_page()
+    finish_page()
 
     output = bytearray()
-    page_sequence = 0
-    segment_offset = 0
-    continued = False
-    while segment_offset < len(segments):
-        page_segments = segments[
-            segment_offset : segment_offset + max_segments_per_page
-        ]
-        segment_offset += len(page_segments)
-        flags = (0x01 if continued else 0) | (0x02 if page_sequence == 0 else 0)
-        if segment_offset == len(segments):
+    for page_sequence, (page_segments, page_continued) in enumerate(pages):
+        flags = (0x01 if page_continued else 0) | (0x02 if page_sequence == 0 else 0)
+        if page_sequence == len(pages) - 1:
             flags |= 0x04
-        continued = not page_segments[-1][2]
         completed = [segment for segment in page_segments if segment[2]]
         if not completed:
             granule = 0xFFFFFFFFFFFFFFFF
-        elif any(segment[3] for segment in completed):
+        elif any(segment[3] >= 3 for segment in completed):
             granule = frames
         else:
             granule = 0
@@ -438,5 +510,4 @@ def build_ogg_fixture(
         page = header + lacing + body
         struct.pack_into("<I", page, 22, ogg_crc(page))
         output.extend(page)
-        page_sequence += 1
     return bytes(output)

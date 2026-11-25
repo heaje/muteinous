@@ -99,7 +99,10 @@ def _assert_failure(
 def main() -> None:
     tools = FFmpegTools.discover()
     print(f"PASS: {tools.version}")
-    print("PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available")
+    print(
+        "PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar "
+        "decoder/encoder are available"
+    )
 
     with TemporaryDirectory(prefix="muteinous-ast-shared-") as private:
         root = Path(private)

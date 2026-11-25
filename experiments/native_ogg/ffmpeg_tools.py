@@ -3,7 +3,12 @@
 import shutil
 from pathlib import Path
 
-from experiments.native_ast.ffmpeg_tools import FFmpegToolError, FFmpegTools
+from experiments.native_ast.ffmpeg_tools import (
+    FFmpegToolError,
+    FFmpegTools,
+    has_named_capabilities,
+    has_named_entry,
+)
 from muteinous.core.audio.pcm import PCMFormat
 
 
@@ -28,31 +33,17 @@ class OggFFmpegTools(FFmpegTools):
 
         formats = self._run(["-formats"], timeout=10)
         format_lines = (formats.stdout or "") + "\n" + (formats.stderr or "")
-        ogg_flags = next(
-            (
-                line.split()[0]
-                for line in format_lines.splitlines()
-                if len(line.split()) >= 2 and line.split()[1] == "ogg"
-            ),
-            "",
-        )
-        if "D" not in ogg_flags or "E" not in ogg_flags:
+        if not has_named_capabilities(format_lines, "ogg", "DE"):
             raise FFmpegToolError("FFmpeg Ogg demuxer and muxer are required")
 
         encoders = self._run(["-encoders"], timeout=10)
         encoder_lines = (encoders.stdout or "") + "\n" + (encoders.stderr or "")
-        if not any(
-            len(fields := line.split()) >= 2 and fields[1] == "libvorbis"
-            for line in encoder_lines.splitlines()
-        ):
+        if not has_named_entry(encoder_lines, "libvorbis"):
             raise FFmpegToolError("FFmpeg libvorbis encoder is required")
 
         decoders = self._run(["-decoders"], timeout=10)
         decoder_lines = (decoders.stdout or "") + "\n" + (decoders.stderr or "")
-        if not any(
-            len(fields := line.split()) >= 2 and fields[1] == "vorbis"
-            for line in decoder_lines.splitlines()
-        ):
+        if not has_named_entry(decoder_lines, "vorbis"):
             raise FFmpegToolError("FFmpeg Vorbis decoder is required")
 
     def decode(

@@ -37,6 +37,55 @@ def _patch_page(native: bytes, page_index: int, offset: int, value: bytes) -> by
     return native[:start] + bytes(page) + native[end:]
 
 
+def _fixture_packets(native: bytes) -> list[bytes]:
+    packets: list[bytes] = []
+    partial = bytearray()
+    for start, end in _page_offsets(native):
+        segment_count = native[start + 26]
+        lacing_start = start + 27
+        body_offset = lacing_start + segment_count
+        for lace in native[lacing_start:body_offset]:
+            partial.extend(native[body_offset : body_offset + lace])
+            body_offset += lace
+            if lace < 255:
+                packets.append(bytes(partial))
+                partial.clear()
+    assert not partial
+    return packets
+
+
+def _page(
+    packets: list[bytes], *, flags: int, granule: int, serial: int, sequence: int
+) -> bytes:
+    lacing = bytearray()
+    body = bytearray()
+    for packet in packets:
+        offset = 0
+        while len(packet) - offset >= 255:
+            lacing.append(255)
+            body.extend(packet[offset : offset + 255])
+            offset += 255
+        lacing.append(len(packet) - offset)
+        body.extend(packet[offset:])
+    page = bytearray(
+        struct.pack(
+            "<4sBBQIIIB",
+            b"OggS",
+            0,
+            flags,
+            granule,
+            serial,
+            sequence,
+            0,
+            len(lacing),
+        )
+    )
+    page.extend(lacing)
+    page.extend(body)
+    struct.pack_into("<I", page, 22, ogg_crc(page))
+    return bytes(page)
+
+
 def test_pure_python_writer_builds_pages_crc_headers_and_tags() -> None:
     native = build_ogg_fixture()
     parsed = parse_ogg_vorbis(native, expected_frames=44_100)
@@ -51,7 +100,14 @@ def test_pure_python_writer_builds_pages_crc_headers_and_tags() -> None:
         ("FIXTURE", "synthetic"),
     )
     assert parsed.audio_packet_count == 1
-    assert parsed.page_count == 1
+    assert parsed.page_count == 3
+    pages = _page_offsets(native)
+    assert native[pages[0][0] + 5] == 0x02
+    assert native[pages[0][0] + 26] == 1
+    assert native[pages[0][0] + 27] == 30
+    assert struct.unpack_from("<Q", native, pages[0][0] + 6)[0] == 0
+    assert struct.unpack_from("<Q", native, pages[1][0] + 6)[0] == 0
+    assert native[pages[-1][0] + 5] == 0x04
 
 
 def test_bitrate_class_comparison_has_a_bounded_tolerance() -> None:
@@ -147,6 +203,13 @@ def test_vorbis_field_names_are_ascii_case_insensitive_only() -> None:
             "Ogg page without completed packets has a granule position",
         ),
         ("granule", "final Ogg granule position differs from decoded frame count"),
+        ("header granule", "Vorbis header page granule position must be zero"),
+        (
+            "identification alone",
+            "Vorbis identification header must be alone on the BOS page",
+        ),
+        ("first audio fresh", "first Vorbis audio packet must begin on a fresh page"),
+        ("headers before audio", "invalid Vorbis audio packet"),
     ],
 )
 def test_parser_rejects_malformed_or_unsupported_streams(
@@ -180,18 +243,18 @@ def test_parser_rejects_malformed_or_unsupported_streams(
         native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
         native = _patch_page(native, 1, 5, b"\x03")
     elif case == "missing EOS":
-        native = _patch_page(native, 0, 5, b"\x02")
+        native = _patch_page(native, 2, 5, b"\x00")
     elif case == "early EOS":
         native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
         native = _patch_page(native, 0, 5, b"\x06")
     elif case == "non-Vorbis":
-        native = _patch_page(native, 0, 31, b"\x80")
+        native = _patch_page(native, 0, 28, b"\x80")
     elif case == "six channels":
         native = build_ogg_fixture(channels=6)
     elif case == "wrong rate":
         native = build_ogg_fixture(rate=48_000)
     elif case == "identification framing":
-        native = _patch_page(native, 0, 31 + 29, b"\x00")
+        native = _patch_page(native, 0, 28 + 29, b"\x00")
     elif case == "comment framing":
         vendor_bytes = b"native_ogg synthetic fixture"
         comment_lengths = (14, 16, 17)
@@ -205,19 +268,62 @@ def test_parser_rejects_malformed_or_unsupported_streams(
         )
         native = _patch_page(
             native,
-            0,
-            31 + 30 + comment_packet_bytes - 1,
+            1,
+            29 + comment_packet_bytes - 1,
             b"\x00",
         )
     elif case == "comment length":
-        native = _patch_page(native, 0, 31 + 30 + 7, struct.pack("<I", 0xFFFFFFFF))
+        native = _patch_page(native, 1, 29 + 7, struct.pack("<I", 0xFFFFFFFF))
     elif case == "missing setup":
         native = build_ogg_fixture(setup_packet=b"")
     elif case == "empty page granule":
         native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
         native = _patch_page(native, 1, 6, struct.pack("<Q", 0))
     elif case == "granule":
-        native = _patch_page(native, 0, 6, struct.pack("<Q", 44_099))
+        native = _patch_page(native, 2, 6, struct.pack("<Q", 44_099))
+    elif case == "header granule":
+        native = _patch_page(native, 1, 6, struct.pack("<Q", 1))
+    elif case == "identification alone":
+        packets = _fixture_packets(native)
+        serial = struct.unpack_from("<I", native, 14)[0]
+        native = _page(packets, flags=0x06, granule=44_100, serial=serial, sequence=0)
+    elif case == "first audio fresh":
+        packets = _fixture_packets(native)
+        serial = struct.unpack_from("<I", native, 14)[0]
+        native = b"".join(
+            [
+                _page([packets[0]], flags=0x02, granule=0, serial=serial, sequence=0),
+                _page(
+                    packets[1:],
+                    flags=0x04,
+                    granule=44_100,
+                    serial=serial,
+                    sequence=1,
+                ),
+            ]
+        )
+    elif case == "headers before audio":
+        packets = _fixture_packets(native)
+        serial = struct.unpack_from("<I", native, 14)[0]
+        native = b"".join(
+            [
+                _page([packets[0]], flags=0x02, granule=0, serial=serial, sequence=0),
+                _page(
+                    [packets[3]],
+                    flags=0,
+                    granule=0,
+                    serial=serial,
+                    sequence=1,
+                ),
+                _page(
+                    packets[1:3],
+                    flags=0x04,
+                    granule=0,
+                    serial=serial,
+                    sequence=2,
+                ),
+            ]
+        )
 
     with pytest.raises(OggFormatError, match=reason.replace(".", r"\.")):
         parse_ogg_vorbis(native, expected_frames=44_100)

@@ -24,6 +24,9 @@ from experiments.native_ogg.ogg_prepare import (
 )
 from experiments.native_ogg.ogg_prepare import (
     QualityPolicy,
+    _guard_regions,
+    _padded_ranges,
+    measure_lossy_effects,
     prepare_ogg,
     verify_lossy_reconstruction,
 )
@@ -36,9 +39,10 @@ pytestmark = pytest.mark.portable
 INFO = PCMFormat(44_100, 2, "f32", 5_000, 3)
 QUALITY = QualityPolicy(
     guard_frames=64,
-    silence_peak_limit=0.001,
+    padding_frames=64,
+    silence_peak_limit=0.0005,
     minimum_outside_snr_db=24.0,
-    maximum_outside_abs_error=0.08,
+    maximum_outside_abs_error=0.05,
 )
 
 
@@ -115,6 +119,7 @@ def _fake_codecs(
     }
     decode_calls: list[str] = []
     encode_calls: list[str] = []
+    rebuilt_natives: set[bytes] = set()
 
     def decoder(
         asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
@@ -126,6 +131,12 @@ def _fake_codecs(
             raise ValueError("fake decoder has no source for Ogg fixture")
         if info != INFO:
             raise ValueError("fake decoder received unexpected PCM metadata")
+        if output_change == "decoder-leak" and native in rebuilt_natives:
+            leaked = bytearray(decoded)
+            leaked[500 * info.frame_bytes : 501 * info.frame_bytes] = originals[
+                asset_id
+            ][500 * info.frame_bytes : 501 * info.frame_bytes]
+            decoded = bytes(leaked)
         pcm_path.write_bytes(decoded)
 
     def encoder(
@@ -138,13 +149,25 @@ def _fake_codecs(
         output = bytearray(edited)
         if output_change == "not-silent" and asset_id == "b":
             struct.pack_into("<f", output, (2_500 * info.channels) * 4, 0.01)
-        elif output_change == "outside-tolerance" and asset_id == "a":
-            struct.pack_into("<f", output, 0, 0.12)
+        elif output_change == "requested-start" and asset_id == "a":
+            output[500 * info.frame_bytes : 501 * info.frame_bytes] = originals[
+                asset_id
+            ][500 * info.frame_bytes : 501 * info.frame_bytes]
+        elif output_change == "requested-end" and asset_id == "a":
+            output[1_599 * info.frame_bytes : 1_600 * info.frame_bytes] = originals[
+                asset_id
+            ][1_599 * info.frame_bytes : 1_600 * info.frame_bytes]
+        elif output_change == "outside-max-error" and asset_id == "a":
+            for frame in range(100, 103):
+                for channel in range(info.channels):
+                    offset = (frame * info.channels + channel) * 4
+                    sample = struct.unpack_from("<f", output, offset)[0]
+                    struct.pack_into("<f", output, offset, sample + 0.06)
         elif output_change == "outside-snr" and asset_id == "a":
-            assert output[500 * info.frame_bytes : 1_600 * info.frame_bytes] == bytes(
-                (1_600 - 500) * info.frame_bytes
+            assert output[436 * info.frame_bytes : 1_664 * info.frame_bytes] == bytes(
+                (1_664 - 436) * info.frame_bytes
             )
-            for frame in (*range(0, 436), *range(1_664, info.frames)):
+            for frame in (*range(0, 372), *range(1_728, info.frames)):
                 for channel in range(info.channels):
                     offset = (frame * info.channels + channel) * 4
                     sample = struct.unpack_from("<f", output, offset)[0]
@@ -161,6 +184,7 @@ def _fake_codecs(
             damaged[-1] ^= 1
             native = bytes(damaged)
         pcm_for_native[native] = bytes(output)
+        rebuilt_natives.add(native)
         native_path.write_bytes(native)
 
     return decoder, encoder, decode_calls, encode_calls
@@ -249,8 +273,8 @@ def test_prepare_groups_native_assets_uses_real_f32_scratch_and_keeps_atomicity(
     assert decode_calls.count("a") == 2
     assert decode_calls.count("b") == 2
     expected = {
-        "a": _silenced(originals["a"], [(500, 1_600)]),
-        "b": _silenced(originals["b"], [(2_000, 3_200)]),
+        "a": _silenced(originals["a"], [(436, 1_664)]),
+        "b": _silenced(originals["b"], [(1_936, 3_264)]),
     }
     for asset, native in staged.items():
         parsed = parse_ogg_vorbis(native, expected_frames=INFO.frames)
@@ -275,8 +299,8 @@ def _pcm_for_fake_native(
     assert asset in assets
     source_pcm = originals[asset]
     if asset == "a":
-        return _silenced(source_pcm, [(500, 1_600)])
-    return _silenced(source_pcm, [(2_000, 3_200)])
+        return _silenced(source_pcm, [(436, 1_664)])
+    return _silenced(source_pcm, [(1_936, 3_264)])
 
 
 @pytest.mark.parametrize("failing_asset_first", [False, True])
@@ -344,7 +368,7 @@ def test_corrupt_unsupported_and_encode_failures_refuse_whole_request_in_both_or
         error_type = NativeValidationError
         detail = "unsupported Vorbis channel profile"
     else:
-        expected_b = _silenced(originals["b"], [(2_000, 3_200)])
+        expected_b = _silenced(originals["b"], [(1_936, 3_264)])
 
         def fail_encoder(
             asset_id: str,
@@ -421,6 +445,33 @@ def test_intermediate_edit_completeness_refusal_is_atomic(
     assert _snapshot(tmp_path) == before
 
 
+def test_padded_intermediate_frames_are_checked_before_encoding(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
+    before = _snapshot(tmp_path)
+    with pytest.raises(EditError, match="required edit incomplete"):
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            storage=_TamperingStorage(
+                "required frame",
+                originals["a"],
+                target_directory="0",
+                tamper_frame=450,
+            ),
+            quality=QUALITY,
+        )
+    assert encode_calls == []
+    assert _snapshot(tmp_path) == before
+
+
 @pytest.mark.parametrize("failing_asset_first", [False, True])
 def test_edit_completeness_failure_is_atomic_in_both_asset_orders(
     tmp_path: Path, failing_asset_first: bool
@@ -454,7 +505,7 @@ def test_edit_completeness_failure_is_atomic_in_both_asset_orders(
     assert _snapshot(tmp_path) == before
 
 
-@pytest.mark.parametrize("mode", ["not-silent", "outside-tolerance"])
+@pytest.mark.parametrize("mode", ["not-silent", "outside-max-error"])
 def test_lossy_decode_tolerance_violation_refuses_rebuild_atomically(
     tmp_path: Path, mode: str
 ) -> None:
@@ -474,10 +525,79 @@ def test_lossy_decode_tolerance_violation_refuses_rebuild_atomically(
             info=INFO,
             quality=QUALITY,
         )
-    assert error.value.asset_id == ("a" if mode == "outside-tolerance" else "b")
+    assert error.value.asset_id == ("b" if mode == "not-silent" else "a")
     assert "reconstruction" in str(error.value)
     assert encode_calls
     assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("mode", ["requested-start", "requested-end"])
+def test_rebuilt_audio_restored_at_requested_range_edges_is_refused(
+    tmp_path: Path, mode: str
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(
+        assets, originals, output_change=mode
+    )
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert error.value.asset_id == "a"
+    assert "requested-range silence peak" in error.value.detail
+    assert encode_calls == ["a"]
+
+
+def test_unpadded_decoder_leak_in_requested_range_is_refused(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, _, encode_calls = _fake_codecs(
+        assets, originals, output_change="decoder-leak"
+    )
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert error.value.asset_id == "a"
+    assert "requested-range silence peak" in error.value.detail
+    assert encode_calls == ["a"]
+
+
+def test_padded_ranges_merge_touch_and_clamp_to_clip_edges() -> None:
+    assert _padded_ranges([(0, 10), (10, 20), (90, 100)], frames=100, padding=5) == [
+        (0, 25),
+        (85, 100),
+    ]
+
+
+def test_padded_reconstruction_with_silent_requested_range_passes() -> None:
+    original = _pcm(0)
+    padded = _silenced(original, [(436, 1_664)])
+    verify_lossy_reconstruction(
+        "padded",
+        original,
+        padded,
+        padded,
+        [(436, 1_664)],
+        INFO,
+        policy=QUALITY,
+        requested_ranges=[(500, 1_600)],
+    )
 
 
 @pytest.mark.parametrize("failing_asset_first", [False, True])
@@ -513,6 +633,22 @@ def test_lossy_snr_gate_refuses_broad_low_amplitude_outside_perturbation(
     tmp_path: Path,
 ) -> None:
     assets, originals = _assets(tmp_path)
+    simulated = bytearray(_silenced(originals["a"], [(436, 1_664)]))
+    for frame in (*range(0, 372), *range(1_728, INFO.frames)):
+        for channel in range(INFO.channels):
+            offset = (frame * INFO.channels + channel) * 4
+            sample = struct.unpack_from("<f", simulated, offset)[0]
+            struct.pack_into("<f", simulated, offset, sample + 0.03)
+    metrics = measure_lossy_effects(
+        originals["a"],
+        bytes(simulated),
+        [(436, 1_664)],
+        INFO,
+        policy=QUALITY,
+        requested_ranges=[(500, 1_600)],
+    )
+    assert 13.0 <= metrics.outside_regions[0].snr_db <= 14.0
+    assert metrics.outside_regions[0].maximum_absolute_error < 0.05
     decoder, encoder, _, encode_calls = _fake_codecs(
         assets, originals, output_change="outside-snr"
     )
@@ -531,8 +667,133 @@ def test_lossy_snr_gate_refuses_broad_low_amplitude_outside_perturbation(
     assert error.value.asset_id == "a"
     assert "SNR" in error.value.detail
     assert "unaffected-region" in error.value.detail
+    assert "peak error" not in error.value.detail
+    assert QUALITY.maximum_outside_abs_error == 0.05
     assert encode_calls == ["a"]
     assert _snapshot(tmp_path) == before
+
+
+def test_lossy_max_error_gate_refuses_when_snr_is_acceptable(
+    tmp_path: Path,
+) -> None:
+    assets, originals = _assets(tmp_path)
+    simulated = bytearray(_silenced(originals["a"], [(436, 1_664)]))
+    for frame in range(100, 103):
+        for channel in range(INFO.channels):
+            offset = (frame * INFO.channels + channel) * 4
+            sample = struct.unpack_from("<f", simulated, offset)[0]
+            struct.pack_into("<f", simulated, offset, sample + 0.06)
+    metrics = measure_lossy_effects(
+        originals["a"],
+        bytes(simulated),
+        [(436, 1_664)],
+        INFO,
+        policy=QUALITY,
+        requested_ranges=[(500, 1_600)],
+    )
+    assert 27.0 <= metrics.outside_regions[0].snr_db <= 30.0
+    assert 0.05 < metrics.outside_regions[0].maximum_absolute_error < 0.07
+    decoder, encoder, _, encode_calls = _fake_codecs(
+        assets, originals, output_change="outside-max-error"
+    )
+    with pytest.raises(ReconstructionError) as error:
+        prepare_ogg(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=decoder,
+            encoder=encoder,
+            info=INFO,
+            quality=QUALITY,
+        )
+    assert error.value.asset_id == "a"
+    assert "peak error" in error.value.detail
+    assert "SNR" not in error.value.detail
+    assert encode_calls == ["a"]
+
+
+@pytest.mark.parametrize(
+    ("offset", "expected_detail"),
+    [
+        (0.06, "unaffected guard-region 0 peak error"),
+        (0.03, "unaffected guard-region 0 SNR"),
+    ],
+)
+def test_guard_quality_gates_refuse_independently(
+    offset: float, expected_detail: str
+) -> None:
+    original = _pcm(0)
+    padded_ranges = [(0, 1_264)]
+    requested_ranges = [(0, 1_200)]
+    decoded = bytearray(_silenced(original, padded_ranges))
+    for frame in range(1_264, 1_328):
+        if offset == 0.06 and frame != 1_270:
+            continue
+        for channel in range(INFO.channels):
+            sample_offset = (frame * INFO.channels + channel) * 4
+            sample = struct.unpack_from("<f", decoded, sample_offset)[0]
+            struct.pack_into("<f", decoded, sample_offset, sample + offset)
+    decoded_pcm = bytes(decoded)
+    metrics = measure_lossy_effects(
+        original,
+        decoded_pcm,
+        padded_ranges,
+        INFO,
+        policy=QUALITY,
+        requested_ranges=requested_ranges,
+    )
+    guard = metrics.guard_regions[0]
+    if offset == 0.06:
+        assert guard.maximum_absolute_error > QUALITY.maximum_guard_abs_error
+        assert guard.snr_db > QUALITY.minimum_guard_snr_db
+    else:
+        assert guard.maximum_absolute_error < QUALITY.maximum_guard_abs_error
+        assert guard.snr_db < QUALITY.minimum_guard_snr_db
+    with pytest.raises(ValueError, match=expected_detail):
+        verify_lossy_reconstruction(
+            "guard-gate",
+            original,
+            _silenced(original, padded_ranges),
+            decoded_pcm,
+            padded_ranges,
+            INFO,
+            policy=QUALITY,
+            requested_ranges=requested_ranges,
+        )
+
+
+def test_guard_regions_merge_normalize_and_do_not_duplicate_ranges() -> None:
+    assert _guard_regions(100, [(20, 30), (29, 40), (40, 45)], 10) == [
+        (10, 20),
+        (45, 55),
+    ]
+
+
+@pytest.mark.parametrize(
+    "ranges",
+    [
+        [(-1, 1)],
+        [(INFO.frames - 1, INFO.frames + 1)],
+        [(4, 3)],
+        [(4, 4)],
+        [(1.0, 2)],
+    ],
+)
+def test_lossy_verifier_rejects_invalid_edit_ranges(
+    ranges: list[tuple[int, int]],
+) -> None:
+    pcm = _pcm(0)
+    with pytest.raises(ValueError, match="invalid edit frame range"):
+        verify_lossy_reconstruction(
+            "invalid-range",
+            pcm,
+            pcm,
+            pcm,
+            ranges,
+            INFO,
+            policy=QUALITY,
+        )
 
 
 def test_guard_region_catches_all_zero_output_when_expanded_guards_cover_clip() -> None:

@@ -10,7 +10,7 @@ The accepted fixture has 32 kHz, stereo signed PCM16, 8,192 frames, and exact lo
 
 Because AST establishes two channels but does not provide an explicit WAVE speaker mask, the intermediate uses the standard stereo WAVE mask `FL|FR = 3`. The manual script also checks that FFmpeg decodes rebuilt AST as `stereo`. Frame boundaries are nudged by adjacent float values until the upstream floor/ceil mapping selects the exact intended frames; the exact-duration end boundary uses upstream's `seconds == duration` special case.
 
-[`ffmpeg_tools.py`](ffmpeg_tools.py) is used only by the manual scripts. It resolves FFmpeg once to an absolute path, checks its version, AST muxer/demuxer, and `pcm_s16be_planar` encoder, uses argument lists without a shell, applies subprocess timeouts, and includes at most the last 400 stderr characters in failures. Missing or unsuitable FFmpeg fails loudly.
+[`ffmpeg_tools.py`](ffmpeg_tools.py) is used only by the manual scripts. It resolves FFmpeg once to an absolute path, checks its version, AST muxer/demuxer, and both decoder and encoder capabilities for `pcm_s16be_planar`. It uses argument lists without a shell, redirects stdout/stderr to private temporary files, retains only a 64-KiB tail from either stream, and includes at most the last 400 stderr characters in failures. Each process starts in a new process group/session; timeout kills its whole process tree (Windows `taskkill /T /F`, POSIX process group), waits for termination, and decodes diagnostic text with UTF-8 replacement. Missing or unsuitable FFmpeg fails loudly.
 
 ## Reproduction on Windows
 
@@ -36,7 +36,7 @@ Observed manual-script output on this Windows environment:
 
 ~~~text
 PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers
-PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available
+PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar decoder/encoder are available
 PASS: 8192 stereo PCM16 frames, 4 canonical blocks, 32960 native bytes
 PASS: FFmpeg output equals the pure-Python writer and identity rebuild
 PASS: malformed, unsupported, and noncanonical AST inputs refused
@@ -45,7 +45,7 @@ PASS: disposable scratch removed
 
 ~~~text
 PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers
-PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available
+PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar decoder/encoder are available
 PASS: real PCMFormat/WaveStorage/Scratch.edit preserved stereo mask 3
 PASS: touching/overlapping edits merged; one rebuild per affected asset
 PASS: untouched asset not rebuilt; decoded edited PCM is frame-exact

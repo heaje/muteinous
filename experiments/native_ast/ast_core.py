@@ -394,6 +394,11 @@ def _validate_ast_native(
     validate_fixture(native, pcm, asset_id=asset_id, info=info)
 
 
+def _native_path(directory: Path, filename: str) -> Path:
+    """Build one native path beneath its per-asset private directory."""
+    return directory / filename
+
+
 def _verify_exact_reconstruction(
     asset_id: str,
     original: bytes,
@@ -435,6 +440,8 @@ def prepare(
             "native extension must be a dot followed by 1-8 lowercase ASCII "
             "letters or digits"
         )
+    if native_validator is None and info != INFO:
+        raise ValueError("default AST validation requires the canonical PCM profile")
     groups = group_edits(assets, edits, total_frames=info.frames)
     if assets.keys() != originals.keys():
         raise ValueError("fixture asset/original identity mismatch")
@@ -452,10 +459,10 @@ def prepare(
             validate_native(asset_id, native, original_pcm, info)
             directory = working / str(index)
             directory.mkdir()
-            source = directory / f"source{native_extension}"
+            source = _native_path(directory, f"source{native_extension}")
             extracted = directory / "extracted.pcm"
             edited = directory / "edited.pcm"
-            rebuilt = directory / f"rebuilt{native_extension}"
+            rebuilt = _native_path(directory, f"rebuilt{native_extension}")
             validated_pcm = directory / "validated.pcm"
             private_root = working.resolve()
             for native_path in (source, rebuilt):

@@ -12,6 +12,7 @@ from experiments.native_ast.ast_core import (
     Encoder,
     NativeValidationError,
     NativeValidator,
+    group_edits,
     prepare,
 )
 from muteinous.core.audio.pcm import PCMFormat
@@ -24,6 +25,7 @@ CHANNELS = 2
 FRAMES = 66_150
 INFO = PCMFormat(RATE, CHANNELS, "f32", FRAMES, 3)
 GUARD_FRAMES = 2_048
+EDIT_PADDING_FRAMES = 224
 SILENCE_PEAK_LIMIT = 0.0005
 MIN_OUTSIDE_SNR_DB = 24.0
 MAX_OUTSIDE_ABS_ERROR = 0.08
@@ -36,6 +38,7 @@ class QualityPolicy:
     """Measured decoded-domain tolerances; this is not a transparency claim."""
 
     guard_frames: int = GUARD_FRAMES
+    padding_frames: int = EDIT_PADDING_FRAMES
     silence_peak_limit: float = SILENCE_PEAK_LIMIT
     minimum_outside_snr_db: float = MIN_OUTSIDE_SNR_DB
     maximum_outside_abs_error: float = MAX_OUTSIDE_ABS_ERROR
@@ -45,6 +48,7 @@ class QualityPolicy:
     def __post_init__(self) -> None:
         if (
             self.guard_frames < 0
+            or self.padding_frames < 0
             or not math.isfinite(self.silence_peak_limit)
             or self.silence_peak_limit < 0
             or not math.isfinite(self.minimum_outside_snr_db)
@@ -156,6 +160,26 @@ def _merge_ranges(ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
+def _padded_ranges(
+    ranges: Sequence[tuple[int, int]], frames: int, padding: int
+) -> list[tuple[int, int]]:
+    """Widen edits in integer frames, clamp to the clip, and merge touching spans."""
+    if frames <= 0 or padding < 0:
+        raise ValueError("invalid Ogg edit padding bounds")
+    _validate_ranges(ranges, frames)
+    return _merge_ranges(
+        [(max(0, start - padding), min(frames, end + padding)) for start, end in ranges]
+    )
+
+
+def _validate_ranges(ranges: Sequence[tuple[int, int]], frames: int) -> None:
+    if frames <= 0 or any(
+        type(start) is not int or type(end) is not int or not 0 <= start < end <= frames
+        for start, end in ranges
+    ):
+        raise ValueError("invalid edit frame range")
+
+
 def _subtract_ranges(
     regions: Sequence[tuple[int, int]], exclusions: Sequence[tuple[int, int]]
 ) -> list[tuple[int, int]]:
@@ -209,21 +233,21 @@ def measure_lossy_effects(
     info: PCMFormat,
     *,
     policy: QualityPolicy = QualityPolicy(),
+    requested_ranges: Sequence[tuple[int, int]] | None = None,
 ) -> LossyMetrics:
     """Measure decoded output without implying losslessness or transparency."""
     original_samples = _as_samples(original, info)
     decoded_samples = _as_samples(decoded, info)
     if len(decoded_samples) != info.frames * info.channels:
         raise ValueError("rebuilt Vorbis frame count changed")
+    _validate_ranges(ranges, info.frames)
+    silence_ranges = ranges if requested_ranges is None else requested_ranges
+    _validate_ranges(silence_ranges, info.frames)
 
     mute_peaks: list[float] = []
-    for start, end in ranges:
-        mute_start = start + policy.guard_frames
-        mute_end = end - policy.guard_frames
-        if mute_start >= mute_end:
-            raise ValueError("required edit is too short for the Vorbis guard region")
-        sample_start = mute_start * info.channels
-        sample_end = mute_end * info.channels
+    for start, end in silence_ranges:
+        sample_start = start * info.channels
+        sample_end = end * info.channels
         mute_peaks.append(
             max(abs(value) for value in decoded_samples[sample_start:sample_end])
         )
@@ -271,22 +295,34 @@ def verify_lossy_reconstruction(
     info: PCMFormat,
     *,
     policy: QualityPolicy = QualityPolicy(),
+    requested_ranges: Sequence[tuple[int, int]] | None = None,
 ) -> None:
     """Check exact frame count, edited silence, and bounded fidelity everywhere else."""
     del asset_id
     _as_samples(edited, info)
-    measured = measure_lossy_effects(original, decoded, ranges, info, policy=policy)
+    _validate_ranges(ranges, info.frames)
+    silence_ranges = ranges if requested_ranges is None else requested_ranges
+    _validate_ranges(silence_ranges, info.frames)
+    measured = measure_lossy_effects(
+        original,
+        decoded,
+        ranges,
+        info,
+        policy=policy,
+        requested_ranges=silence_ranges,
+    )
     for peak in measured.edited_region_peaks:
         if peak > policy.silence_peak_limit:
             raise ValueError(
-                f"edited-region peak {peak:.8f} exceeds {policy.silence_peak_limit:.8f}"
+                f"requested-range silence peak {peak:.8f} exceeds "
+                f"{policy.silence_peak_limit:.8f}"
             )
     verified_unedited_frames = sum(
         region.end_frame - region.start_frame
         for region in (*measured.outside_regions, *measured.guard_regions)
     )
     if verified_unedited_frames == 0 and not _edit_covers_entire_clip(
-        info.frames, ranges
+        info.frames, silence_ranges
     ):
         raise ValueError("no unedited frames were verified")
     for region_index, region in enumerate(measured.outside_regions):
@@ -329,26 +365,46 @@ def prepare_ogg(
 ) -> dict[str, bytes]:
     """Parse each source, then reuse AST's private all-or-nothing PCM workflow."""
     sources: dict[str, VorbisInfo] = {}
+    requested_ranges = group_edits(assets, edits, total_frames=info.frames)
+    padded_ranges = {
+        asset_id: _padded_ranges(ranges, info.frames, quality.padding_frames)
+        for asset_id, ranges in requested_ranges.items()
+    }
+    padded_edits = tuple(
+        Edit(asset_id, 0, info.frames, start, end)
+        for asset_id, ranges in padded_ranges.items()
+        for start, end in ranges
+    )
+
+    def verify(
+        asset_id: str,
+        original: bytes,
+        edited: bytes,
+        decoded: bytes,
+        ranges: Sequence[tuple[int, int]],
+        pcm_info: PCMFormat,
+    ) -> None:
+        verify_lossy_reconstruction(
+            asset_id,
+            original,
+            edited,
+            decoded,
+            ranges,
+            pcm_info,
+            policy=quality,
+            requested_ranges=requested_ranges[asset_id],
+        )
+
     return prepare(
         root,
         assets,
         originals,
-        edits,
+        padded_edits,
         decoder=decoder,
         encoder=encoder,
         storage=storage,
         info=info,
         native_extension=".ogg",
         native_validator=native_validator_for(sources),
-        reconstruction_verifier=lambda asset_id, original, edited, decoded, ranges, pcm_info: (
-            verify_lossy_reconstruction(
-                asset_id,
-                original,
-                edited,
-                decoded,
-                ranges,
-                pcm_info,
-                policy=quality,
-            )
-        ),
+        reconstruction_verifier=verify,
     )

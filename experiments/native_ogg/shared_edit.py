@@ -44,11 +44,29 @@ def _edits() -> tuple[Edit, ...]:
         Edit("a", 21_000, INFO.frames - 21_000, 0, 7_665),
         Edit("a", 28_665, INFO.frames - 28_665, 0, 1_335),
         Edit("b", 0, INFO.frames, 35_280, 52_920),
+        Edit("start", 0, INFO.frames, 0, 11_025),
+        Edit("end", 0, INFO.frames, 55_125, INFO.frames),
     )
 
 
 def _ranges() -> dict[str, list[tuple[int, int]]]:
-    return {"a": [(11_025, 30_000)], "b": [(35_280, 52_920)]}
+    return {
+        "a": [(11_025, 30_000)],
+        "b": [(35_280, 52_920)],
+        "start": [(0, 11_025)],
+        "end": [(55_125, INFO.frames)],
+    }
+
+
+def _padded_ranges() -> dict[str, list[tuple[int, int]]]:
+    padding = QUALITY.padding_frames
+    return {
+        asset_id: [
+            (max(0, start - padding), min(INFO.frames, end + padding))
+            for start, end in ranges
+        ]
+        for asset_id, ranges in _ranges().items()
+    }
 
 
 def _require(condition: bool, message: str) -> None:
@@ -103,7 +121,7 @@ def main() -> None:
         stage_root = root / "staging"
         stage_root.mkdir()
         assets, originals, metadata = create_source_assets(
-            root, tools, ("a", "b", "untouched")
+            root, tools, ("a", "b", "start", "end", "untouched")
         )
         source_snapshot = snapshot(root)
         encode_calls: list[str] = []
@@ -117,7 +135,7 @@ def main() -> None:
 
         expected = {
             asset: _expected(originals[asset], ranges)
-            for asset, ranges in _ranges().items()
+            for asset, ranges in _padded_ranges().items()
         }
 
         def encoder(
@@ -149,9 +167,12 @@ def main() -> None:
             storage=WaveStorage(),
             quality=QUALITY,
         )
-        _require(set(staged) == {"a", "b"}, "wrong affected-asset grouping")
         _require(
-            Counter(encode_calls) == Counter({"a": 1, "b": 1}),
+            set(staged) == {"a", "b", "start", "end"},
+            "wrong affected-asset grouping",
+        )
+        _require(
+            Counter(encode_calls) == Counter({"a": 1, "b": 1, "start": 1, "end": 1}),
             f"wrong rebuild count: {encode_calls}",
         )
         _require("untouched" not in encode_calls, "untouched Ogg was rebuilt")
@@ -180,9 +201,10 @@ def main() -> None:
             measured = measure_lossy_effects(
                 originals[asset_id],
                 decoded,
-                _ranges()[asset_id],
+                _padded_ranges()[asset_id],
                 INFO,
                 policy=QUALITY,
+                requested_ranges=_ranges()[asset_id],
             )
             for region in measured.outside_regions:
                 print(
@@ -197,7 +219,10 @@ def main() -> None:
                     f"max_abs_error={region.maximum_absolute_error:.8f}"
                 )
             for index, peak in enumerate(measured.edited_region_peaks):
-                print(f"MEASURE: {asset_id} edited core {index} peak={peak:.8f}")
+                print(
+                    f"MEASURE: {asset_id} requested-range silence "
+                    f"{index} peak={peak:.8f}"
+                )
             print(
                 f"MEASURE: {asset_id} Ogg bytes source={len(assets[asset_id])}, "
                 f"rebuilt={len(native)}, delta={len(native) - len(assets[asset_id]):+d}"
@@ -208,7 +233,7 @@ def main() -> None:
             "source untouched Ogg changed",
         )
         _require(
-            Counter(decode_calls) == Counter({"a": 2, "b": 2}),
+            Counter(decode_calls) == Counter({"a": 2, "b": 2, "start": 2, "end": 2}),
             f"unexpected decode calls: {decode_calls}",
         )
         print("PASS: shared PCMFormat/WaveStorage/Scratch.edit used f32le mask 3")

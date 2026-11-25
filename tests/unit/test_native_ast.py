@@ -214,6 +214,10 @@ def test_every_frame_boundary_rounds_to_exact_frame(
             assert math.ceil(seconds * rate) == frame
 
 
+def test_exact_duration_end_boundary_is_unchanged_for_2007_frames() -> None:
+    assert frame_boundary_seconds(2007, 32_000, 2007, "end") == 2007 / 32_000
+
+
 def test_frame_mapping_keeps_upstream_stereo_mask_and_merges_touching_edits() -> None:
     assert INFO == PCMFormat(32_000, 2, "s16", FRAMES, 3)
     assets = {"a": b"fixture", "b": b"fixture"}
