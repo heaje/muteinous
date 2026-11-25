@@ -18,7 +18,11 @@ from muteinous.infrastructure.storage._filesystem import (
     canonical_json,
     digest,
 )
-from muteinous.infrastructure.storage.bundles import ResultIdentity, ResultStore
+from muteinous.infrastructure.storage.bundles import (
+    ResultIdentity,
+    ResultStore,
+    UnreadableSelection,
+)
 from tests.support.storage import IDENTITY, publish, read, validate_domain
 
 
@@ -119,16 +123,15 @@ def test_current_manifest_requires_exact_schema_for_all_operations(
     manifest_path.write_bytes(canonical_json(manifest))
 
     if operation == "selection":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
-            store.selection("scan")
+        assert isinstance(store.selection("scan"), UnreadableSelection)
     elif operation == "open":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
+        with pytest.raises(StorageError, match="unreadable"):
             with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
                 pytest.fail("Invalid current manifest was exposed")
     else:
         with store.stage("invalid-current-manifest") as stage:
             (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with pytest.raises(StorageError, match="superseded"):
                 store.publish(
                     stage,
                     "scan",
@@ -155,16 +158,15 @@ def test_current_manifest_rejects_invalid_digest_for_every_operation(
     manifest_path.write_bytes(canonical_json(manifest))
 
     if operation == "selection":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
-            store.selection("scan")
+        assert isinstance(store.selection("scan"), UnreadableSelection)
     elif operation == "open":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
+        with pytest.raises(StorageError, match="unreadable"):
             with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
                 pytest.fail("Invalid manifest digest was exposed")
     else:
         with store.stage("invalid-manifest-digest") as stage:
             (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with pytest.raises(StorageError, match="superseded"):
                 store.publish(
                     stage,
                     "scan",
@@ -188,16 +190,15 @@ def test_current_manifest_rejects_invalid_bundle_for_every_operation(
     )
 
     if operation == "selection":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
-            store.selection("scan")
+        assert isinstance(store.selection("scan"), UnreadableSelection)
     elif operation == "open":
-        with pytest.raises(StorageError, match="Invalid current result manifest"):
+        with pytest.raises(StorageError, match="unreadable"):
             with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
                 pytest.fail("Invalid manifest bundle was exposed")
     else:
         with store.stage("invalid-manifest-bundle") as stage:
             (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with pytest.raises(StorageError, match="superseded"):
                 store.publish(
                     stage,
                     "scan",

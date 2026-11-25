@@ -55,6 +55,16 @@ class Selection:
     metadata_sha256: str
 
 
+@dataclass(frozen=True)
+class UnreadableSelection:
+    """Existing regular manifest whose bytes are not a valid selection."""
+
+    raw_sha256: str
+
+
+SelectionState = Selection | UnreadableSelection | None
+
+
 def _result_key(result: str) -> str:
     if not isinstance(result, str) or not re.fullmatch(
         r"[a-z0-9][a-z0-9_-]{0,63}", result
@@ -213,7 +223,7 @@ class ResultStore:
         checked_directory(self._current, root=self.root)
         return self._current / f"{_result_key(result)}.json"
 
-    def _selection(self, result: str) -> Selection | None:
+    def _selection(self, result: str) -> SelectionState:
         path = self._manifest_path(result)
         try:
             raw = read_regular(path, root=self.root)
@@ -221,18 +231,21 @@ class ResultStore:
             # Missing manifest is the only absence condition, not a bad parent.
             checked_directory(self._current, root=self.root)
             return None
-        value = read_json(raw)
-        if (
-            set(value) != {"schema", "bundle", "metadata_sha256"}
-            or type(value["schema"]) is not int
-            or value["schema"] != 1
-            or not is_token(value["bundle"])
-            or not is_digest(value["metadata_sha256"])
-        ):
-            raise StorageError("Invalid current result manifest")
+        try:
+            value = read_json(raw)
+            if (
+                set(value) != {"schema", "bundle", "metadata_sha256"}
+                or type(value["schema"]) is not int
+                or value["schema"] != 1
+                or not is_token(value["bundle"])
+                or not is_digest(value["metadata_sha256"])
+            ):
+                raise StorageError("Invalid current result manifest")
+        except StorageError:
+            return UnreadableSelection(digest(raw))
         return Selection(value["bundle"], value["metadata_sha256"])
 
-    def selection(self, result: str) -> Selection | None:
+    def selection(self, result: str) -> SelectionState:
         """Capture the expected previous selection before producing a result."""
         with self._selection_guard():
             return self._selection(result)
@@ -243,7 +256,7 @@ class ResultStore:
         result: str,
         identity: ResultIdentity,
         *,
-        expected: Selection | None,
+        expected: SelectionState,
         is_current: Callable[[], bool],
         validate_domain: DomainValidator,
     ) -> Selection:
@@ -397,6 +410,8 @@ class ResultStore:
             selection = self._selection(result)
             if selection is None:
                 raise StorageError("No committed result manifest")
+            if isinstance(selection, UnreadableSelection):
+                raise StorageError("Current result manifest is unreadable")
         checked_directory(self._bundles, root=self.root)
         path = self._bundles / selection.bundle
         try:

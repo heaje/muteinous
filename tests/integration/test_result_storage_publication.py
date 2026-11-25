@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import hashlib
 import os
 import sys
 import threading
@@ -19,7 +20,11 @@ import pytest
 import muteinous.infrastructure.storage._filesystem as storage_filesystem
 import muteinous.infrastructure.storage.bundles as storage_bundles
 from muteinous.infrastructure.storage._filesystem import InsufficientSpace, StorageError
-from muteinous.infrastructure.storage.bundles import ResultStore, Selection
+from muteinous.infrastructure.storage.bundles import (
+    ResultStore,
+    Selection,
+    UnreadableSelection,
+)
 from muteinous.infrastructure.storage.staging import try_lock
 from tests.support.storage import IDENTITY, publish, read, validate_domain
 
@@ -692,6 +697,70 @@ def test_empty_selection_guard_is_initialized_and_usable(tmp_path: Path) -> None
     assert store.selection("scan") == selected
     with store.open_current("scan", IDENTITY, validate_domain=validate_domain) as path:
         assert (path / "payload.bin").read_bytes() == b"original"
+
+
+@pytest.mark.portable
+def test_unreadable_manifest_can_be_regenerated_without_read_fallback(
+    store: ResultStore,
+) -> None:
+    manifest = store.root / "current" / "scan.json"
+    manifest.write_bytes(b"not canonical json")
+
+    expected = store.selection("scan")
+    assert isinstance(expected, UnreadableSelection)
+    with pytest.raises(StorageError, match="unreadable"):
+        read(store)
+
+    with store.stage("regenerate-unreadable") as stage:
+        (stage.path / "payload.bin").write_bytes(b"regenerated")
+        selected = store.publish(
+            stage,
+            "scan",
+            IDENTITY,
+            expected=expected,
+            is_current=lambda: True,
+            validate_domain=validate_domain,
+        )
+
+    assert store.selection("scan") == selected
+    assert read(store) == b"regenerated"
+
+
+@pytest.mark.portable
+def test_changed_unreadable_manifest_supersedes_captured_marker(
+    store: ResultStore,
+) -> None:
+    manifest = store.root / "current" / "scan.json"
+    manifest.write_bytes(b"first corrupt value")
+    expected = store.selection("scan")
+    assert isinstance(expected, UnreadableSelection)
+    manifest.write_bytes(b"different corrupt value")
+
+    with store.stage("stale-unreadable-marker") as stage:
+        (stage.path / "payload.bin").write_bytes(b"must not replace")
+        with pytest.raises(StorageError, match="superseded"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=expected,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+
+    assert manifest.read_bytes() == b"different corrupt value"
+    assert store.selection("scan") == UnreadableSelection(
+        hashlib.sha256(b"different corrupt value").hexdigest()
+    )
+
+
+@pytest.mark.portable
+def test_nonregular_manifest_is_not_treated_as_unreadable(
+    store: ResultStore,
+) -> None:
+    (store.root / "current" / "scan.json").mkdir()
+    with pytest.raises(StorageError, match="Unexpected filesystem entry"):
+        store.selection("scan")
 
 
 @pytest.mark.portable
