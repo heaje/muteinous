@@ -1,79 +1,46 @@
-"""Synthetic AST feasibility checkpoint; not a censorship editor or adapter."""
+"""Manual FFmpeg identity/canonical-byte check; not a production adapter."""
 
 import struct
-import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-RATE = 32000
-FRAMES = 8192
+from .ast_core import (
+    FRAMES,
+    INFO,
+    NativeValidationError,
+    build_canonical_ast,
+    validate_fixture,
+)
+from .ffmpeg_tools import FFmpegTools
 
 
-def require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
-
-
-def ffmpeg(*args: str) -> None:
-    subprocess.run(
-        ["ffmpeg", "-nostdin", "-v", "error", "-xerror", "-n", *args],
-        check=True,
-        timeout=30,
+def _pcm_fixture() -> bytes:
+    return b"".join(
+        struct.pack(
+            "<hh",
+            (frame * 67) % 65_536 - 32_768,
+            32_767 - (frame * 137) % 65_536,
+        )
+        for frame in range(FRAMES)
     )
 
 
-def encode(pcm: Path, native: Path) -> None:
-    ffmpeg(
-        "-f", "s16le", "-ar", str(RATE), "-ac", "2", "-i", str(pcm),
-        "-c:a", "pcm_s16be_planar", "-f", "ast", "-loopstart", "32",
-        "-loopend", "192", str(native),
-    )
-
-
-def validate_fixture(native: bytes, expected: bytes) -> int:
-    """Independently check the exact synthetic profile, not arbitrary ASTs."""
-    require(len(native) >= 64, "truncated STRM header")
-    magic, size, codec, bits, channels, loop, rate, frames, start, end, first = (
-        struct.unpack_from(">4sI4H5I", native)
-    )
-    require(magic == b"STRM" and size == len(native) - 64, "invalid STRM size")
-    require((codec, bits, channels, loop) == (1, 16, 2, 65535), "unsupported profile")
-    require((rate, frames, start, end) == (RATE, FRAMES, 1024, 6144), "metadata mismatch")
-    offset = 64
-    decoded = bytearray()
-    blocks = 0
-    while offset < len(native):
-        require(offset + 32 <= len(native), "truncated BLCK header")
-        tag, width = struct.unpack_from(">4sI", native, offset)
-        require(tag == b"BLCK" and width > 0 and width % 2 == 0, "invalid block")
-        require(blocks != 0 or width == first, "first block size mismatch")
-        begin = offset + 32
-        offset = begin + 2 * width
-        require(offset <= len(native), "truncated block payload")
-        for pos in range(begin, begin + width, 2):
-            left = struct.unpack_from(">h", native, pos)[0]
-            right = struct.unpack_from(">h", native, pos + width)[0]
-            decoded.extend(struct.pack("<hh", left, right))
-        blocks += 1
-    require(len(decoded) == frames * 4 and decoded == expected, "PCM mismatch")
-    require(blocks > 1, "fixture must exercise multiple blocks")
-    return blocks
-
-
-def expect_refusal(native: bytes, expected: bytes, reason: str) -> None:
+def _expect_refusal(operation: object, reason: str) -> None:
     try:
-        validate_fixture(native, expected)
-    except ValueError as exc:
-        require(reason in str(exc), f"wrong refusal: {exc}")
+        validate_fixture(operation, _pcm_fixture())  # type: ignore[arg-type]
+    except NativeValidationError as exc:
+        if reason not in str(exc):
+            raise AssertionError(f"wrong refusal for {reason}: {exc}") from exc
     else:
-        raise ValueError(f"unexpected acceptance: {reason}")
+        raise AssertionError(f"unexpected acceptance: {reason}")
 
 
 def main() -> None:
-    expected = b"".join(
-        struct.pack("<hh", (i * 67) % 65536 - 32768, 32767 - (i * 137) % 65536)
-        for i in range(FRAMES)
-    )
+    tools = FFmpegTools.discover()
+    print(f"PASS: {tools.version}")
+    print("PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available")
+    expected = _pcm_fixture()
+
     with TemporaryDirectory(prefix="muteinous-ast-probe-") as scratch:
         root = Path(scratch)
         raw = root / "input.pcm"
@@ -81,22 +48,42 @@ def main() -> None:
         extracted = root / "extracted.pcm"
         rebuilt = root / "rebuilt.ast"
         raw.write_bytes(expected)
-        encode(raw, source)
+
+        tools.encode("probe", raw, source, INFO)
         original = source.read_bytes()
-        blocks = validate_fixture(original, expected)
-        ffmpeg("-i", str(source), "-c:a", "pcm_s16le", "-f", "s16le", str(extracted))
-        require(extracted.read_bytes() == expected, "FFmpeg decode mismatch")
-        encode(extracted, rebuilt)
+        blocks = validate_fixture(original, expected, asset_id="probe")
+        oracle = build_canonical_ast(expected, INFO)
+        if original != oracle:
+            raise AssertionError("FFmpeg bytes differ from pure-Python canonical AST")
+
+        tools.decode("probe", source, extracted, INFO)
+        if extracted.read_bytes() != expected:
+            raise AssertionError("FFmpeg decode differs from synthetic PCM")
+        tools.encode("probe", extracted, rebuilt, INFO)
         output = rebuilt.read_bytes()
-        validate_fixture(output, expected)
-        require(output == original, "native bytes changed during identity round trip")
-        require(source.read_bytes() == original, "source changed")
-        expect_refusal(output[:-1], expected, "invalid STRM size")
-        expect_refusal(output[:8] + b"\x00\x00" + output[10:], expected, "unsupported profile")
-        expect_refusal(output[:96] + bytes([output[96] ^ 1]) + output[97:], expected, "PCM mismatch")
-        print(f"PASS: {FRAMES} stereo PCM16 frames, {blocks} blocks, {len(output)} native bytes")
-        print("PASS: exact native round trip; three malformed/unsupported/fidelity refusals")
-    require(not root.exists(), "scratch cleanup failed")
+        validate_fixture(output, expected, asset_id="probe")
+        if output != original:
+            raise AssertionError("native bytes changed during identity round trip")
+        tools.assert_stereo(rebuilt)
+        if source.read_bytes() != original:
+            raise AssertionError("source AST changed")
+
+        _expect_refusal(original[:-1], "STRM file size mismatch")
+        unsupported = bytearray(original)
+        struct.pack_into(">H", unsupported, 8, 0)
+        _expect_refusal(bytes(unsupported), "unsupported AST codec")
+        reserved = bytearray(original)
+        reserved[36] = 1
+        _expect_refusal(bytes(reserved), "noncanonical STRM reserved/header bytes")
+        print(
+            f"PASS: {FRAMES} stereo PCM16 frames, {blocks} canonical blocks, "
+            f"{len(output)} native bytes"
+        )
+        print("PASS: FFmpeg output equals the pure-Python writer and identity rebuild")
+        print("PASS: malformed, unsupported, and noncanonical AST inputs refused")
+
+    if root.exists():
+        raise AssertionError("probe scratch was not removed")
     print("PASS: disposable scratch removed")
 
 

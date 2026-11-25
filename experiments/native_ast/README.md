@@ -1,57 +1,63 @@
-# Native AST feasibility investigation (incomplete M1.5)
+# Native AST feasibility investigation (M1.5)
 
-This isolated developer experiment is a checkpoint for [#20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported format declaration or completed censorship demonstration. The final experiment must use the real shared editor and selected lossless intermediate from [#19](https://github.com/heaje/muteinous/issues/19), which was open and absent from main at the initial checkpoint. The stacked integration below now targets the actual upstream implementation; no substitute censor algorithm is implemented.
+This is an isolated synthetic experiment for [Issue #20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported-format declaration, game compatibility claim, or completed censorship/Apply demonstration. The current scope is one uncompressed PCM16 stereo AST profile. No Ogg/Vorbis or other second format is included.
 
-## Format and tooling rationale
+## What is exercised
 
-Nintendo Audio Stream (AST) is a real native game audio container with a STRM header, BLCK sections, planar audio, sample count and optional loop bounds. Select its uncompressed signed 16-bit big-endian stereo variant for the first structural experiment: no lossy re-encoding ambiguity, mature FFmpeg demuxer and muxer, and independently documented block layout. Detect structural evidence, not title or file extension alone. This is a low-risk technical specimen, not evidence of relevance to any Windows installation or speech role. Its console origin and common music use limit representativeness for the Windows-first release. Evaluate a Windows-relevant format separately before choosing production priorities. CRI ADX is another candidate with FFmpeg read/write support, but requires explicit lossy fidelity characterization. No encrypted, proprietary or third-party audio fixture is used.
+[`ast_core.py`](ast_core.py) is the pure-Python implementation: a canonical AST fixture writer, strict parser/validator, asset grouping, exact integer-frame-to-time mapping, and private all-or-nothing preparation. Its encoder and decoder are injected callables. Required pytest coverage uses those callables as deterministic fakes and exercises the real upstream `PCMFormat`, `WaveStorage`, `audio_scratch`, and `Scratch.edit`; it uses no FFmpeg and never skips.
 
-References:
-- [FFmpeg AST muxer documentation](https://ffmpeg.org/ffmpeg-formats.html#ast)
-- [FFmpeg 7.1 AST muxer implementation](https://ffmpeg.org/doxygen/7.1/astenc_8c_source.html)
-- [Independent AST structural description](https://wiibrew.org/wiki/AST_file)
-- [vgmstream supported formats](https://github.com/vgmstream/vgmstream/blob/master/doc/FORMATS.md)
-- [FFmpeg licensing](https://ffmpeg.org/legal.html)
+The accepted fixture has 32 kHz, stereo signed PCM16, 8,192 frames, and exact loop bounds 1,024–6,144. AST uses a 64-byte STRM header and 32-byte BLCK headers. The observed FFmpeg `pcm_s16be_planar` packet layout is four blocks, each 4,096 bytes per channel (2,048 frames); only the final block may be shorter for another frame count. The validator rejects nonzero reserved/header padding, nonzero BLCK padding, unexpected partitions, inconsistent fields, extra bytes, and sample changes rather than accepting bytes that reconstruction would normalize. FFmpeg's muxer writes an unknown fixed little-endian `0x7f` marker at STRM bytes 40–43; other bytes in the checked header padding are zero.
 
-The probe uses an externally installed FFmpeg executable (not bundled, no new Python dependencies). FFmpeg build options determine LGPL/GPL obligations; the tested Debian binary enables GPL components. Redistribution, executable discovery/trust, exact version pinning, packaging and Windows availability need review before production. vgmstream is a candidate additional independent decoder but was not installed or executed. The validator is independently implemented from documented layout and compares channel samples against the synthetic generator; it is intentionally limited to the tested profile and is not a general AST reader.
+Because AST establishes two channels but does not provide an explicit WAVE speaker mask, the intermediate uses the standard stereo WAVE mask `FL|FR = 3`. The manual script also checks that FFmpeg decodes rebuilt AST as `stereo`. Frame boundaries are nudged by adjacent float values until the upstream floor/ceil mapping selects the exact intended frames; the exact-duration end boundary uses upstream's `seconds == duration` special case.
 
-## Reproduction
+[`ffmpeg_tools.py`](ffmpeg_tools.py) is used only by the manual scripts. It resolves FFmpeg once to an absolute path, checks its version, AST muxer/demuxer, and `pcm_s16be_planar` encoder, uses argument lists without a shell, applies subprocess timeouts, and includes at most the last 400 stderr characters in failures. Missing or unsuitable FFmpeg fails loudly.
 
-From repository root with FFmpeg available on PATH (AST muxer/demuxer and pcm_s16be_planar codec required), run:
+## Reproduction on Windows
 
-~~~shell
-python experiments/native_ast/probe.py
+Verified locally on Windows 11 (build `10.0.26300`), CPython 3.14.10, and FFmpeg `n7.1.5-12-g1fdbca85aa-20260731`. This FFmpeg is the BtbN GPL static build installed with WinGet package `BtbN.FFmpeg.GPL.7.1`; its configuration includes `--enable-gpl --enable-version3`. Do not redistribute that binary with Muteinous. Other FFmpeg builds are not established by this test.
+
+Run from the repository root in PowerShell. WinGet may update the User/Machine PATH without updating an already-open PowerShell process; refresh that shell if `ffmpeg` is not found:
+
+~~~powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path
+& .venv/Scripts/python.exe -m experiments.native_ast.probe
+& .venv/Scripts/python.exe -m experiments.native_ast.shared_edit
 ~~~
 
-All files are generated inside a fresh disposable temporary directory. The script accepts no game path or destination arguments, performs no install or loader operation, uses no shell, and refuses invalid structure/profile/sample content. It intentionally uses tiny in-memory fixture comparisons and raw interleaved PCM for an **identity** transport probe only; these are not the D06 bounded intermediate interface or a proposed production memory model. A missing tool or subprocess failure fails the probe rather than silently skipping it.
+The first script compares actual FFmpeg output bytes against the independent pure-Python writer, performs an identity decode/rebuild, validates the decoded stereo layout, and checks refusals. The second invokes the actual shared PCM/scratch APIs; its fixtures include overlapping and touching segment-relative edits, checks one encoder call per affected asset and none for the untouched asset, and proves cleanup/unchanged originals on failures. Its reconstruction negative control leaves valid edited PCM in place and makes the output destination exist so FFmpeg `-n` refuses the encode.
 
-Observed locally on Linux with CPython 3.13.5 and FFmpeg 7.1.5-0+deb13u1:
+The required deterministic checks do not need native tools:
+
+~~~powershell
+& .venv/Scripts/python.exe -m pytest tests/unit/test_native_ast.py tests/integration/test_native_ast_prepare.py -q
+~~~
+
+Observed manual-script output on this Windows environment:
 
 ~~~text
-PASS: 8192 stereo PCM16 frames, 4 blocks, 32960 native bytes
-PASS: exact native round trip; three malformed/unsupported/fidelity refusals
+PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers
+PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available
+PASS: 8192 stereo PCM16 frames, 4 canonical blocks, 32960 native bytes
+PASS: FFmpeg output equals the pure-Python writer and identity rebuild
+PASS: malformed, unsupported, and noncanonical AST inputs refused
 PASS: disposable scratch removed
 ~~~
 
-The independent parser checks STRM size, codec/precision, channels, sample rate, total frames, loop bounds, BLCK sizes and complete interleaved sample equality. The original and identity-reconstructed native bytes are identical; the source is unchanged. Negative controls reject a truncated file, unsupported codec field, and altered sample. Loop metadata in the test is 1024–6144 frames (32–192 ms at 32 kHz). FFmpeg's loop options take integer milliseconds and round down to frames; arbitrary original frame positions may not be representable by those options. Preserve/verify exact native loop fields or refuse; do not infer that generic remuxing preserves them.
-
-The exact fixture probe and Python compilation succeeded. The required repository validation is **not run**: Go Task is absent (attempted task check returned 127), CPython 3.14.10 is absent, and direct GitHub Git transport failed DNS resolution. GitHub connector access permits a branch checkpoint but not a complete local checkout with tags. No remote CI result claimed. Preserve [#4](https://github.com/heaje/muteinous/issues/4) infrastructure verification.
-
-## Stacked integration (implementation added; not yet executed)
-
-PR #25 is based on [PR #27](https://github.com/heaje/muteinous/pull/27), upstream commit `db091d4f97713178bf6ba2dd52cc4ed7cf3331cc`. Run from the repository root after `task setup`:
-
-~~~shell
-.venv/bin/python -m experiments.native_ast.shared_edit
+~~~text
+PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers
+PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar are available
+PASS: real PCMFormat/WaveStorage/Scratch.edit preserved stereo mask 3
+PASS: touching/overlapping edits merged; one rebuild per affected asset
+PASS: untouched asset not rebuilt; decoded edited PCM is frame-exact
+PASS: native refusals and real -n encoder failures are all-or-nothing
+PASS: later-asset and first-asset failures preserve snapshots and clean scratch
+PASS: disposable scratch removed
 ~~~
 
-On Windows use `.venv/Scripts/python.exe` instead. This separately provisioned native-tool experiment uses `PCMFormat`, `audio_scratch`, `WaveStorage`, and the actual shared `Scratch.edit` method. Three synthetic assets, two segment-relative requests mapped to one affected asset and one to a second, exercise grouped rebuilding; margins/fades are deliberately zero. The expected zeroed frames are an independent fixture oracle, not an alternative editor. A third asset is untouched. Native metadata and all decoded samples must match the expected output; original files must remain unchanged. A corrupt or unsupported second required asset or real reconstruction subprocess failure must prevent any staged result from escaping and remove disposable scratch. The probe is intentionally fixture-sized and uses temporary output bytes, not a production staging API. External FFmpeg remains separately provisioned. This new integrated script has not yet been executed in the available environment; the identity experiment above is the only executed native evidence at this point.
+## Historical evidence and limitations
 
-## Remaining work / acceptance gaps
+The earlier identity-only probe result on Linux (CPython 3.13.5, Debian FFmpeg `7.1.5-0+deb13u1`) is **historical**. It predates this shared-edit implementation and is not evidence that the current `shared_edit` script or current required tests run on Linux.
 
-- D05/D06/D08: execute and review the stacked shared-editor integration above; verify exact frames and fidelity outside intended edits. No lossy effects apply to the current PCM16 profile. Revalidate against merged #19.
-- D07/D24: execute grouped-edit and whole-request refusal paths, add routine deterministic unit and representative safety integration tests independent of externally provisioned native tooling; do not substitute the identity probe for these.
-- D16/D132–D135: keep the investigation outside production, no title-specific assumptions, loader execution, keys or installation writes. A structurally valid AST is not proof of a game loader accepting it, nor of safe placement, override precedence, verified originals, or reversible removal. Production adapter feasibility requires verified structural variants, exact metadata/channel layout preservation, a bounded streaming path, independent decoder validation, safe tool execution and a separate installation-method investigation under the shared installer. No D135 loader experiment without explicit approval.
-- D160–D165: run documented Task validation on the pinned environment, add appropriate portable tests only when platform dependencies are verified, and report actual local/remote evidence separately.
+Not verified: current shared-edit behavior on Linux or macOS, remote CI results, other FFmpeg builds, arbitrary AST variants or loop positions, independent decoder agreement, actual game-loader acceptance/playback, installation safety, or production bounded-memory/native-adapter behavior. The 32 ms and 192 ms loop points are exactly representable in this fixture; FFmpeg AST loop options use integer milliseconds and arbitrary native frame positions must not be assumed preserved. A structurally valid AST or successful FFmpeg decode is not evidence of loader acceptance.
 
-Do not merge as completed M1.5 until the shared-editor experiment and remaining applicable criteria are verified.
+The source checkout's package discovery is restricted to `src/`, and the source-distribution manifest prunes `experiments/`; the experiment is not an installable package. See [D05–D08](../../docs/architecture/decisions.md), [testing policy](../../docs/testing.md), and [the Issue #20 handoff](../../.agents/handoffs/issue-20.md).

@@ -27,17 +27,17 @@ tasks:
     desc: Check Ruff lint rules
     deps: [ready]
     cmds:
-      - '"{{.PYTHON}}" -m ruff check src scripts tests'
+      - '"{{.PYTHON}}" -m ruff check src scripts tests experiments'
   format-check:
     desc: Check formatting without editing files
     deps: [ready]
     cmds:
-      - '"{{.PYTHON}}" -m ruff format --check src scripts tests'
+      - '"{{.PYTHON}}" -m ruff format --check src scripts tests experiments'
   typecheck:
     desc: Run strict mypy
     deps: [ready]
     cmds:
-      - '"{{.PYTHON}}" -m mypy src scripts tests'
+      - '"{{.PYTHON}}" -m mypy src scripts tests experiments'
   decisions:
     desc: Verify architecture decision IDs
     deps: [ready]

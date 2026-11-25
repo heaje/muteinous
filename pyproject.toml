@@ -49,7 +49,7 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.mypy]
 python_version = "3.14"
-files = ["src", "scripts", "tests"]
+files = ["src", "scripts", "tests", "experiments"]
 mypy_path = ["src"]
 explicit_package_bases = true
 strict = true
