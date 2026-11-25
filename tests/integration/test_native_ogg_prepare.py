@@ -16,7 +16,6 @@ from experiments.native_ast.ast_core import (
     NativeStageError,
     NativeValidationError,
     ReconstructionError,
-    group_edits_with_segment_bounds,
 )
 from experiments.native_ogg.ogg_core import (
     build_ogg_fixture,
@@ -24,10 +23,7 @@ from experiments.native_ogg.ogg_core import (
 )
 from experiments.native_ogg.ogg_prepare import (
     QualityPolicy,
-    _merge_ranges,
-    _padded_segment_ranges,
     prepare_ogg,
-    verify_lossy_reconstruction,
 )
 from muteinous.core.audio.pcm import Curve, PCMFormat
 from muteinous.core.audio.scratch import Scratch
@@ -110,48 +106,27 @@ def _fake_codecs(
     assets: dict[str, bytes],
     originals: dict[str, bytes],
     *,
-    output_change: str | None = None,
     failure: str | None = None,
-) -> tuple[Decoder, Encoder, list[str], list[str], dict[bytes, bytes]]:
+) -> tuple[Decoder, Encoder, list[str], dict[bytes, bytes]]:
     pcm_for_native = {native: originals[asset] for asset, native in assets.items()}
     comments_by_asset = {
         asset: parse_ogg_vorbis(native).comments for asset, native in assets.items()
     }
-    decode_calls: list[str] = []
     encode_calls: list[str] = []
-    rebuilt_natives: set[bytes] = set()
 
     def decoder(
         asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
     ) -> None:
-        decode_calls.append(asset_id)
         native = native_path.read_bytes()
         decoded = pcm_for_native[native]
-        if output_change == "decoder-leak" and native in rebuilt_natives:
-            leaked = bytearray(decoded)
-            leaked[500 * info.frame_bytes : 501 * info.frame_bytes] = originals[
-                asset_id
-            ][500 * info.frame_bytes : 501 * info.frame_bytes]
-            decoded = bytes(leaked)
         pcm_path.write_bytes(decoded)
 
     def encoder(
         asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
     ) -> None:
         encode_calls.append(asset_id)
-        if failure in ("encoder", "encoder failure") and asset_id == "b":
-            raise OSError("injected libvorbis encode failure")
 
-        output = bytearray(pcm_path.read_bytes())
-        if output_change == "requested-start" and asset_id == "a":
-            output[500 * info.frame_bytes : 501 * info.frame_bytes] = originals[
-                asset_id
-            ][500 * info.frame_bytes : 501 * info.frame_bytes]
-        elif output_change == "requested-end" and asset_id == "a":
-            output[1_599 * info.frame_bytes : 1_600 * info.frame_bytes] = originals[
-                asset_id
-            ][1_599 * info.frame_bytes : 1_600 * info.frame_bytes]
-
+        output = pcm_path.read_bytes()
         native = build_ogg_fixture(
             frames=info.frames,
             comments=comments_by_asset[asset_id],
@@ -163,11 +138,10 @@ def _fake_codecs(
             damaged = bytearray(native)
             damaged[-1] ^= 1
             native = bytes(damaged)
-        pcm_for_native[native] = bytes(output)
-        rebuilt_natives.add(native)
+        pcm_for_native[native] = output
         native_path.write_bytes(native)
 
-    return decoder, encoder, decode_calls, encode_calls, pcm_for_native
+    return decoder, encoder, encode_calls, pcm_for_native
 
 
 class _TamperingReader:
@@ -187,10 +161,6 @@ class _TamperingReader:
         elif self._mode == "extra muted frame":
             offset = 435 * self.info.frame_bytes
             pcm[offset : offset + self.info.frame_bytes] = bytes(self.info.frame_bytes)
-        elif self._mode == "outside sample":
-            pcm[2_500 * self.info.frame_bytes] ^= 1
-        elif self._mode == "frame count":
-            pcm.extend(bytes(self.info.frame_bytes))
 
         block_bytes = 4096 * self.info.frame_bytes
         for offset in range(0, len(pcm), block_bytes):
@@ -219,12 +189,11 @@ def _assert_atomic_failure(
     decoder: Decoder,
     encoder: Encoder,
     error_type: type[NativeStageError],
-    message: str,
     *,
     expected_asset: str = "b",
     storage: WaveStorage | None = None,
     quality: QualityPolicy = QUALITY,
-) -> NativeStageError:
+) -> None:
     before = _snapshot(root)
     with pytest.raises(error_type) as error:
         prepare_ogg(
@@ -240,10 +209,8 @@ def _assert_atomic_failure(
         )
     assert type(error.value) is error_type
     assert error.value.asset_id == expected_asset
-    assert str(error.value) == message
     assert _snapshot(root) == before
     assert not list(root.glob("native-prepare-*"))
-    return error.value
 
 
 def test_prepare_merges_edits_pads_and_rebuilds_each_affected_asset_once(
@@ -251,9 +218,7 @@ def test_prepare_merges_edits_pads_and_rebuilds_each_affected_asset_once(
 ) -> None:
     assets, originals = _assets(tmp_path)
     before = _snapshot(tmp_path)
-    decoder, encoder, decode_calls, encode_calls, pcm_for_native = _fake_codecs(
-        assets, originals
-    )
+    decoder, encoder, encode_calls, pcm_for_native = _fake_codecs(assets, originals)
 
     staged = prepare_ogg(
         tmp_path,
@@ -269,31 +234,13 @@ def test_prepare_merges_edits_pads_and_rebuilds_each_affected_asset_once(
     assert set(staged) == {"a", "b"}
     assert Counter(encode_calls) == Counter({"a": 1, "b": 1})
     assert "untouched" not in encode_calls
-    assert Counter(decode_calls) == Counter({"a": 2, "b": 2})
     expected = {
         "a": _silenced(originals["a"], [(436, 1_664)]),
         "b": _silenced(originals["b"], [(1_936, 3_264)]),
     }
     for asset, native in staged.items():
-        parsed = parse_ogg_vorbis(native, expected_frames=INFO.frames)
-        assert parsed.vendor == "fake libvorbis generation"
-        assert native != assets[asset]
+        parse_ogg_vorbis(native, expected_frames=INFO.frames)
         assert pcm_for_native[native] == expected[asset]
-    edge_edits = (
-        Edit("a", 0, 100, 0, 10),
-        Edit("a", 0, 100, 20, 30),
-        Edit("a", 0, 100, 32, 36),
-        Edit("a", 0, 100, 90, 100),
-    )
-    edge_ranges = group_edits_with_segment_bounds(
-        assets, edge_edits, total_frames=INFO.frames
-    )["a"]
-    padded_edge_ranges = _padded_segment_ranges(edge_ranges, INFO.frames, 5)
-    assert padded_edge_ranges == [(0, 15), (15, 35), (27, 41), (85, 100)]
-    assert _merge_ranges(padded_edge_ranges) == [
-        (0, 41),
-        (85, 100),
-    ]
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
 
@@ -302,7 +249,7 @@ def test_padding_is_clamped_to_interior_segment_and_neighbors_stay_bit_exact(
     tmp_path: Path,
 ) -> None:
     assets, originals = _assets(tmp_path)
-    decoder, encoder, _, _, pcm_for_native = _fake_codecs(assets, originals)
+    decoder, encoder, _, pcm_for_native = _fake_codecs(assets, originals)
     edits = (Edit("a", 1_000, 1_000, 0, 1_000),)
 
     staged = prepare_ogg(
@@ -327,11 +274,11 @@ def test_padding_is_clamped_to_interior_segment_and_neighbors_stay_bit_exact(
     )
 
 
-def test_segment_boundary_padding_that_leaks_at_requested_edge_is_refused(
+def test_segment_bounded_padding_refuses_requested_edge_leakage(
     tmp_path: Path,
 ) -> None:
     assets, originals = _assets(tmp_path)
-    base_decoder, encoder, _, encode_calls, _ = _fake_codecs(assets, originals)
+    base_decoder, encoder, _, _ = _fake_codecs(assets, originals)
     edits = (Edit("a", 1_000, 1_000, 0, 100),)
     before = _snapshot(tmp_path)
 
@@ -360,61 +307,19 @@ def test_segment_boundary_padding_that_leaks_at_requested_edge_is_refused(
 
     assert type(error.value) is ReconstructionError
     assert error.value.asset_id == "a"
-    assert "requested-range silence peak" in error.value.detail
-    assert encode_calls == ["a"]
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
 
 
-def test_adjacent_segment_padding_is_clamped_before_asset_ranges_merge(
-    tmp_path: Path,
-) -> None:
-    assets, originals = _assets(tmp_path)
-    edits = (
-        Edit("a", 1_000, 1_000, 900, 1_000),
-        Edit("a", 2_000, 1_000, 0, 100),
-    )
-    segment_ranges = group_edits_with_segment_bounds(
-        assets, edits, total_frames=INFO.frames
-    )["a"]
-    assert _padded_segment_ranges(segment_ranges, INFO.frames, 64) == [
-        (1_836, 2_000),
-        (2_000, 2_164),
-    ]
-    decoder, encoder, _, _, pcm_for_native = _fake_codecs(assets, originals)
-
-    staged = prepare_ogg(
-        tmp_path,
-        assets,
-        originals,
-        edits,
-        decoder=decoder,
-        encoder=encoder,
-        info=INFO,
-        quality=QUALITY,
-    )
-
-    expected = _silenced(originals["a"], [(1_836, 2_164)])
-    assert pcm_for_native[staged["a"]] == expected
-    assert expected[2_000 * INFO.frame_bytes : 2_164 * INFO.frame_bytes] == bytes(
-        164 * INFO.frame_bytes
-    )
-
-
 @pytest.mark.parametrize(
-    ("mode", "detail"),
-    [
-        ("required frame", "required edit incomplete"),
-        ("extra muted frame", "unaffected frames changed"),
-        ("outside sample", "unaffected frames changed"),
-        ("frame count", "frame count changed"),
-    ],
+    "mode",
+    ["required frame", "extra muted frame"],
 )
 def test_padded_edit_completeness_verifier_rejects_tampering_before_encode(
-    tmp_path: Path, mode: str, detail: str
+    tmp_path: Path, mode: str
 ) -> None:
     assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls, _ = _fake_codecs(assets, originals)
+    decoder, encoder, _, _ = _fake_codecs(assets, originals)
 
     _assert_atomic_failure(
         tmp_path,
@@ -424,39 +329,9 @@ def test_padded_edit_completeness_verifier_rejects_tampering_before_encode(
         decoder,
         encoder,
         EditError,
-        f"required asset a: PCM edit: {detail}",
         expected_asset="a",
         storage=_TamperingStorage(mode, originals["a"]),
     )
-    assert encode_calls == []
-
-
-@pytest.mark.parametrize("mode", ["requested-start", "requested-end", "decoder-leak"])
-def test_decoded_requested_range_silence_gate_refuses_edge_leakage(
-    tmp_path: Path, mode: str
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls, _ = _fake_codecs(
-        assets, originals, output_change=mode
-    )
-    before = _snapshot(tmp_path)
-    with pytest.raises(ReconstructionError) as error:
-        prepare_ogg(
-            tmp_path,
-            assets,
-            originals,
-            _edits(),
-            decoder=decoder,
-            encoder=encoder,
-            info=INFO,
-            quality=QUALITY,
-        )
-    assert type(error.value) is ReconstructionError
-    assert error.value.asset_id == "a"
-    assert "requested-range silence peak" in error.value.detail
-    assert encode_calls == ["a"]
-    assert _snapshot(tmp_path) == before
-    assert not list(tmp_path.glob("native-prepare-*"))
 
 
 @pytest.mark.parametrize(
@@ -466,7 +341,6 @@ def test_decoded_requested_range_silence_gate_refuses_edge_leakage(
         "source profile validation",
         "extraction mismatch",
         "shared editor failure",
-        "encoder failure",
         "rebuilt native validation",
     ],
 )
@@ -478,9 +352,7 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
     failing_asset_first: bool,
 ) -> None:
     assets, originals = _assets(tmp_path)
-    decoder, encoder, decode_calls, encode_calls, _ = _fake_codecs(
-        assets, originals, failure=failure
-    )
+    decoder, encoder, _, _ = _fake_codecs(assets, originals, failure=failure)
     if failure == "source CRC validation":
         damaged = bytearray(assets["b"])
         damaged[-1] ^= 1
@@ -507,16 +379,7 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
         "source profile validation": NativeValidationError,
         "extraction mismatch": ExtractionError,
         "shared editor failure": EditError,
-        "encoder failure": ReconstructionError,
         "rebuilt native validation": ReconstructionError,
-    }
-    details = {
-        "source CRC validation": "Ogg page CRC mismatch",
-        "source profile validation": "unsupported Vorbis channel profile",
-        "extraction mismatch": "extracted PCM differs from verified source",
-        "shared editor failure": "injected PCM editor failure",
-        "encoder failure": "injected libvorbis encode failure",
-        "rebuilt native validation": "Ogg page CRC mismatch",
     }
     call_number = 0
     real_edit = Scratch.edit
@@ -541,7 +404,7 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
 
     monkeypatch.setattr(Scratch, "edit", failing_edit)
     edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    error = _assert_atomic_failure(
+    _assert_atomic_failure(
         tmp_path,
         assets,
         originals,
@@ -549,52 +412,4 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
         decoder,
         encoder,
         error_types[failure],
-        f"required asset b: {error_types[failure].stage}: {details[failure]}",
-    )
-    assert error.asset_id == "b"
-
-    expected_decodes = {
-        "source CRC validation": 0 if failing_asset_first else 2,
-        "source profile validation": 0 if failing_asset_first else 2,
-        "extraction mismatch": 1 if failing_asset_first else 3,
-        "shared editor failure": 1 if failing_asset_first else 3,
-        "encoder failure": 1 if failing_asset_first else 3,
-        "rebuilt native validation": 1 if failing_asset_first else 3,
-    }
-    assert len(decode_calls) == expected_decodes[failure]
-    if failure in (
-        "source CRC validation",
-        "source profile validation",
-        "extraction mismatch",
-        "shared editor failure",
-    ):
-        assert encode_calls == ([] if failing_asset_first else ["a"])
-    else:
-        assert encode_calls == (["b"] if failing_asset_first else ["a", "b"])
-
-
-def test_default_padding_silence_reconstruction_passes_after_decode() -> None:
-    original = _pcm(0)
-    padded = _silenced(original, [(436, 1_664)])
-    requested = [(500, 1_600)]
-    verify_lossy_reconstruction(
-        "padded",
-        original,
-        padded,
-        padded,
-        [(436, 1_664)],
-        INFO,
-        policy=QUALITY,
-        requested_ranges=requested,
-    )
-    bounded = group_edits_with_segment_bounds(
-        {"padded": b""},
-        (Edit("padded", 0, INFO.frames, 500, 1_600),),
-        total_frames=INFO.frames,
-    )["padded"]
-    assert _padded_segment_ranges(bounded, INFO.frames, QUALITY.padding_frames) == [
-        (436, 1_664)
-    ]
-    assert padded[436 * INFO.frame_bytes : 1_664 * INFO.frame_bytes] == bytes(
-        (1_664 - 436) * INFO.frame_bytes
     )

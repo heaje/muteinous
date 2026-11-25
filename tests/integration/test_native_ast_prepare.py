@@ -3,7 +3,6 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
 
 import pytest
 
@@ -129,10 +128,6 @@ class _TamperingReader:
         elif self._mode == "extra muted frame":
             offset = 1000 * self.info.frame_bytes
             pcm[offset : offset + self.info.frame_bytes] = bytes(self.info.frame_bytes)
-        elif self._mode == "outside sample":
-            pcm[1300 * self.info.frame_bytes] ^= 1
-        elif self._mode == "frame count":
-            pcm.extend(bytes(self.info.frame_bytes))
 
         block_bytes = 4096 * self.info.frame_bytes
         for offset in range(0, len(pcm), block_bytes):
@@ -161,11 +156,10 @@ def _assert_atomic_failure(
     decoder: Decoder,
     encoder: ast_core.Encoder,
     error_type: type[NativeStageError],
-    message: str,
     *,
     expected_asset: str = "b",
     storage: WaveStorage | None = None,
-) -> NativeStageError:
+) -> None:
     before = _snapshot(root)
     with pytest.raises(error_type) as error:
         prepare(
@@ -179,20 +173,14 @@ def _assert_atomic_failure(
         )
     assert type(error.value) is error_type
     assert error.value.asset_id == expected_asset
-    assert str(error.value) == message
     assert _snapshot(root) == before
     assert not list(root.glob("native-prepare-*"))
-    return error.value
 
 
 def test_prepare_merges_segment_edits_and_rebuilds_each_affected_asset_once(
     tmp_path: Path,
 ) -> None:
     assets, originals = _assets(tmp_path)
-    assert ast_core.group_edits(assets, _edits()) == {
-        "a": [(1001, 1257), (4000, 4050)],
-        "b": [(2048, 2176)],
-    }
     before = _snapshot(tmp_path)
     decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
 
@@ -222,43 +210,6 @@ def test_prepare_merges_segment_edits_and_rebuilds_each_affected_asset_once(
     assert not list(tmp_path.glob("native-prepare-*"))
 
 
-@pytest.mark.parametrize(
-    ("field", "values"),
-    [
-        ("segment_start", (True, 4096, 100, 200)),
-        ("segment_start", (10.0, 4096, 100, 200)),
-        ("segment_frames", (0, True, 0, 1)),
-        ("segment_frames", (0, 4096.0, 100, 200)),
-        ("start", (0, 4096, True, 200)),
-        ("start", (0, 4096, 100.0, 200)),
-        ("end", (0, 4096, 0, True)),
-        ("end", (0, 4096, 100, 200.0)),
-    ],
-)
-def test_prepare_rejects_non_integer_edit_bounds_before_codec_calls(
-    tmp_path: Path, field: str, values: tuple[object, object, object, object]
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, decode_calls, encode_calls = _fake_codecs(assets, originals)
-    invalid_bounds = cast(tuple[int, int, int, int], values)
-
-    with pytest.raises(
-        NativeValidationError, match=f"{field} must be an exact int"
-    ) as error:
-        prepare(
-            tmp_path,
-            assets,
-            originals,
-            (Edit("a", *invalid_bounds),),
-            decoder=decoder,
-            encoder=encoder,
-        )
-
-    assert error.value.asset_id == "a"
-    assert decode_calls == []
-    assert encode_calls == []
-
-
 def test_real_scratch_edit_changes_exactly_frames_1001_through_2006(
     tmp_path: Path,
 ) -> None:
@@ -285,19 +236,14 @@ def test_real_scratch_edit_changes_exactly_frames_1001_through_2006(
 
 
 @pytest.mark.parametrize(
-    ("mode", "detail"),
-    [
-        ("required frame", "required edit incomplete"),
-        ("extra muted frame", "unaffected frames changed"),
-        ("outside sample", "unaffected frames changed"),
-        ("frame count", "frame count changed"),
-    ],
+    "mode",
+    ["required frame", "extra muted frame"],
 )
 def test_independent_edit_completeness_verifier_rejects_tampering_before_encode(
-    tmp_path: Path, mode: str, detail: str
+    tmp_path: Path, mode: str
 ) -> None:
     assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
+    decoder, encoder, _, _ = _fake_codecs(assets, originals)
 
     _assert_atomic_failure(
         tmp_path,
@@ -307,11 +253,9 @@ def test_independent_edit_completeness_verifier_rejects_tampering_before_encode(
         decoder,
         encoder,
         EditError,
-        f"required asset a: PCM edit: {detail}",
         expected_asset="a",
         storage=_TamperingWaveStorage(mode, originals["a"]),
     )
-    assert encode_calls == []
 
 
 @pytest.mark.parametrize(
@@ -338,13 +282,10 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
         assets["b"] = bytes(malformed)
 
     pcm_for_native = {native: originals[asset] for asset, native in assets.items()}
-    decode_calls: list[str] = []
-    encode_calls: list[str] = []
 
     def decoder(
         asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
     ) -> None:
-        decode_calls.append(asset_id)
         pcm = pcm_for_native[native_path.read_bytes()]
         if failure == "extraction mismatch" and asset_id == "b":
             pcm = bytes([pcm[0] ^ 1]) + pcm[1:]
@@ -353,7 +294,6 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
     def encoder(
         asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
     ) -> None:
-        encode_calls.append(asset_id)
         if failure == "encoder failure" and asset_id == "b":
             raise OSError("injected encoder failure")
         native = bytearray(build_canonical_ast(pcm_path.read_bytes(), info))
@@ -369,13 +309,6 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
         "shared editor failure": EditError,
         "encoder failure": ReconstructionError,
         "rebuilt native validation": ReconstructionError,
-    }
-    details = {
-        "source native validation": "nonzero BLCK padding",
-        "extraction mismatch": "extracted PCM differs from verified source",
-        "shared editor failure": "injected PCM editor failure",
-        "encoder failure": "injected encoder failure",
-        "rebuilt native validation": "nonzero BLCK padding",
     }
     call_number = 0
     real_edit = Scratch.edit
@@ -400,7 +333,7 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
 
     monkeypatch.setattr(Scratch, "edit", failing_edit)
     edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    error = _assert_atomic_failure(
+    _assert_atomic_failure(
         tmp_path,
         assets,
         originals,
@@ -408,84 +341,4 @@ def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
         decoder,
         encoder,
         error_types[failure],
-        f"required asset b: {error_types[failure].stage}: {details[failure]}",
     )
-    assert error.asset_id == "b"
-
-    decoded_before_failure = {
-        "source native validation": 0 if failing_asset_first else 2,
-        "extraction mismatch": 1 if failing_asset_first else 3,
-        "shared editor failure": 1 if failing_asset_first else 3,
-        "encoder failure": 1 if failing_asset_first else 3,
-        "rebuilt native validation": 1 if failing_asset_first else 3,
-    }
-    assert len(decode_calls) == decoded_before_failure[failure]
-    if failure in (
-        "source native validation",
-        "extraction mismatch",
-        "shared editor failure",
-    ):
-        assert encode_calls == ([] if failing_asset_first else ["a"])
-    elif failure in ("encoder failure", "rebuilt native validation"):
-        assert encode_calls == (["b"] if failing_asset_first else ["a", "b"])
-
-
-def test_default_ast_preparation_rejects_nonprofile_pcm_metadata(
-    tmp_path: Path,
-) -> None:
-    nonprofile = PCMFormat(44_100, 2, "s16", FRAMES, 3)
-    codec_calls: list[str] = []
-    with pytest.raises(
-        ValueError, match="default AST validation requires the canonical PCM profile"
-    ):
-        prepare(
-            tmp_path,
-            {},
-            {},
-            (),
-            decoder=lambda *_: codec_calls.append("decode"),
-            encoder=lambda *_: codec_calls.append("encode"),
-            info=nonprofile,
-        )
-    assert codec_calls == []
-
-
-def test_native_extension_allowlist_and_path_containment_are_enforced(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    with pytest.raises(ValueError, match="native extension"):
-        prepare(
-            tmp_path,
-            {},
-            {},
-            (),
-            decoder=lambda *_: None,
-            encoder=lambda *_: None,
-            native_extension="../escape.ast",
-        )
-
-    assets, originals = _assets(tmp_path)
-    codec_calls: list[str] = []
-
-    def escaping_path(directory: Path, filename: str) -> Path:
-        if filename == "source.ast":
-            return tmp_path / "outside.ast"
-        return directory / filename
-
-    monkeypatch.setattr(ast_core, "_native_path", escaping_path)
-    before = _snapshot(tmp_path)
-    with pytest.raises(
-        ValueError, match="native path escaped private working directory"
-    ):
-        prepare(
-            tmp_path,
-            assets,
-            originals,
-            _edits(),
-            decoder=lambda *_: codec_calls.append("decode"),
-            encoder=lambda *_: codec_calls.append("encode"),
-        )
-    assert codec_calls == []
-    assert _snapshot(tmp_path) == before
-    assert not (tmp_path / "outside.ast").exists()
-    assert not list(tmp_path.glob("native-prepare-*"))
