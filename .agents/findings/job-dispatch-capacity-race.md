@@ -1,31 +1,26 @@
 # Capacity changes during dispatch-time plan validation
 
 Status: active
-Last verified: 2026-11-24
+Last verified: 2026-11-25
 Related: [Issue #21](https://github.com/heaje/muteinous/issues/21), D88–D89/D91–D93, [queue implementation](../../src/muteinous/infrastructure/jobs/queue.py)
 Retire/promote when: provider integration and scheduler review have incorporated this evidence, or the dispatch algorithm is replaced.
 
-## Finding and limitations
+## Finding
 
-A plan validator must not run under the queue lock: otherwise cancellation and
-physical completion cannot proceed while the validator is checking external
-state. But a resource release while validating a younger job can make an
-older previously blocked job eligible. Continuing the old scan would violate
-resource-aware FIFO. The implementation tracks a capacity revision, restarting
-at the oldest pending job on changes before dispatch.
+A plan validator must run outside the queue lock so cancellation and physical
+completion can proceed. If capacity is released while validating a younger
+job, an older blocked job may become eligible. Restarting the scan at the
+oldest pending job when the capacity revision changes preserves resource-aware
+FIFO.
 
 ## Reproduction / evidence
 
 The [controlled regression](../../tests/integration/jobs/test_job_queue_scheduling.py)
 `test_capacity_release_during_validation_restarts_fifo` holds the younger
 job's validator open, releases the occupying worker, then releases validation.
-The older job must dispatch first. The focused queue/value suite passed under
-the pinned Python 3.14.10 toolchain, including this regression;
-three-platform CI remains unverified.
+It asserts that the older job dispatches first.
 
 ## Recommendation
 
-Preserve the capacity-revision check when integrating provider validators.
-Keep validators quick and read-only; they must not wait for queue capacity.
-Worker adapters must not return until physical provider work has stopped,
-even if the job is already logically cancelled.
+Preserve the capacity-revision restart. Keep validators quick and read-only;
+workers must not return until physical provider work has stopped.

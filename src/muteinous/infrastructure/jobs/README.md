@@ -17,21 +17,17 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
   Ordinary preference changes must not invalidate otherwise valid plans.
   Eligible plans are always revalidated immediately before dispatch. Busy plans
   are revalidated for staleness only after `revalidate_interval` (default 1.0
-  second), measured by the injectable monotonic `clock`; this can be configured
-  as a finite constructor argument of at least 0.001 seconds. The injected
-  clock is trusted, must be monotonic and must not raise; clock failures on
-  worker/completion paths are not contained. Domain-specific freshness checks
-  remain necessary at result acceptance and any irreversible effect.
+  second), measured by the injectable clock; this can be configured as a
+  positive finite constructor argument.
+  The injected monotonic clock is trusted.
+  Domain-specific freshness checks remain necessary at result acceptance and
+  any irreversible effect.
 - The worker receives a `JobContext` with cooperative cancellation and optional
   progress reporting. Adapters must ensure all physical work has stopped before
   returning or raising, including asynchronous provider operations. Queue
   cancellation rejects late returned results and reports but cannot undo
-  provider side effects; providers must not publish cancelled work. Successful
-  results are stored and exposed by reference: providers must return immutable
-  or unshared values and not mutate them after returning; the queue does not copy
-  or re-version results.
-- Failure details are truncated to 4,096 characters with the suffix
-  `... [truncated]`.
+  provider side effects; providers must not publish cancelled work. Results are
+  stored by reference, so providers must not mutate them after returning.
 - Workers may omit progress. Report full latest stage/activity/count snapshots;
   mark meaningful forward progress explicitly and use heartbeat for liveness.
   Only set `WorkCount.reliable` when the denominator is established. Overall
@@ -50,11 +46,9 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
   automatic pruning policy.
 - The queue owner may use `drain()` to await pending and physical work;
   an optional caller wait timeout does not expire jobs. `close()` stops
-  submissions, requests cancellation, and joins workers. It can wait
-  indefinitely for a noncooperative provider. Call it from the owning thread,
-  not from a worker or validator. The dispatcher and workers are non-daemon
-  threads, so the owner MUST call `close()` or they will keep the interpreter
-  alive. This is not application shutdown policy.
+  submissions, requests cancellation, and joins the non-daemon dispatcher and
+  worker threads. It can wait indefinitely for a noncooperative provider. Call
+  it from the owning thread, not from a worker or validator.
 - Deterministic regressions live in the
   [queue-scheduling tests](../../../../tests/integration/jobs/test_job_queue_scheduling.py)
   and [queue-failure tests](../../../../tests/integration/jobs/test_job_queue_failures.py).

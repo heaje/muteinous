@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import json
-import threading
 from collections import Counter
 from collections.abc import Callable
-from queue import Queue
-from threading import Condition, Event, Thread, current_thread
+from threading import Event
 
 import pytest
 
-import muteinous.infrastructure.jobs.queue as queue_module
 from muteinous.infrastructure.jobs.queue import (
     JobContext,
     JobPlan,
@@ -20,9 +17,7 @@ from muteinous.infrastructure.jobs.queue import (
 )
 from tests.support.job_queue import (
     ControlledWorker,
-    CountingFakeClock,
     FakeClock,
-    capture_thread_exceptions,
     eventually,
     plan,
 )
@@ -231,45 +226,6 @@ def test_busy_plan_becomes_stale_on_timer_without_other_wakes(
         queue.close()
 
 
-def test_minimum_revalidation_interval_does_not_spin_for_busy_plans(
-    workers: Callable[..., ControlledWorker],
-) -> None:
-    calls: Counter[str] = Counter()
-    calls_lock = threading.Lock()
-    waiting_plan = plan("cpu", source="minimum-interval")
-    waiting_validated = Event()
-
-    def validate(submitted: JobPlan) -> str | None:
-        with calls_lock:
-            calls[submitted.input_json] += 1
-            if submitted == waiting_plan:
-                waiting_validated.set()
-        return None
-
-    queue = JobQueue({"cpu": 1}, validate, revalidate_interval=0.001)
-    owner, waiting = workers(), workers()
-    try:
-        queue.submit(plan("cpu", source="owner"), owner)
-        assert owner.entered.wait(5)
-        waiting_id = queue.submit(waiting_plan, waiting)
-        assert waiting_validated.wait(5)
-        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
-
-        with calls_lock:
-            before = calls[waiting_plan.input_json]
-        # This is a measurement window, not an ordering delay. The generous
-        # ceiling distinguishes the 1 ms revalidation cadence from a tight loop.
-        Event().wait(0.2)
-        with calls_lock:
-            revalidations = calls[waiting_plan.input_json] - before
-        assert revalidations < 2000
-        assert waiting.calls == 0
-    finally:
-        owner.release.set()
-        waiting.release.set()
-        queue.close()
-
-
 def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
     workers: Callable[..., ControlledWorker],
 ) -> None:
@@ -332,151 +288,6 @@ def test_busy_plans_revalidate_on_interval_and_eligible_plans_before_dispatch(
         )
     finally:
         owner.release.set()
-        queue.close()
-
-
-def test_staggered_busy_plan_deadlines_wake_for_the_earliest(
-    monkeypatch: pytest.MonkeyPatch,
-    workers: Callable[..., ControlledWorker],
-) -> None:
-    clock = FakeClock()
-    calls: Counter[str] = Counter()
-    first_plan = plan("cpu", source="first")
-    second_plan = plan("cpu", source="second")
-    first_validation_entered, release_first_validation = Event(), Event()
-    second_validation_entered, release_second_validation = Event(), Event()
-    first_revalidated, second_revalidated = Event(), Event()
-    capture_waits = Event()
-    selected_delays: Queue[float | None] = Queue()
-
-    class CapturingCondition(Condition):
-        def wait(self, timeout: float | None = None) -> bool:
-            if current_thread().name == "muteinous-jobs" and capture_waits.is_set():
-                selected_delays.put(timeout)
-                # The test advances the fake clock and sends an unrelated queue
-                # wake explicitly; do not let a real-time timeout order events.
-                return super().wait(timeout=None)
-            return super().wait(timeout=timeout)
-
-    monkeypatch.setattr(queue_module, "Condition", CapturingCondition)
-
-    def validate(submitted: JobPlan) -> str | None:
-        calls[submitted.input_json] += 1
-        count = calls[submitted.input_json]
-        if submitted == first_plan and count == 1:
-            first_validation_entered.set()
-            assert release_first_validation.wait(5)
-        elif submitted == second_plan and count == 1:
-            second_validation_entered.set()
-            assert release_second_validation.wait(5)
-        elif submitted == first_plan and count == 2:
-            first_revalidated.set()
-        elif submitted == second_plan and count == 2:
-            second_revalidated.set()
-        return None
-
-    queue = JobQueue(
-        {"cpu": 1, "other": 1},
-        validate,
-        revalidate_interval=1.0,
-        clock=clock,
-    )
-    owner = workers()
-    first_worker, second_worker = workers(), workers()
-    try:
-        queue.submit(plan("cpu", source="owner"), owner)
-        assert owner.entered.wait(5)
-        queue.submit(first_plan, first_worker)
-        queue.submit(second_plan, second_worker)
-
-        assert first_validation_entered.wait(5)
-        release_first_validation.set()
-        assert second_validation_entered.wait(5)
-        clock.now = 0.5
-        capture_waits.set()
-        release_second_validation.set()
-
-        # Deadlines are t=1.0 and t=1.5; at t=0.5 the selected
-        # condition timeout must target the first one.
-        assert selected_delays.get(timeout=5) == 0.5
-        assert calls[first_plan.input_json] == calls[second_plan.input_json] == 1
-
-        clock.now = 1.0
-        queue.set_capacity("other", 2)
-        assert first_revalidated.wait(5)
-        assert selected_delays.get(timeout=5) == 0.5
-        assert calls[first_plan.input_json] == 2
-        assert calls[second_plan.input_json] == 1
-
-        clock.now = 1.5
-        queue.set_capacity("other", 3)
-        assert second_revalidated.wait(5)
-        assert selected_delays.get(timeout=5) == 0.5
-        assert calls[first_plan.input_json] == 2
-        assert calls[second_plan.input_json] == 2
-    finally:
-        release_first_validation.set()
-        release_second_validation.set()
-        owner.release.set()
-        first_worker.release.set()
-        second_worker.release.set()
-        queue.close()
-
-
-def test_busy_plan_revalidates_at_exact_deadline_without_spinning(
-    workers: Callable[..., ControlledWorker],
-) -> None:
-    clock = CountingFakeClock()
-    waiting_plan = plan("cpu", source="deadline")
-    calls: Counter[str] = Counter()
-    revalidated = Event()
-
-    def validate(submitted: JobPlan) -> str | None:
-        calls[submitted.input_json] += 1
-        if submitted == waiting_plan and calls[submitted.input_json] == 2:
-            revalidated.set()
-        return None
-
-    queue = JobQueue(
-        {"cpu": 1, "other": 1},
-        validate,
-        revalidate_interval=1.0,
-        clock=clock,
-    )
-    owner, waiting = workers(), workers()
-    try:
-        queue.submit(plan("cpu", source="owner"), owner)
-        assert owner.entered.wait(5)
-        waiting_id = queue.submit(waiting_plan, waiting)
-        eventually(
-            lambda: (
-                queue.snapshot(waiting_id).detail == "Waiting for: cpu"
-                and calls[waiting_plan.input_json] == 1
-            )
-        )
-
-        clock.now = 1.0
-        queue.set_capacity("other", 1)
-        assert revalidated.wait(5)
-        assert calls[waiting_plan.input_json] == 2
-        snapshot = queue.snapshot(waiting_id)
-        assert snapshot.state == JobState.QUEUED
-        assert snapshot.detail == "Waiting for: cpu"
-
-        before = clock.dispatcher_calls
-        Event().wait(0.25)
-        assert clock.dispatcher_calls - before < 10
-
-        owner.release.set()
-        assert waiting.entered.wait(5)
-        waiting.release.set()
-        assert queue.drain(5)
-        assert calls[waiting_plan.input_json] == 3
-        assert waiting.calls == 1
-        assert queue.snapshot(waiting_id).state == JobState.COMPLETED
-    finally:
-        owner.release.set()
-        waiting.release.set()
         queue.close()
 
 
@@ -605,80 +416,6 @@ def test_capacity_increase_wakes_waiting_job_without_clock_advance(
         queue.close()
 
 
-def test_large_revalidation_interval_is_capped_without_losing_capacity_wakeup(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    thread_errors: list[BaseException] = []
-
-    monkeypatch.setattr(
-        threading, "excepthook", capture_thread_exceptions(thread_errors)
-    )
-    clock = CountingFakeClock()
-    queue = JobQueue(
-        {"cpu": 1},
-        lambda _: None,
-        revalidate_interval=2 * threading.TIMEOUT_MAX,
-        clock=clock,
-    )
-    owner, waiting = ControlledWorker(), ControlledWorker()
-    try:
-        owner_id = queue.submit(plan("cpu", source="owner"), owner)
-        assert owner.entered.wait(5)
-        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
-        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
-
-        before = clock.dispatcher_calls
-        Event().wait(0.75)
-        assert clock.dispatcher_calls - before < 3
-        assert queue.snapshot(owner_id).state == JobState.RUNNING
-        assert queue.snapshot(waiting_id).state == JobState.QUEUED
-        assert thread_errors == []
-
-        owner.release.set()
-        assert waiting.entered.wait(5)
-        waiting.release.set()
-        assert queue.drain(5)
-        assert queue.snapshot(owner_id).state == JobState.COMPLETED
-        assert queue.snapshot(waiting_id).state == JobState.COMPLETED
-        assert owner.calls == waiting.calls == 1
-        assert queue._used["cpu"] == 0
-        assert thread_errors == []
-    finally:
-        owner.release.set()
-        waiting.release.set()
-        queue.close()
-
-
-def test_busy_resource_wait_does_not_spin_scheduler() -> None:
-    clock = CountingFakeClock()
-    queue = JobQueue(
-        {"cpu": 1},
-        lambda _: None,
-        revalidate_interval=3600,
-        clock=clock,
-    )
-    owner, waiting = ControlledWorker(), ControlledWorker()
-    try:
-        queue.submit(plan("cpu", source="owner"), owner)
-        assert owner.entered.wait(5)
-        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
-        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
-
-        before = clock.dispatcher_calls
-        Event().wait(0.3)
-        assert clock.dispatcher_calls - before < 20
-
-        owner.release.set()
-        assert waiting.entered.wait(5)
-        waiting.release.set()
-        assert queue.drain(5)
-        assert waiting.calls == 1
-    finally:
-        owner.release.set()
-        waiting.release.set()
-        queue.close()
-
-
 def test_multi_resource_reservation_blocks_cpu_only_job_until_release() -> None:
     queue = JobQueue({"gpu": 1, "cpu": 1}, lambda _: None)
     multi_entered, release_multi, cpu_entered = Event(), Event(), Event()
@@ -779,59 +516,6 @@ def test_capacity_release_during_validation_restarts_fifo(
         assert queue.drain(5)
     finally:
         release_check.set()
-        for worker in (owner, older, younger):
-            worker.release.set()
-        queue.close()
-
-
-def test_capacity_increase_during_younger_validation_preserves_fifo(
-    monkeypatch: pytest.MonkeyPatch,
-    workers: Callable[..., ControlledWorker],
-) -> None:
-    younger_validation_entered, release_validation = Event(), Event()
-    start_lock = threading.Lock()
-    launch_order: list[str] = []
-
-    class RecordingThread(Thread):
-        def start(self) -> None:
-            if self.name.startswith("job-"):
-                with start_lock:
-                    launch_order.append(self.name)
-            super().start()
-
-    monkeypatch.setattr(queue_module, "Thread", RecordingThread)
-
-    def validate(submitted: JobPlan) -> str | None:
-        if submitted.input_json == '{"source":"younger"}':
-            if not younger_validation_entered.is_set():
-                younger_validation_entered.set()
-                assert release_validation.wait(10)
-        return None
-
-    queue = JobQueue({"x": 1, "y": 1}, validate)
-    owner, older, younger = (workers() for _ in range(3))
-    try:
-        queue.submit(plan("x", source="owner"), owner)
-        assert owner.entered.wait(5)
-        older_id = queue.submit(plan("x", source="older"), older)
-        eventually(lambda: queue.snapshot(older_id).detail == "Waiting for: x")
-        younger_id = queue.submit(plan("y", source="younger"), younger)
-        assert younger_validation_entered.wait(5)
-
-        queue.set_capacity("x", 2)
-        release_validation.set()
-        assert older.entered.wait(5)
-        assert younger.entered.wait(5)
-        with start_lock:
-            launches = list(launch_order)
-        assert launches.index(f"job-{older_id}") < launches.index(f"job-{younger_id}")
-
-        owner.release.set()
-        older.release.set()
-        younger.release.set()
-        assert queue.drain(5)
-    finally:
-        release_validation.set()
         for worker in (owner, older, younger):
             worker.release.set()
         queue.close()

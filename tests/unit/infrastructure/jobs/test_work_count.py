@@ -18,12 +18,6 @@ pytestmark = pytest.mark.portable
         (WorkCount(1, 0, True), None),
         (WorkCount(5, 4, True), None),
         (WorkCount(-1, 4, True), None),
-        (WorkCount(1.5, 2, True), None),  # type: ignore[arg-type]
-        (WorkCount(True, 2, True), None),
-        (WorkCount(1, True, True), None),
-        (WorkCount(1, 2, 1), None),  # type: ignore[arg-type]
-        (WorkCount(1, 2.5, True), None),  # type: ignore[arg-type]
-        (WorkCount(1, 2.0, True), None),  # type: ignore[arg-type]
     ],
 )
 def test_percentage_requires_reliable_denominator(

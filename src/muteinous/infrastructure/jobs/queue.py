@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import json
-import math
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from threading import TIMEOUT_MAX, Condition, Event, Thread
+from threading import Condition, Event, Thread
 from uuid import uuid4
-
-_MAX_DETAIL = 4096
-_DETAIL_TRUNCATION_SUFFIX = "... [truncated]"
-# Keep deadline addition above the resolution where positive delays can round to zero.
-_MIN_REVALIDATE_INTERVAL = 0.001
 
 
 class JobState(StrEnum):
@@ -27,42 +21,15 @@ class JobState(StrEnum):
     NEEDS_ATTENTION = "Needs attention"
 
 
-def _truncate_detail(detail: str) -> str:
-    if len(detail) <= _MAX_DETAIL:
-        return detail
-    return detail[: _MAX_DETAIL - len(_DETAIL_TRUNCATION_SUFFIX)] + (
-        _DETAIL_TRUNCATION_SUFFIX
-    )
-
-
-def _error_detail(error: BaseException, *, prefix: str | None = None) -> str:
+def _error_detail(error: BaseException) -> str:
     try:
-        detail = f"{type(error).__name__}: {error}"
+        return f"{type(error).__name__}: {error}"
     except BaseException:
-        detail = type(error).__name__
-    if prefix is not None:
-        detail = f"{prefix}: {detail}"
-    return _truncate_detail(detail)
+        return type(error).__name__
 
 
 def _reject_constant(value: str) -> None:
     raise ValueError(f"Invalid JSON constant: {value}")
-
-
-def _reject_nonfinite_float(value: str) -> float:
-    parsed = float(value)
-    if not math.isfinite(parsed):
-        raise ValueError(f"Invalid non-finite JSON number: {value}")
-    return parsed
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"Duplicate JSON object key: {key}")
-        result[key] = value
-    return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,32 +42,18 @@ class JobPlan:
     input_json: str
 
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.provider, str)
-            or not isinstance(self.backend, str)
-            or not isinstance(self.resources, tuple)
-            or not all(isinstance(resource, str) for resource in self.resources)
-            or not isinstance(self.input_json, str)
-        ):
-            raise ValueError("Job plan fields must use their declared string types")
         if not self.provider or not self.backend:
             raise ValueError("Provider and backend must be resolved")
         if (
-            not self.resources
+            not isinstance(self.resources, tuple)
+            or not self.resources
             or not all(self.resources)
             or len(set(self.resources)) != len(self.resources)
         ):
             raise ValueError("Declare distinct, nonempty resource names")
-        try:
-            parsed_input = json.loads(
-                self.input_json,
-                parse_constant=_reject_constant,
-                parse_float=_reject_nonfinite_float,
-                object_pairs_hook=_reject_duplicate_keys,
-            )
-        except RecursionError as error:
-            raise ValueError("Job input is too deeply nested") from error
-        if not isinstance(parsed_input, dict):
+        if not isinstance(
+            json.loads(self.input_json, parse_constant=_reject_constant), dict
+        ):
             raise ValueError("Job input must be a JSON object")
 
 
@@ -113,10 +66,8 @@ class WorkCount:
     @property
     def percentage(self) -> float | None:
         if (
-            self.reliable is True
-            and type(self.completed) is int
+            self.reliable
             and self.total is not None
-            and type(self.total) is int
             and self.total > 0
             and 0 <= self.completed <= self.total
         ):
@@ -179,7 +130,6 @@ class _Record:
     published_revision: int = 1
     last_validated_at: float | None = None
     cancelled: Event = field(default_factory=Event)
-    start_aborted: bool = False
 
 
 class JobQueue:
@@ -190,10 +140,6 @@ class JobQueue:
     It runs outside the scheduler lock, including for resource-blocked plans.
     Workers must return only once their physical provider work has actually stopped.
     Callers own result publication and must not commit effects from cancelled jobs.
-    The injected clock is trusted, must be monotonic and must not raise; clock
-    failures on worker/completion paths are not contained. Worker results are
-    stored by reference, so providers must return immutable or unshared values
-    and not mutate them after returning.
     """
 
     def __init__(
@@ -209,11 +155,8 @@ class JobQueue:
             self._check_capacity(name, capacity)
         if not 0 < progress_interval < float("inf"):
             raise ValueError("Progress interval must be finite and positive")
-        if not _MIN_REVALIDATE_INTERVAL <= revalidate_interval < float("inf"):
-            raise ValueError(
-                "Revalidation interval must be finite and at least "
-                f"{_MIN_REVALIDATE_INTERVAL} seconds"
-            )
+        if not 0 < revalidate_interval < float("inf"):
+            raise ValueError("Revalidation interval must be finite and positive")
         self._capacities = dict(capacities)
         self._validate = validate
         self._progress_interval = progress_interval
@@ -231,19 +174,11 @@ class JobQueue:
         self._dispatcher = Thread(
             target=self._schedule, name="muteinous-jobs", daemon=False
         )
-        try:
-            self._dispatcher.start()
-        except BaseException:
-            with self._condition:
-                self._closed = True
-                self._wake()
-            raise
+        self._dispatcher.start()
 
     @staticmethod
     def _check_capacity(name: str, capacity: int) -> None:
-        if not isinstance(name, str) or not name:
-            raise ValueError("Resource names must be nonempty strings")
-        if type(capacity) is not int or capacity < 0:
+        if not name or type(capacity) is not int or capacity < 0:
             raise ValueError("Resource capacities must be nonnegative integers")
 
     def _wake(self) -> None:
@@ -253,8 +188,6 @@ class JobQueue:
     def _store(
         self, record: _Record, snapshot: JobSnapshot, *, material: bool = True
     ) -> None:
-        if snapshot.detail is not None:
-            snapshot = replace(snapshot, detail=_truncate_detail(snapshot.detail))
         snapshot = replace(snapshot, revision=record.snapshot.revision + 1)
         record.snapshot = snapshot
         if material:
@@ -360,101 +293,69 @@ class JobQueue:
 
     def _validate_plan(self, plan: JobPlan) -> str | None:
         try:
-            reason = self._validate(plan)
+            return self._validate(plan)
         except BaseException as error:
-            return _error_detail(error, prefix="Plan validation failed")
-        if reason is not None and not isinstance(reason, str):
-            return (
-                f"Plan validation returned {type(reason).__name__}, "
-                "expected str or None"
-            )
-        if isinstance(reason, str) and not reason.strip():
-            return "Plan validation returned an empty reason"
-        return reason
+            return f"Plan validation failed: {_error_detail(error)}"
 
     def _schedule(self) -> None:
         while True:
-            processing_job_id: str | None = None
-            try:
+            with self._condition:
+                if self._closed:
+                    return
+                generation = self._generation
+                capacity_revision = self._capacity_revision
+                plans = [
+                    (job_id, self._records[job_id].snapshot.plan)
+                    for job_id in self._pending
+                ]
+                self._threads = {
+                    thread for thread in self._threads if thread.is_alive()
+                }
+            for job_id, plan in plans:
                 with self._condition:
                     if self._closed:
                         return
-                    generation = self._generation
-                    capacity_revision = self._capacity_revision
-                    plans = [
-                        (job_id, self._records[job_id].snapshot.plan)
-                        for job_id in self._pending
-                    ]
-                    self._threads = {
-                        thread for thread in self._threads if thread.is_alive()
-                    }
-                for job_id, plan in plans:
-                    processing_job_id = job_id
-                    with self._condition:
-                        if self._closed:
-                            return
-                        if self._capacity_revision != capacity_revision:
-                            break
-                        if job_id not in self._pending:
-                            processing_job_id = None
-                            continue
-                        record = self._records[job_id]
-                        eligible = all(
-                            self._capacities.get(resource, 0) > self._used[resource]
-                            for resource in plan.resources
-                        )
-                        last_validated_at = record.last_validated_at
-                        should_validate = (
-                            eligible
-                            or last_validated_at is None
-                            or self._clock() - last_validated_at
-                            >= self._revalidate_interval
-                        )
-                        if not should_validate:
-                            self._dispatch(job_id, None)
-                            self._condition.notify_all()
-                            processing_job_id = None
-                            continue
-                    # Never hold the lock across external validation. If capacity
-                    # changed, restart at the oldest pending job before dispatching
-                    # a younger one: a previously blocked job may now be eligible.
-                    reason = self._validate_plan(plan)
-                    validated_at = self._clock()
-                    with self._condition:
-                        if self._closed:
-                            return
-                        if self._capacity_revision != capacity_revision:
-                            break
-                        if job_id in self._pending:
-                            self._records[job_id].last_validated_at = validated_at
-                            self._dispatch(job_id, reason)
+                    if self._capacity_revision != capacity_revision:
+                        break
+                    if job_id not in self._pending:
+                        continue
+                    record = self._records[job_id]
+                    eligible = all(
+                        self._capacities.get(resource, 0) > self._used[resource]
+                        for resource in plan.resources
+                    )
+                    last_validated_at = record.last_validated_at
+                    should_validate = (
+                        eligible
+                        or last_validated_at is None
+                        or self._clock() - last_validated_at
+                        >= self._revalidate_interval
+                    )
+                    if not should_validate:
+                        self._dispatch(job_id, None)
                         self._condition.notify_all()
-                    processing_job_id = None
+                        continue
+                # Never hold the lock across external validation. If capacity
+                # changed, restart at the oldest pending job before dispatching
+                # a younger one: a previously blocked job may now be eligible.
+                reason = self._validate_plan(plan)
+                validated_at = self._clock()
                 with self._condition:
-                    self._condition.notify_all()
-                    timeout = self._next_revalidation_delay()
-                    if timeout is not None:
-                        timeout = min(timeout, TIMEOUT_MAX)
-                    self._condition.wait_for(
-                        lambda: self._closed or self._generation != generation,
-                        timeout=timeout,
-                    )
-            except BaseException as error:
-                with self._condition:
-                    if processing_job_id is not None:
-                        if processing_job_id in self._pending:
-                            self._fail_job(
-                                processing_job_id,
-                                _error_detail(error, prefix="Scheduler failed"),
-                            )
-                    self._condition.notify_all()
                     if self._closed:
                         return
-                    generation = self._generation
-                    self._condition.wait_for(
-                        lambda: self._closed or self._generation != generation,
-                        timeout=0.25,
-                    )
+                    if self._capacity_revision != capacity_revision:
+                        break
+                    if job_id in self._pending:
+                        self._records[job_id].last_validated_at = validated_at
+                        self._dispatch(job_id, reason)
+                    self._condition.notify_all()
+            with self._condition:
+                self._condition.notify_all()
+                timeout = self._next_revalidation_delay()
+                self._condition.wait_for(
+                    lambda: self._closed or self._generation != generation,
+                    timeout=timeout,
+                )
 
     def _next_revalidation_delay(self) -> float | None:
         if not self._pending:
@@ -470,34 +371,6 @@ class JobQueue:
             if value is not None
         )
         return max(0.0, next_due - self._clock())
-
-    def _fail_job(
-        self,
-        job_id: str,
-        detail: str,
-        *,
-        reserved: bool = False,
-    ) -> None:
-        record = self._records.get(job_id)
-        if record is None:
-            return
-        self._pending.pop(job_id, None)
-        if reserved:
-            self._used.subtract(record.snapshot.plan.resources)
-            self._active.discard(job_id)
-            self._capacity_revision += 1
-        old = record.snapshot
-        failed = replace(
-            old,
-            state=JobState.FAILED,
-            physical_running=False,
-            result=None,
-            detail=_truncate_detail(detail),
-            revision=old.revision + 1,
-        )
-        record.snapshot = failed
-        record.published_revision = failed.revision
-        self._wake()
 
     def _dispatch(self, job_id: str, reason: str | None) -> None:
         record = self._records[job_id]
@@ -522,42 +395,28 @@ class JobQueue:
                 self._store(record, replace(old, detail=detail))
             return
         worker = self._pending.pop(job_id)
-        reserved = False
-        thread: Thread | None = None
+        self._used.update(resources)
+        self._active.add(job_id)
+        self._store(
+            record,
+            replace(old, state=JobState.RUNNING, physical_running=True, detail=None),
+        )
+        thread = Thread(
+            target=self._run,
+            args=(job_id, worker),
+            name=f"job-{job_id}",
+            daemon=False,
+        )
         try:
-            self._used.update(resources)
-            reserved = True
-            self._active.add(job_id)
-            self._store(
-                record,
-                replace(
-                    old, state=JobState.RUNNING, physical_running=True, detail=None
-                ),
-            )
-            thread = Thread(
-                target=self._run,
-                args=(job_id, worker),
-                name=f"job-{job_id}",
-                daemon=False,
-            )
-            self._threads.add(thread)
             thread.start()
-        except BaseException as error:
-            # The child may be running, but _run takes this lock before reading state.
-            record.start_aborted = True
-            if thread is not None:
-                self._threads.discard(thread)
-            self._fail_job(
-                job_id,
-                _error_detail(error, prefix="Worker start failed"),
-                reserved=reserved,
-            )
+        except RuntimeError as error:
+            self._finish(job_id, JobState.FAILED, None, f"Worker start failed: {error}")
+        else:
+            self._threads.add(thread)
 
     def _run(self, job_id: str, worker: Worker) -> None:
         with self._condition:
-            record = self._records.get(job_id)
-            if record is None or record.start_aborted:
-                return
+            record = self._records[job_id]
             plan = record.snapshot.plan
             context = JobContext(self, job_id, record.cancelled)
         state = JobState.COMPLETED
