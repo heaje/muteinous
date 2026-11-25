@@ -39,6 +39,11 @@ def test_content_context_disambiguates_equal_segment_ids() -> None:
     second = SegmentKey("content:B", segment.id)
     combined = {first: "first", second: "second"}
 
+    assert first == SegmentKey(content_id="content:A", segment_id=segment.id)
+    assert first.content_id == "content:A"
+    assert first.segment_id == segment.id
+    assert second.content_id == "content:B"
+    assert second.segment_id == segment.id
     assert first != second
     assert combined[SegmentKey("content:A", segment.id)] == "first"
     assert combined[SegmentKey("content:B", segment.id)] == "second"
@@ -91,6 +96,13 @@ def test_source_asset_ids_and_fingerprints_are_distinct_static_types() -> None:
     assert type(fingerprint) is str
     assert asset_id == "opaque:fingerprint"
     assert fingerprint == "opaque:asset"
+
+
+def test_source_texts_do_not_admit_explicit_none_values_statically() -> None:
+    # Strict mypy keeps this ignore useful only while SourceTexts excludes None.
+    source_texts: SourceTexts = {"explicit-none": None}  # type: ignore[dict-item]
+
+    assert source_texts["explicit-none"] is None
 
 
 @pytest.mark.portable
