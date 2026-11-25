@@ -18,12 +18,12 @@ class PCMFormat:
     channels: int
     representation: Representation
     frames: int
-    channel_mask: int = 0  # WAVE speaker order; zero means unspecified, not stereo.
+    channel_mask: int = 0  # WAVE speaker bits 0-17; zero means unspecified, not stereo.
 
     def __post_init__(self) -> None:
         if not (0 < self.rate <= 0xFFFFFFFF and 0 < self.channels <= 32):
             raise ValueError("unsupported rate or channel count")
-        if self.frames < 0 or not 0 <= self.channel_mask <= 0xFFFFFFFF:
+        if self.frames < 0 or not 0 <= self.channel_mask <= 0x3FFFF:
             raise ValueError("invalid frame count or layout")
         if self.channel_mask and self.channel_mask.bit_count() != self.channels:
             raise ValueError("channel mask does not match channel count")
@@ -54,12 +54,12 @@ def _regions(
     padded = []
     for start, end in ranges:
         if not (
-            math.isfinite(start)
-            and math.isfinite(end)
-            and 0 <= start < end <= duration
+            math.isfinite(start) and math.isfinite(end) and 0 <= start < end <= duration
         ):
             raise ValueError("invalid segment-relative interval")
-        padded.append((max(0.0, start - before), min(duration, end + after), start, end))
+        padded.append(
+            (max(0.0, start - before), min(duration, end + after), start, end)
+        )
     merged: list[tuple[float, float, float, float]] = []
     for start, end, first, last in sorted(padded):
         if merged and start <= merged[-1][1]:
@@ -80,8 +80,12 @@ def _regions(
             upper(last),
         )
         if not (
-            0 <= region.start <= region.word_start < region.word_end
-            <= region.end <= info.frames
+            0
+            <= region.start
+            <= region.word_start
+            < region.word_end
+            <= region.end
+            <= info.frames
         ):
             raise ValueError("interval cannot be represented safely")
         # Distinct time ranges can touch or overlap after outward frame rounding.

@@ -92,8 +92,13 @@ class WaveStorage:
             with self.open(path) as reader:
                 if reader.info != info:
                     raise ValueError("written PCM metadata mismatch")
-        except BaseException:
-            path.unlink(missing_ok=True)
+        except BaseException as error:
+            try:
+                path.unlink(missing_ok=True)
+            except BaseException as cleanup_error:
+                error.add_note(
+                    f"failed to remove partial WAVE file {path}: {cleanup_error!r}"
+                )
             raise
 
     @contextmanager

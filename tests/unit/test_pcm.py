@@ -1,11 +1,37 @@
 import math
 import struct
+from typing import cast
 
 import pytest
 
-from muteinous.core.audio.pcm import Curve, PCMFormat, censor_blocks
+from muteinous.core.audio.pcm import Curve, PCMFormat, Representation, censor_blocks
+from muteinous.core.audio.wav import WaveStorage
 
 pytestmark = pytest.mark.portable
+
+
+@pytest.mark.parametrize("mask", [0x40000, 0x80000000])
+def test_reserved_channel_mask_bits_are_rejected(mask: int) -> None:
+    with pytest.raises(ValueError, match="layout"):
+        PCMFormat(48000, 1, "s16", 1, mask)
+
+
+@pytest.mark.parametrize("mask", [0, 1, 0x20000, 3])
+def test_valid_channel_masks_are_supported(mask: int) -> None:
+    channels = mask.bit_count() if mask else 1
+    info = PCMFormat(48000, channels, "s16", 1, mask)
+    assert WaveStorage().supports(info)
+
+
+@pytest.mark.parametrize(
+    "representation",
+    [cast(Representation, value) for value in ("s64", "u16", "f16", "")],
+)
+def test_unsupported_sample_representations_are_rejected(
+    representation: Representation,
+) -> None:
+    with pytest.raises(ValueError, match="sample representation"):
+        PCMFormat(48000, 1, representation, 1)
 
 
 def test_outward_rounding_and_all_channels() -> None:

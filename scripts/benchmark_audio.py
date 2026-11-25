@@ -19,7 +19,12 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from muteinous.core.audio.pcm import BLOCK_FRAMES, PCMFormat, Representation, censor_blocks
+from muteinous.core.audio.pcm import (
+    BLOCK_FRAMES,
+    PCMFormat,
+    Representation,
+    censor_blocks,
+)
 from muteinous.core.audio.wav import WaveStorage
 
 _CASES: list[tuple[Representation, int, int, int, str, int]] = [
@@ -52,7 +57,9 @@ def fixture(path: Path, info: PCMFormat) -> None:
                         0.0
                         if phase == 0
                         else 0.6
-                        * math.sin(2 * math.pi * (220 + channel * 30) * frame / info.rate)
+                        * math.sin(
+                            2 * math.pi * (220 + channel * 30) * frame / info.rate
+                        )
                     )
                     if phase == 3:
                         value = rng.uniform(-0.9, 0.9)
@@ -77,9 +84,33 @@ def digest(path: Path) -> str:
 
 
 def edit(info: PCMFormat, blocks: Iterator[bytes]) -> Iterator[bytes]:
-    return censor_blocks(
-        info, blocks, [(0.4, 0.8)], before=0.03, after=0.03, fade=0.02
-    )
+    return censor_blocks(info, blocks, [(0.4, 0.8)], before=0.03, after=0.03, fade=0.02)
+
+
+def encoder_options(codec: str, info: PCMFormat) -> list[str]:
+    """Request the closest supported encoder representation for this PCM input."""
+    if codec == "wav":
+        return []
+
+    bits = info.width * 8
+    representation = info.representation
+    if codec == "wavpack":
+        sample_format = {
+            "u8": "u8p",
+            "s16": "s16p",
+            "s24": "s32p",
+            "s32": "s32p",
+            "f32": "fltp",
+        }[representation]
+    elif codec == "flac":
+        sample_format = "s16" if representation in ("u8", "s16") else "s32"
+    else:
+        raise ValueError(codec)
+
+    options = ["-sample_fmt", sample_format]
+    if not representation.startswith("f"):
+        options.extend(["-bits_per_raw_sample", str(bits)])
+    return options
 
 
 def worker(operation: str, info: PCMFormat, source: Path, output: Path) -> None:
@@ -111,11 +142,14 @@ def trial(
         return {"excluded": "FFmpeg WavPack encoder has float32, not float64 input"}
     scratch = root / codec
     scratch.mkdir()
-    encoded = scratch / {
-        "wav": "source.wav",
-        "flac": "source.flac",
-        "wavpack": "source.wv",
-    }[codec]
+    encoded = (
+        scratch
+        / {
+            "wav": "source.wav",
+            "flac": "source.flac",
+            "wavpack": "source.wv",
+        }[codec]
+    )
     decoded = scratch / "decoded.raw"
     edited_raw = scratch / "edited.raw"
     edited = scratch / ("edited" + encoded.suffix)
@@ -160,6 +194,7 @@ def trial(
                 str(src),
                 "-c:a",
                 codec,
+                *encoder_options(codec, info),
                 "-threads",
                 "1",
                 str(dst),
@@ -195,21 +230,29 @@ def trial(
             )
         )["streams"][0]
         # A missing precision/layout is not evidence of preserved metadata.
-        bits = (
-            int(probe.get("bits_per_raw_sample", "0"))
-            if probe.get("bits_per_raw_sample", "0") != "N/A"
-            else 0
-        )
-        bits = bits or int(probe.get("bits_per_sample", 0))
+        raw_bits = probe.get("bits_per_raw_sample")
+        bits = int(raw_bits) if raw_bits not in (None, "", "N/A") else 0
+        bits = bits or int(probe.get("bits_per_sample") or 0)
         if not bits and probe.get("sample_fmt") in ("flt", "fltp", "dbl", "dblp"):
             bits = 32 if probe["sample_fmt"].startswith("flt") else 64
-        metadata = (
-            int(probe["sample_rate"]) == info.rate
-            and probe["channels"] == info.channels
-            and probe.get("channel_layout") == layout
-            and bits == info.width * 8
-            and decoded.stat().st_size == info.frames * info.frame_bytes
-        )
+        metadata = {
+            "rate": int(probe["sample_rate"]) == info.rate,
+            "channels": probe["channels"] == info.channels,
+            "layout": probe.get("channel_layout") == layout,
+            "precision": bits == info.width * 8,
+            "frame_count": decoded.stat().st_size == info.frames * info.frame_bytes,
+        }
+        metadata_mismatches = [
+            key for key, preserved in metadata.items() if not preserved
+        ]
+        if not exact:
+            outcome = "not-exact"
+        elif not metadata_mismatches:
+            outcome = "exact"
+        elif metadata_mismatches == ["precision"] and bits > info.width * 8:
+            outcome = "exact-with-metadata-widening"
+        else:
+            outcome = "exact-with-metadata-mismatch"
         encoded_bytes = encoded.stat().st_size
         if codec == "wav":
             decoded.unlink()
@@ -226,7 +269,9 @@ def trial(
             reference.update(block)
         return {
             "exact": exact,
-            "metadata": metadata,
+            "metadata": not metadata_mismatches,
+            "metadata_mismatches": metadata_mismatches,
+            "outcome": outcome,
             "edited_exact": digest(decoded) == reference.hexdigest(),
             "encoded_bytes": encoded_bytes,
             "peak_scratch_bytes": peak,

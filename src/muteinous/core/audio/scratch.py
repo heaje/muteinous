@@ -56,10 +56,16 @@ class Scratch:
                     ),
                 )
                 written = True
-        except BaseException:
+        except BaseException as error:
             # Even a decoder close failure invalidates the entire edited scratch.
             if written:
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except BaseException as cleanup_error:
+                    error.add_note(
+                        f"failed to remove invalid edited audio {path}: "
+                        f"{cleanup_error!r}"
+                    )
             raise
         return path
 
@@ -79,12 +85,24 @@ def audio_scratch(root: Path, storage: Storage) -> Iterator[Scratch]:
             lock_exclusive(lock)
             marker = directory / "ready"
             marker.write_bytes(_MARKER)
+            body_error: BaseException | None = None
             try:
-                yield Scratch(directory, storage)
+                try:
+                    yield Scratch(directory, storage)
+                except BaseException as error:
+                    body_error = error
+                    raise
             finally:
-                for name in _AUDIO_FILES:
-                    (directory / name).unlink(missing_ok=True)
-                marker.unlink()
+                try:
+                    for name in _AUDIO_FILES:
+                        (directory / name).unlink(missing_ok=True)
+                    marker.unlink()
+                except BaseException as cleanup_error:
+                    if body_error is None:
+                        raise
+                    body_error.add_note(
+                        f"failed to clean audio scratch {directory}: {cleanup_error!r}"
+                    )
     finally:
         # If deletion failed, keep the marker for a later cleanup attempt.
         if not (directory / "ready").exists():

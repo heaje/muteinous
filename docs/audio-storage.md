@@ -4,7 +4,7 @@ Implementation evidence for [Issue #19](https://github.com/heaje/muteinous/issue
 
 ## Initial choice and limits
 
-Use the standard-library WAVE extensible backend in [wav.py](../src/muteinous/core/audio/wav.py) for now. It preserves full-width unsigned 8-bit, signed 16/24/32-bit, and IEEE float32/float64 little-endian interleaved samples. The format value includes actual rate, channels, frame count, representation (which specifies precision), and a speaker mask in WAVE speaker-bit order (0 explicitly means unspecified). Do not invent a mask for a source whose layout is unknown. Nonrepresentable channel arrangements, non-full-width valid-bit precision, representations outside this list, and RIFF/byte-rate limits must be refused rather than converted to fit. No RF64, arbitrary input WAV parser, or native decoder is implemented here. Native adapters must establish the actual source representation and segment mapping; their own fidelity/structural validation is still required.
+Use the standard-library WAVE extensible backend in [wav.py](../src/muteinous/core/audio/wav.py) for now. It preserves full-width unsigned 8-bit, signed 16/24/32-bit, and IEEE float32/float64 little-endian interleaved samples. The format value includes actual rate, channels, frame count, representation (which specifies precision), and a speaker mask in WAVE speaker-bit order (only speaker-position bits 0–17 are accepted, with one set bit per channel; 0 explicitly means unspecified). Do not invent a mask for a source whose layout is unknown. Nonrepresentable channel arrangements, non-full-width valid-bit precision, representations outside this list, and RIFF/byte-rate limits must be refused rather than converted to fit. No RF64, arbitrary input WAV parser, or native decoder is implemented here. Native adapters must establish the actual source representation and segment mapping; their own fidelity/structural validation is still required.
 
 The [PCM editor](../src/muteinous/core/audio/pcm.py) consumes original-quality segment-local interleaved frame blocks, never encoded data. A block is at most 4096 frames, including all channels. Ranges are start-inclusive/end-exclusive seconds. Validate required ranges before padding, clip only padding to segment bounds, merge touching/overlapping padded ranges, then round outwards. Coalesce additionally if rounding eliminates the gap at frame resolution. Fade lengths round down to frames, shortened independently at the outer margins. Fade-down starts at unity and reaches zero at the first fully censored frame; fade-up reaches unity at the last fade frame. Zero available margin means no fade; required words remain fully muted. Defaults are zero margins/duration at this low-level boundary and raised cosine when a fade is requested, not user-facing settings defaults. Integer scaling rounds to nearest, ties to even; float scaling retains the source representation. Unchanged frames are copied as bytes, including unusual IEEE bit patterns. Non-finite floats requiring arithmetic in a fade fail instead of silently producing invalid gain results.
 
@@ -29,48 +29,52 @@ Exclusive creation avoids overwriting existing paths. Each write checks the know
 
 ## Reproducible comparison
 
-[benchmark_audio.py](../scripts/benchmark_audio.py) is an optional experiment, not a routine pytest workload or a runtime dependency. On a Linux host with FFmpeg/ffprobe and GNU time, after normal repository setup run:
+[benchmark_audio.py](../scripts/benchmark_audio.py) is an optional experiment, not a routine pytest workload or a runtime dependency. On a Linux host with FFmpeg/ffprobe and GNU time, run:
 
 ~~~sh
 .venv/bin/python scripts/benchmark_audio.py
-# Or run selected zero-based cases, including the larger case 6:
+# Repeat --case for selected zero-based cases; omit it to run cases 0–6:
 .venv/bin/python scripts/benchmark_audio.py --case 0 --case 6
 ~~~
 
-The generator alternates silence, tones and seeded noise (seed 19), in blocks; it does not use a speech or game corpus. Cases cover mono, stereo and 5.1, 8–96 kHz, all six full-width representations and a larger 20-second six-channel workload. WAV uses the actual production backend. FLAC and WavPack use the FFmpeg 7.1.5 encoders/decoders (one encoder thread), bounded raw spool files and the same PCM editor. Hash the initial decoded PCM against the original and edited decoded PCM against the original passed through the editor. Probe actual rate, channels, channel layout and reported precision, and compare decoded frame count. An exact byte round trip alone is not proof of identical precision metadata.
+`--case` accepts one or more case indexes from 0 through 6 and may be repeated.
 
-Recorded 2026-11-24, Linux container, CPython 3.13.5 (supplemental, **not** the supported locked 3.14 environment), FFmpeg/ffprobe 7.1.5-0+deb13u1, GNU time. Cases 0–5 completed in the initial invocation before its outer execution limit; case 6 completed separately. Times are single-run wall-clock seconds including process startup, not a throughput guarantee. Peak scratch is the maximum sum of logical sizes after each phase, including simultaneous encoded source/output, decode/encode spool and verification files; the independent synthetic raw fixture and measurement log are excluded. RSS is the largest measured child-process peak, not aggregate application/job memory. Python interpreter startup overhead dominated the measured 94–95 MiB peaks in this environment. The compressed workflows spool decoded PCM on disk for this experiment; a future streaming implementation could lower their scratch peak. No comparison of hypothetical optimized streaming code is claimed.
+The generator alternates silence, tones and seeded noise (seed 19), in blocks; it does not use a speech or game corpus. Cases cover mono, stereo and 5.1, 8–96 kHz, all six full-width representations and a larger 20-second six-channel workload. WAV uses the actual production backend. FLAC and WavPack use FFmpeg encoders/decoders (one encoder thread), bounded raw spool files and the same PCM editor. The encoder requests a sample format and, for integer PCM, `bits_per_raw_sample` derived from the supplied `PCMFormat`: WavPack requests its planar u8/s16/s32/f32 encoder formats, while FLAC requests s16 for u8/s16 and s32 for s24/s32. The script hashes initial decoded PCM against the original and edited decoded PCM against the original passed through the editor. It reports byte-exactness separately from metadata preservation (rate, channels, layout, reported precision and decoded frame count); `exact-with-metadata-widening` means samples match but reported precision is wider, not that metadata was preserved.
 
-Each row gives original round-trip / metadata / edited-reference exactness, encoded bytes, peak scratch bytes, peak child RSS in KiB, and encode / decode / edit / edited-decode seconds (compressed edit includes shared PCM editing and re-encoding; its initial decode is listed separately).
+Recorded 2026-11-24 in WSL2 Ubuntu 26.04.1 LTS, kernel `6.6.87.2-microsoft-standard-WSL2` (x86_64), CPython 3.14.4 (`/usr/bin/python3`), FFmpeg/ffprobe 8.0.1-3ubuntu2 and GNU time (`/usr/bin/time`; `--version` reports `UNKNOWN`). The WSL run used the checkout source via `PYTHONPATH`, not the Windows locked venv. All seven cases completed in one invocation. The previous recorded benchmark used a Debian container with FFmpeg/ffprobe 7.1.5-0+deb13u1 and CPython 3.13.5; those results are superseded by this run. Times below are single-run wall-clock seconds including process startup, not a throughput guarantee. Peak scratch is the maximum sum of logical file sizes after each measured phase, including simultaneous encoded source/output, decode/encode spool and verification files; the independent synthetic raw fixture and measurement log are excluded. RSS is the largest measured child-process peak, not aggregate application/job memory. The compressed workflows spool decoded PCM on disk for this experiment; a future streaming implementation could change their scratch peak. No comparison of hypothetical optimized streaming code is claimed.
 
-| Case | Backend | Exact / metadata / edited | Encoded B | Peak B | RSS KiB | Seconds E / D / edit / D2 |
-| --- | --- | --- | ---: | ---: | ---: | --- |
-| u8 8 kHz mono 2s | WAV | yes/yes/yes | 16,080 | 48,160 | 96,404 | .811/.725/.646/.640 |
-| | FLAC | yes/no/yes | 15,517 | 47,517 | 96,400 | .064/.060/.745/.060 |
-| | WavPack | yes/yes/yes | 8,124 | 40,124 | 96,420 | .059/.058/.716/.082 |
-| s16 16 kHz mono 2s | WAV | yes/yes/yes | 64,080 | 192,160 | 96,416 | .737/.669/.625/.634 |
-| | FLAC | yes/yes/yes | 33,295 | 161,295 | 96,424 | .106/.064/.848/.062 |
-| | WavPack | yes/yes/yes | 28,708 | 156,708 | 96,404 | .061/.067/.712/.079 |
-| s24 48 kHz stereo 2s | WAV | yes/yes/yes | 576,080 | 1,728,160 | 96,404 | .733/.659/.738/.605 |
-| | FLAC | yes/yes/yes | 262,529 | 1,414,529 | 96,408 | .067/.061/.775/.063 |
-| | WavPack | yes/no/yes | 339,944 | 1,491,944 | 96,420 | .078/.075/.719/.060 |
-| s32 96 kHz 5.1 2s | WAV | yes/yes/yes | 4,608,080 | 13,824,160 | 96,800 | .684/.669/.665/.753 |
-| | FLAC | no/no/no | 1,576,558 | 10,792,558 | 96,784 | .085/.073/.809/.072 |
-| | WavPack | yes/yes/yes | 2,848,416 | 12,064,416 | 96,804 | .097/.089/.879/.079 |
-| f32 48 kHz stereo 2s | WAV | yes/yes/yes | 768,080 | 2,304,160 | 96,416 | .608/.703/.669/.672 |
-| | FLAC | excluded (integer only) | — | — | — | — |
-| | WavPack | yes/yes/yes | 386,626 | 1,922,626 | 96,424 | .069/.067/.754/.073 |
-| f64 44.1 kHz mono 2s | WAV | yes/yes/yes | 705,680 | 2,116,960 | 96,424 | .648/.670/.691/.644 |
-| | FLAC | excluded (integer only) | — | — | — | — |
-| | WavPack | excluded (tested tool has no f64 input) | — | — | — | — |
-| s24 48 kHz 5.1 20s | WAV | yes/yes/yes | 17,280,080 | 51,840,160 | 96,656 | .910/.760/.719/.669 |
-| | FLAC | yes/yes/yes | 8,143,888 | 42,703,888 | 96,656 | .155/.103/.804/.102 |
-| | WavPack | yes/no/yes | 10,023,422 | 44,583,422 | 96,660 | .255/.178/1.102/.160 |
+Each row gives original round-trip exactness, metadata preservation, edited-reference exactness, outcome label, encoded bytes, peak scratch bytes, peak child RSS in KiB, and seconds for source encode / decode / edit / edited encode / edited decode. WAV edits directly into its storage backend, so its edited-encode column is `—`; compressed edit and edited encode are measured separately.
 
-The measured FLAC path widens u8 to 16-bit metadata and reduces s32 to 24 bits (not bit exact). The latter is an intentionally failing experimental probe, never a production conversion. FLAC cannot preserve float PCM. WavPack's tested path reports 32-bit precision for s24 even when decoding to s24 reproduces the bytes; f64 is excluded without conversion. These are specific encoder-path findings, not claims that every implementation of either codec has the same limits.
+| Case | Backend | Exact | Metadata | Edited exact | Outcome | Encoded B | Peak B | RSS KiB | Seconds E/D/Edit/EE/D2 |
+| --- | --- | --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| u8 8 kHz mono 2s | WAV | yes | yes | yes | exact | 16,080 | 48,160 | 22,464 | .2175/.2104/.2070/—/.2053 |
+| | FLAC | yes | no (precision) | yes | exact-with-metadata-widening | 15,517 | 47,517 | 56,832 | .0375/.0227/.2035/.0215/.0205 |
+| | WavPack | yes | yes | yes | exact | 8,124 | 40,124 | 56,064 | .0298/.0214/.2058/.0198/.0209 |
+| s16 16 kHz mono 2s | WAV | yes | yes | yes | exact | 64,080 | 192,160 | 22,848 | .2046/.2030/.2053/—/.2053 |
+| | FLAC | yes | yes | yes | exact | 33,295 | 161,295 | 56,640 | .0238/.0225/.2037/.0231/.0212 |
+| | WavPack | yes | yes | yes | exact | 28,708 | 156,708 | 55,872 | .0202/.0207/.2051/.0210/.0210 |
+| s24 48 kHz stereo 2s | WAV | yes | yes | yes | exact | 576,080 | 1,728,160 | 23,040 | .2013/.2035/.2103/—/.2045 |
+| | FLAC | yes | yes | yes | exact | 262,529 | 1,414,529 | 57,216 | .0231/.0212/.2041/.0233/.0218 |
+| | WavPack | yes | yes | yes | exact | 327,856 | 1,479,856 | 57,852 | .0218/.0215/.2063/.0226/.0226 |
+| s32 96 kHz 5.1 2s | WAV | yes | yes | yes | exact | 4,608,080 | 13,824,160 | 23,232 | .2222/.2152/.2275/—/.2216 |
+| | FLAC | no | no (precision) | no | not-exact | 1,576,558 | 10,792,558 | 65,280 | .0337/.0272/.2377/.0330/.0252 |
+| | WavPack | yes | yes | yes | exact | 2,848,416 | 12,064,416 | 64,020 | .0416/.0327/.2325/.0419/.0341 |
+| f32 48 kHz stereo 2s | WAV | yes | yes | yes | exact | 768,080 | 2,304,160 | 22,836 | .2207/.2077/.2211/—/.2104 |
+| | FLAC | excluded (integer encoder) | — | — | — | — | — | — | — |
+| | WavPack | yes | yes | yes | exact | 386,626 | 1,922,626 | 57,848 | .0251/.0235/.2105/.0245/.0228 |
+| f64 44.1 kHz mono 2s | WAV | yes | yes | yes | exact | 705,680 | 2,116,960 | 23,040 | .2090/.2192/.2131/—/.2184 |
+| | FLAC | excluded (integer encoder) | — | — | — | — | — | — | — |
+| | WavPack | excluded (no f64 input) | — | — | — | — | — | — | — |
+| s24 48 kHz 5.1 20s | WAV | yes | yes | yes | exact | 17,280,080 | 51,840,160 | 23,040 | .2200/.2177/.2169/—/.2145 |
+| | FLAC | yes | yes | yes | exact | 8,143,888 | 42,703,888 | 64,128 | .0725/.0498/.2131/.0736/.0506 |
+| | WavPack | yes | yes | yes | exact | 9,443,784 | 44,003,784 | 65,108 | .0807/.0785/.2254/.0794/.0792 |
 
-FLAC stored the larger s24 source at 47.1% of WAV size and WavPack at 58.0%, real savings worth revisiting. However, the production WAV edit holds only two files (34,560,160 bytes for that case, excluding tiny owner metadata); the compared compressed spool paths peaked at 42.7 and 44.6 MB respectively, with verification included. Thus encoded-size savings alone do not establish a better end-to-end working-set tradeoff. WAV covers all six measured representations with no external runtime dependencies or lockfile changes. Selecting compressed alternatives now would require a verified streaming boundary, precision/layout checks, and new native executable/library distribution, licensing, integrity and Windows/Python 3.14 plus portable-platform compatibility evidence under D164–D165. The measured Linux FFmpeg executable is not that evidence. Start with the simplest verified lossless backend; do not silently fall back from an unsupported format to a lossy conversion. Revisit FLAC/WavPack or other lossless codecs with equivalent fidelity and actual streaming scratch measurements once native-tool packaging and representative workloads are established.
+With explicit `-sample_fmt s32p -bits_per_raw_sample 24`, WavPack reports 24-bit s24 metadata and reproduces the input bytes; the earlier WavPack s24 mismatch was an invocation artifact. FLAC u8 is also byte-exact, but `-sample_fmt s16 -bits_per_raw_sample 8` still probes as 16-bit: this is metadata widening, not sample loss. FLAC s32 was tested with `-sample_fmt s32 -bits_per_raw_sample 32`, yet FFmpeg 8.0.1 emitted 24-bit metadata and the decoded bytes differed. That is a limitation of this tested FFmpeg encoder path; it is not a universal FLAC claim. FLAC float and WavPack f64 were excluded without conversion.
+
+For the 20-second s24 5.1 case, FLAC is 47.13% of WAV's encoded size (52.87% smaller) and WavPack is 54.65% (45.35% smaller). The benchmark's verification-inclusive WAV peak is 51,840,160 bytes, compared with 42,703,888 for FLAC and 44,003,784 for WavPack. Production WAV editing holds two working files (34,560,160 bytes, excluding tiny owner metadata); the compressed spool peaks are therefore 23.56% and 27.33% larger than that two-file WAV working set. The benchmark WAV peak includes its additional final-decode verification copy and is not the production scratch peak.
+
+WAV remains the initial backend because it is the simplest verified choice that preserves all six tested representations and properties, using the standard library without an external codec runtime. The compressed alternatives offer meaningful encoded-size savings but neither covers all six representations in this FFmpeg build, and compressed spooling does not beat the production two-file WAV scratch peak in the larger case. Selecting either would additionally need verified streaming behavior and native executable/library distribution, licensing, integrity, Windows/Python 3.14 and portable-platform compatibility evidence under D164–D165. Do not silently convert unsupported formats; revisit alternatives when equivalent end-to-end fidelity and packaging evidence exists.
 
 ## Validation and remaining integration
 
-Deterministic tests in [test_pcm.py](../tests/unit/test_pcm.py) and [test_audio_scratch.py](../tests/integration/test_audio_scratch.py) exercise D05–D06, D08, D22, D32–D39, D123–D124 and D160. The isolated Linux supplemental test run passed 37 cases under Python 3.13.5; this is not locked Task or remote Windows/macOS evidence. Required checks and outstanding infrastructure evidence remain tracked by [Issue #4](https://github.com/heaje/muteinous/issues/4). Native decoding/reconstruction, storage bundle publication, cache eviction, settings persistence, native staging, game-facing writes and loader acceptance are explicitly outside this slice.
+Deterministic tests in [test_pcm.py](../tests/unit/test_pcm.py) and [test_audio_scratch.py](../tests/integration/test_audio_scratch.py) exercise D05–D06, D08, D22, D32–D39, D123–D124 and D160. On Windows with the locked CPython 3.14.10 environment, `task check` (lint, format, strict typing, decision IDs, the full 153-test suite, package build and version preview) passed locally. This is not remote CI, and Linux/macOS execution of the portable tests remains unverified here. Required checks and outstanding infrastructure evidence remain tracked by [Issue #4](https://github.com/heaje/muteinous/issues/4). Native decoding/reconstruction, storage bundle publication, cache eviction, settings persistence, native staging, game-facing writes and loader acceptance are explicitly outside this slice.
