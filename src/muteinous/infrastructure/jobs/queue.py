@@ -357,6 +357,8 @@ class JobQueue:
                 f"Plan validation returned {type(reason).__name__}, "
                 "expected str or None"
             )
+        if isinstance(reason, str) and not reason.strip():
+            return "Plan validation returned an empty reason"
         return reason
 
     def _schedule(self) -> None:
@@ -530,6 +532,7 @@ class JobQueue:
             self._threads.add(thread)
             thread.start()
         except BaseException as error:
+            # The child may be running, but _run takes this lock before reading state.
             record.start_aborted = True
             if thread is not None:
                 self._threads.discard(thread)
