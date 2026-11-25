@@ -16,6 +16,12 @@ def test_reserved_channel_mask_bits_are_rejected(mask: int) -> None:
         PCMFormat(48000, 1, "s16", 1, mask)
 
 
+@pytest.mark.parametrize(("channels", "mask"), [(2, 1), (1, 3)])
+def test_channel_mask_bit_count_must_match_channels(channels: int, mask: int) -> None:
+    with pytest.raises(ValueError, match="channel mask"):
+        PCMFormat(48000, channels, "s16", 1, mask)
+
+
 @pytest.mark.parametrize("mask", [0, 1, 0x20000, 3])
 def test_valid_channel_masks_are_supported(mask: int) -> None:
     channels = mask.bit_count() if mask else 1
@@ -90,6 +96,35 @@ def test_merge_touching_and_overlapping_ranges(
     assert b"".join(censor_blocks(info, [data], ranges)) == (
         data[:4] + bytes(8) + data[12:]
     )
+
+
+@pytest.mark.parametrize("curve", [None, "linear", "cosine", "equal_power"])
+def test_rounded_overlap_merges_fade_regions(curve: Curve | None) -> None:
+    info = PCMFormat(10, 1, "s16", 10)
+    frame = struct.pack("<h", 10000)
+    original = frame * info.frames
+    options = {} if curve is None else {"curve": curve}
+    edited = b"".join(
+        censor_blocks(
+            info,
+            [original],
+            [(0.30, 0.36), (0.40, 0.47)],
+            before=0.01,
+            after=0.01,
+            fade=0.1,
+            **options,
+        )
+    )
+    frames = [
+        edited[index : index + info.frame_bytes]
+        for index in range(0, len(edited), info.frame_bytes)
+    ]
+    # The rounded words cover frames 3 and 4; no internal fade may survive.
+    assert frames[3:5] == [bytes(info.frame_bytes)] * 2
+    # Only the outer margin is eligible for a fade; at its edge the gain is 1.
+    assert frames[2] == frame
+    assert frames[:2] == [frame] * 2
+    assert frames[5:] == [frame] * 5
 
 
 @pytest.mark.parametrize(

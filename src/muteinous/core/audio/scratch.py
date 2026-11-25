@@ -78,6 +78,7 @@ def audio_scratch(root: Path, storage: Storage) -> Iterator[Scratch]:
         raise ValueError("scratch root must not be a link")
     cleanup_abandoned(root)
     directory = Path(tempfile.mkdtemp(prefix="audio-", dir=root))
+    primary_error: BaseException | None = None
     try:
         with (directory / "owner.lock").open("xb+") as lock:
             lock.write(b"1")
@@ -85,29 +86,39 @@ def audio_scratch(root: Path, storage: Storage) -> Iterator[Scratch]:
             lock_exclusive(lock)
             marker = directory / "ready"
             marker.write_bytes(_MARKER)
-            body_error: BaseException | None = None
             try:
-                try:
-                    yield Scratch(directory, storage)
-                except BaseException as error:
-                    body_error = error
-                    raise
+                yield Scratch(directory, storage)
+            except BaseException as error:
+                primary_error = error
+                raise
             finally:
                 try:
                     for name in _AUDIO_FILES:
                         (directory / name).unlink(missing_ok=True)
                     marker.unlink()
                 except BaseException as cleanup_error:
-                    if body_error is None:
+                    if primary_error is None:
                         raise
-                    body_error.add_note(
+                    primary_error.add_note(
                         f"failed to clean audio scratch {directory}: {cleanup_error!r}"
                     )
+    except BaseException as error:
+        if primary_error is None:
+            primary_error = error
+        raise
     finally:
         # If deletion failed, keep the marker for a later cleanup attempt.
         if not (directory / "ready").exists():
-            (directory / "owner.lock").unlink(missing_ok=True)
-            directory.rmdir()
+            try:
+                (directory / "owner.lock").unlink(missing_ok=True)
+                directory.rmdir()
+            except BaseException as cleanup_error:
+                if primary_error is None:
+                    raise
+                primary_error.add_note(
+                    f"failed to remove audio scratch directory {directory}: "
+                    f"{cleanup_error!r}"
+                )
 
 
 def cleanup_abandoned(root: Path) -> None:

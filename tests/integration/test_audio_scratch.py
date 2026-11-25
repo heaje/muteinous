@@ -5,8 +5,9 @@ import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,52 @@ from muteinous.core.audio.storage import Reader
 from muteinous.core.audio.wav import WaveStorage
 
 pytestmark = pytest.mark.portable
+
+
+_FAKE_STORAGE_MARKER = b"fake-pcm-storage-v1\n"
+
+
+class _FakeReader:
+    def __init__(self, info: PCMFormat, data: bytes) -> None:
+        self.info = info
+        self._data = data
+
+    def blocks(self) -> Iterator[bytes]:
+        block_size = BLOCK_FRAMES * self.info.frame_bytes
+        for offset in range(0, len(self._data), block_size):
+            yield self._data[offset : offset + block_size]
+
+
+class _FakeStorage:
+    """Tiny marker-based backend that proves Scratch uses its injected Storage."""
+
+    def __init__(self, supported: bool = True) -> None:
+        self.supported = supported
+        self.support_calls: list[PCMFormat] = []
+        self.write_paths: list[Path] = []
+        self.open_paths: list[Path] = []
+        self._infos: dict[Path, PCMFormat] = {}
+
+    def supports(self, info: PCMFormat) -> bool:
+        self.support_calls.append(info)
+        return self.supported
+
+    def write(self, path: Path, info: PCMFormat, blocks: Iterable[bytes]) -> None:
+        self.write_paths.append(path)
+        with path.open("xb") as stream:
+            stream.write(_FAKE_STORAGE_MARKER)
+            for block in blocks:
+                stream.write(block)
+        self._infos[path] = info
+
+    @contextmanager
+    def open(self, path: Path) -> Iterator[Reader]:
+        self.open_paths.append(path)
+        with path.open("rb") as stream:
+            encoded = stream.read()
+        if not encoded.startswith(_FAKE_STORAGE_MARKER):
+            raise ValueError("not a fake-storage file")
+        yield _FakeReader(self._infos[path], encoded[len(_FAKE_STORAGE_MARKER) :])
 
 
 @pytest.mark.parametrize(
@@ -70,6 +117,44 @@ def test_edit_across_storage_block_boundary(tmp_path: Path) -> None:
             assert b"".join(reader.blocks()) == frame * 4095 + bytes(18) + frame * 2
         with storage.open(source) as reader:
             assert b"".join(reader.blocks()) == frame * info.frames
+
+
+def test_scratch_uses_injected_storage_for_source_edit_and_read(
+    tmp_path: Path,
+) -> None:
+    info = PCMFormat(4, 1, "s16", 4)
+    frame = struct.pack("<h", 10000)
+    original = frame * info.frames
+    storage = _FakeStorage()
+
+    with audio_scratch(tmp_path, storage) as scratch:
+        source = scratch.write_source(info, [original])
+        assert source.read_bytes().startswith(_FAKE_STORAGE_MARKER)
+        edited = scratch.edit([(0.25, 0.75)])
+        assert edited.read_bytes().startswith(_FAKE_STORAGE_MARKER)
+        with storage.open(edited) as reader:
+            assert reader.info == info
+            assert b"".join(reader.blocks()) == frame + bytes(4) + frame
+
+        assert storage.support_calls == [info]
+        assert storage.write_paths == [source, edited]
+        assert storage.open_paths == [source, edited]
+
+    assert not list(tmp_path.iterdir())
+
+
+def test_unsupported_injected_storage_refuses_source_without_writing(
+    tmp_path: Path,
+) -> None:
+    info = PCMFormat(10, 1, "s16", 2)
+    storage = _FakeStorage(supported=False)
+    with audio_scratch(tmp_path, storage) as scratch:
+        with pytest.raises(ValueError, match="unsupported"):
+            scratch.write_source(info, [b"1234"])
+        assert storage.support_calls == [info]
+        assert storage.write_paths == []
+        assert not (scratch.directory / "source.pcmstore").exists()
+    assert not list(tmp_path.iterdir())
 
 
 def test_decode_failure_and_invalid_edit_leave_no_result(tmp_path: Path) -> None:
@@ -131,6 +216,56 @@ def test_preflight_and_runtime_space_failure(
         assert not output.exists()
         assert path.exists()
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "info,blocks",
+    [
+        (
+            PCMFormat(10, 1, "s16", BLOCK_FRAMES + 1),
+            [bytes((BLOCK_FRAMES + 1) * 2)],
+        ),
+        (PCMFormat(10, 1, "s16", 1), [b"\x00"]),
+        (PCMFormat(10, 1, "s16", 1), [b""]),
+        (PCMFormat(10, 1, "s16", 2), [b"\x00\x00"]),
+        (PCMFormat(10, 1, "s16", 1), [b"\x00\x00\x00\x00"]),
+    ],
+    ids=["oversized", "partial-frame", "empty", "short", "excess"],
+)
+def test_wave_write_rejects_malformed_bounded_streams_without_file(
+    tmp_path: Path, info: PCMFormat, blocks: list[bytes]
+) -> None:
+    path = tmp_path / "invalid.pcmstore"
+    with pytest.raises(ValueError):
+        WaveStorage().write(path, info, blocks)
+    assert not path.exists()
+
+
+def test_wave_write_preflight_includes_header_and_padding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    info = PCMFormat(8000, 1, "u8", 3)
+    payload = b"\x80\x81\x82"
+    storage = WaveStorage()
+    reference = tmp_path / "reference.pcmstore"
+    storage.write(reference, info, [payload])
+    required = reference.stat().st_size
+    reference.unlink()
+    assert required > len(payload)
+
+    insufficient = tmp_path / "insufficient.pcmstore"
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda _: SimpleNamespace(free=required - 1)
+    )
+    with pytest.raises(OSError) as error:
+        storage.write(insufficient, info, [payload])
+    assert error.value.errno == errno.ENOSPC
+    assert not insufficient.exists()
+
+    exact = tmp_path / "exact.pcmstore"
+    monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=required))
+    storage.write(exact, info, [payload])
+    assert exact.stat().st_size == required
 
 
 def test_exclusive_write_and_abandoned_cleanup(tmp_path: Path) -> None:
@@ -280,6 +415,118 @@ def test_scratch_cleanup_failure_propagates_without_body_error(
     assert (source.parent / "ready").exists()
     monkeypatch.undo()
     cleanup_abandoned(tmp_path)
+    assert not list(tmp_path.iterdir())
+
+
+def test_outer_scratch_cleanup_does_not_mask_value_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_unlink = Path.unlink
+    directory: Path | None = None
+
+    def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if directory is not None and path == directory / "owner.lock":
+            raise PermissionError("simulated owner-lock cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    with pytest.raises(ValueError, match="body failure") as error:
+        with audio_scratch(tmp_path, WaveStorage()) as scratch:
+            directory = scratch.directory
+            monkeypatch.setattr(Path, "unlink", failing_unlink)
+            raise ValueError("body failure")
+
+    assert any("owner-lock cleanup failure" in note for note in error.value.__notes__)
+    monkeypatch.undo()
+    assert directory is not None
+    (directory / "owner.lock").unlink(missing_ok=True)
+    directory.rmdir()
+    assert not list(tmp_path.iterdir())
+
+
+def test_outer_scratch_cleanup_does_not_mask_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_rmdir = Path.rmdir
+    directory: Path | None = None
+
+    def failing_rmdir(path: Path) -> None:
+        if path == directory:
+            raise PermissionError("simulated scratch-directory cleanup failure")
+        original_rmdir(path)
+
+    with pytest.raises(KeyboardInterrupt, match="body interrupt") as error:
+        with audio_scratch(tmp_path, WaveStorage()) as scratch:
+            directory = scratch.directory
+            monkeypatch.setattr(Path, "rmdir", failing_rmdir)
+            raise KeyboardInterrupt("body interrupt")
+
+    assert any(
+        "scratch-directory cleanup failure" in note for note in error.value.__notes__
+    )
+    monkeypatch.undo()
+    assert directory is not None
+    directory.rmdir()
+    assert not list(tmp_path.iterdir())
+
+
+def test_outer_scratch_cleanup_failure_propagates_without_body_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_unlink = Path.unlink
+    directory: Path | None = None
+
+    def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if directory is not None and path == directory / "owner.lock":
+            raise PermissionError("simulated owner-lock cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    with pytest.raises(PermissionError, match="owner-lock cleanup failure"):
+        with audio_scratch(tmp_path, WaveStorage()) as scratch:
+            directory = scratch.directory
+            monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    monkeypatch.undo()
+    assert directory is not None
+    (directory / "owner.lock").unlink(missing_ok=True)
+    directory.rmdir()
+    assert not list(tmp_path.iterdir())
+
+
+def test_lock_acquisition_error_is_preserved_when_outer_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import muteinous.core.audio.scratch as scratch_module
+
+    original_unlink = Path.unlink
+    directory: Path | None = None
+    original_mkdtemp = tempfile.mkdtemp
+
+    def fail_lock_acquisition(_: BinaryIO) -> None:
+        raise ValueError("lock acquisition failure")
+
+    def captured_mkdtemp(*, prefix: str, dir: Path) -> str:
+        nonlocal directory
+        result = original_mkdtemp(prefix=prefix, dir=dir)
+        directory = Path(result)
+        return result
+
+    def failing_unlink(path: Path, *args: Any, **kwargs: Any) -> None:
+        if directory is not None and path == directory / "owner.lock":
+            raise PermissionError("simulated owner-lock cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(scratch_module, "lock_exclusive", fail_lock_acquisition)
+    monkeypatch.setattr(tempfile, "mkdtemp", captured_mkdtemp)
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+    with pytest.raises(ValueError, match="lock acquisition failure") as error:
+        with audio_scratch(tmp_path, WaveStorage()):
+            pytest.fail("context body must not run when lock acquisition fails")
+
+    assert any("owner-lock cleanup failure" in note for note in error.value.__notes__)
+    monkeypatch.undo()
+    assert directory is not None
+    (directory / "owner.lock").unlink(missing_ok=True)
+    directory.rmdir()
     assert not list(tmp_path.iterdir())
 
 
