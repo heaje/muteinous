@@ -1,0 +1,8 @@
+# Review, fix and push loop
+
+1. Supervisor: complete [full-task discovery](../README.md#task-start-discovery), verify PR head/base, scope, prerequisites, relevant decisions and history. Isolate work on the existing authorized PR branch and establish baseline validation. Do not change unrelated branches.
+2. Assign independent reviewers the applicable [review workflow](review-pr.md) and exact revision. Give focused delegates only relevant sources and constraints under [role-based discovery](../../docs/development.md#delegation-and-independent-review). Keep reviewers independent of implementation.
+3. Independently confirm findings using [actionable review criteria](../../docs/development.md#actionable-review-findings). Discard unsupported or speculative findings; authorize only minimal corrections. Fix an overprescriptive test rather than expanding production behavior.
+4. Assign confirmed fixes to implementation agents with precise scope; supervisor inspects their diffs and evidence. Run applicable focused and broader validation; preserve meaningful coverage. Commit justified changes conventionally, push to the existing PR branch and verify the new head. Never overwrite concurrent changes.
+5. Independently re-review meaningful changes and affected guarantees at the resulting revision; repeat as required by [termination policy](../../docs/development.md#review-loop-termination).
+6. Report exact head/base, confirmed and resolved findings, outstanding actionable findings, validation, evidence gaps and verdict. If independence or validation is unavailable, stop at the gate and request it; preserve a discoverable checkpoint. Do not merge unless authorized.

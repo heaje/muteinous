@@ -1,16 +1,19 @@
 # Coding-agent entry point
 
-This file is a **navigation checklist, not a second architecture or workflow specification**. Use version-controlled project documentation and current repository evidence rather than another agent's conversation as authority.
+This is a navigation checklist, not a second architecture or workflow specification. Version-controlled project documentation and current repository evidence govern.
 
-## Before working
+## Engineering principles
 
-1. Inspect the assigned Issue/PR, checked-out branch, code and tests. For resumed work, obtain the exact pushed branch/ref and handoff pointer from the task, Issue/PR, or coordinator.
-2. Complete the [task-start agent-note discovery](.agents/README.md#task-start-discovery) on every new or resumed task, even when your coding tool automatically loads `AGENTS.md`.
-3. Read the [initial-release scope](docs/release-scope.md) and **applicable original D-number decisions** in the [complete architecture log](docs/architecture/decisions.md). Follow [architecture-documentation governance](docs/development.md#architecture-documentation-governance) for authority, discrepancies or proposed changes.
-4. Consult [code organization and dependency boundaries](docs/architecture/code-organization.md) and [testing policy](docs/testing.md) for the affected work.
+Muteinous is an application, not a framework. Implement supported behavior; trust documented controlled internal contracts. Validate external inputs at appropriate boundaries, handle reachable failures, and preserve security, integrity, concurrency and other agreed guarantees. Avoid speculative hardening, incidental test assertions and exhaustive mutation resistance. Follow the [testing policy](docs/testing.md#contract-based-testing) and [review policy](docs/development.md#actionable-review-findings).
 
-## While working and handing off
+## Task routing and discovery
 
-- Follow the [development/PR workflow](docs/development.md#work-unit-and-review-policy), [test requirements](docs/testing.md) and [decision-coverage evidence rules](docs/architecture/decision-coverage.md#updating-this-tracker).
-- Before pausing or completing work, follow the [agent knowledge-sharing and handoff procedures](.agents/README.md) for findings, cross-task notices, handoffs and cleanup.
-- When documentation references an **existing repository file**, use a relative Markdown link. Keep hypothetical or not-yet-created file paths as code, not broken links.
+- Select the matching [workflow](.agents/workflows/README.md) automatically, or use the explicitly requested workflow. Clarify material ambiguity about scope, authorization or deliverables.
+- Verify the assigned Issue/PR, exact ref, relevant code and tests; complete [agent-note discovery](.agents/README.md#task-start-discovery).
+- Read applicable original D-number [decisions](docs/architecture/decisions.md), [release scope](docs/release-scope.md), [code organization](docs/architecture/code-organization.md) and detailed policies as relevant. Follow [architecture governance](docs/development.md#architecture-documentation-governance); do not guess at missing requirements.
+- Apply [role-based delegation and independent review](docs/development.md#delegation-and-independent-review). Focused delegates use the scoped discovery procedure; do not assume inherited context.
+
+## Before pausing or completing
+
+- Follow applicable [validation and review](docs/development.md#work-unit-and-review-policy), [decision-coverage evidence rules](docs/architecture/decision-coverage.md#updating-this-tracker), and [knowledge-sharing/handoff procedures](.agents/README.md).
+- Link existing repository files with relative Markdown links; use code for hypothetical paths.
