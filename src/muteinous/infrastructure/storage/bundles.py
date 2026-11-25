@@ -176,6 +176,12 @@ class ResultStore:
         other_requirements: tuple[SpaceRequirement, ...] = (),
     ) -> Iterator[StagingArea]:
         """Preflight known requirements; keep all staging users inside its lease."""
+        staging_device = checked_directory(self._staging.root, root=self.root).st_dev
+        if any(
+            checked_directory(directory, root=self.root).st_dev != staging_device
+            for directory in (self._bundles, self._current)
+        ):
+            raise StorageError("Staging requires destination-filesystem staging")
         requirements = (
             SpaceRequirement(self._staging.root, minimum_bytes, estimate_bytes),
             *other_requirements,
