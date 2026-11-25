@@ -222,7 +222,9 @@ def test_publication_rejects_payload_file_on_another_device(
 
 
 @pytest.mark.portable
-@pytest.mark.parametrize("mismatched_directory", ["current", "stage-leases"])
+@pytest.mark.parametrize(
+    "mismatched_directory", ["current", "stage-leases", "bundles", "staging"]
+)
 def test_stage_refuses_mismatched_destination_devices_before_creation(
     store: ResultStore,
     monkeypatch: pytest.MonkeyPatch,
@@ -243,12 +245,19 @@ def test_stage_refuses_mismatched_destination_devices_before_creation(
     def unexpected_preflight(*args: object, **kwargs: object) -> Never:
         raise AssertionError("Stage device validation must precede preflight")
 
+    def unexpected_disk_usage(*args: object, **kwargs: object) -> Never:
+        raise AssertionError("Stage device validation must precede disk usage")
+
     monkeypatch.setattr(
         "muteinous.infrastructure.storage.bundles.checked_directory",
         different_directory_device,
     )
     monkeypatch.setattr(
         "muteinous.infrastructure.storage.bundles.preflight", unexpected_preflight
+    )
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        unexpected_disk_usage,
     )
     with pytest.raises(StorageError, match="destination-filesystem staging"):
         with store.stage(f"mismatched-{mismatched_directory}-device"):
