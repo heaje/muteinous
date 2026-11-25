@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 
 import pytest
 
 from muteinous.infrastructure.storage._filesystem import StorageError
-from muteinous.infrastructure.storage.staging import Staging, StagingArea
+from muteinous.infrastructure.storage.staging import (
+    CleanupReport,
+    Staging,
+    StagingArea,
+)
 
 
 @pytest.mark.portable
@@ -36,3 +41,10 @@ def test_staging_area_is_unusable_after_owning_context_exits(
 
     with pytest.raises(StorageError, match="no longer writable"):
         _ = areas[0].path
+
+
+@pytest.mark.portable
+def test_cleanup_report_is_frozen() -> None:
+    report = CleanupReport((), ())
+    with pytest.raises(FrozenInstanceError):
+        setattr(report, "removed", ("0" * 32,))

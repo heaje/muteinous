@@ -20,6 +20,22 @@ from tests.support.storage import IDENTITY, publish, read, validate_domain
 
 
 @pytest.mark.portable
+def test_default_stage_minimum_is_zero_when_no_space_is_free(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=0),
+    )
+
+    with store.stage("zero-free-space-default") as stage:
+        assessment = stage.space_assessments[0]
+        assert assessment.minimum == 0
+        assert assessment.available == 0
+        assert stage.path.is_dir()
+
+
+@pytest.mark.portable
 def test_preflight_known_minimum_unknown_estimate_and_aggregation(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:

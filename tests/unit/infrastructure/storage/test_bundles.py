@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import cast
 
@@ -11,6 +12,7 @@ import pytest
 from muteinous.infrastructure.storage._filesystem import StorageError, canonical_json
 from muteinous.infrastructure.storage.bundles import (
     ResultIdentity,
+    Selection,
     _metadata,
     _result_key,
 )
@@ -87,6 +89,18 @@ def test_result_identity_rejects_invalid_values_in_each_field(
     values[field_index] = value
     with pytest.raises(error):
         ResultIdentity(*cast(tuple[str, str, str], tuple(values)))
+
+
+def test_result_identity_is_frozen() -> None:
+    identity = ResultIdentity("source", "configuration", "generation")
+    with pytest.raises(FrozenInstanceError):
+        setattr(identity, "source", "changed")
+
+
+def test_selection_is_frozen() -> None:
+    selection = Selection("0" * 32, "a" * 64)
+    with pytest.raises(FrozenInstanceError):
+        setattr(selection, "bundle", "1" * 32)
 
 
 def test_metadata_rejects_case_variant_integrity_metadata(tmp_path: Path) -> None:

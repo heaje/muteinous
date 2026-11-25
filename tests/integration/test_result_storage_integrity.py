@@ -140,6 +140,42 @@ def test_current_manifest_requires_exact_schema_for_all_operations(
 
 
 @pytest.mark.portable
+@pytest.mark.parametrize(
+    "metadata_sha256",
+    [123, None, [], "0" * 63, "A" * 64, "g" * 64],
+)
+@pytest.mark.parametrize("operation", ["selection", "open", "publish"])
+def test_current_manifest_rejects_invalid_digest_for_every_operation(
+    store: ResultStore, metadata_sha256: object, operation: str
+) -> None:
+    selected = publish(store)
+    manifest_path = store.root / "current" / "scan.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["metadata_sha256"] = metadata_sha256
+    manifest_path.write_bytes(canonical_json(manifest))
+
+    if operation == "selection":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            store.selection("scan")
+    elif operation == "open":
+        with pytest.raises(StorageError, match="Invalid current result manifest"):
+            with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
+                pytest.fail("Invalid manifest digest was exposed")
+    else:
+        with store.stage("invalid-manifest-digest") as stage:
+            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
+            with pytest.raises(StorageError, match="Invalid current result manifest"):
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=selected,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+
+
+@pytest.mark.portable
 def test_missing_selected_bundle_refuses_open_without_fallback(
     store: ResultStore,
 ) -> None:

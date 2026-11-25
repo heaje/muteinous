@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +11,7 @@ import pytest
 
 from muteinous.infrastructure.storage._filesystem import InsufficientSpace, StorageError
 from muteinous.infrastructure.storage.space import (
+    SpaceAssessment,
     SpaceRequirement,
     preflight,
     translate_write_error,
@@ -34,6 +36,18 @@ def test_space_requirement_rejects_invalid_bounds(
 ) -> None:
     with pytest.raises(ValueError, match="Invalid space requirement"):
         SpaceRequirement(tmp_path, minimum, estimate)
+
+
+def test_space_requirement_is_frozen(tmp_path: Path) -> None:
+    requirement = SpaceRequirement(tmp_path, 1, 2)
+    with pytest.raises(FrozenInstanceError):
+        setattr(requirement, "minimum", 0)
+
+
+def test_space_assessment_is_frozen(tmp_path: Path) -> None:
+    assessment = SpaceAssessment(tmp_path, 10, 1, 2)
+    with pytest.raises(FrozenInstanceError):
+        setattr(assessment, "available", 0)
 
 
 def test_preflight_rejects_parent_components_before_normalizing(tmp_path: Path) -> None:

@@ -7,8 +7,11 @@ import json
 import subprocess
 import sys
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -26,6 +29,64 @@ from tests.support.storage import (
     read,
     validate_domain,
 )
+
+
+@pytest.mark.portable
+def test_cleanup_retains_stage_with_alternate_stream_from_enumerator(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with store.stage("alternate-stream-seam") as stage:
+        directory = stage.path.parent
+        owner = directory / "owner.json"
+        owner_bytes = owner.read_bytes()
+        payload = stage.path / "sentinel.bin"
+        payload.write_bytes(b"keep")
+
+    def enumerate_streams(path: Path) -> tuple[str, ...]:
+        if path == owner:
+            return ("::$DATA", ":review:$DATA")
+        return ("::$DATA",)
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage._filesystem._enumerate_streams",
+        enumerate_streams,
+    )
+    report = store.cleanup_abandoned()
+
+    assert directory.name not in report.removed
+    reason = dict(report.retained)[directory.name]
+    assert "alternate data stream" in reason
+    assert directory.is_dir()
+    assert owner.read_bytes() == owner_bytes
+    assert payload.read_bytes() == b"keep"
+
+
+# Define this real-NTFS case only on Windows rather than recording a skipped test
+# on platforms that cannot create NTFS alternate data streams.
+if sys.platform == "win32":
+
+    def test_cleanup_retains_stage_with_real_windows_alternate_stream(
+        store: ResultStore,
+    ) -> None:
+        with store.stage("alternate-stream-ntfs") as stage:
+            directory = stage.path.parent
+            owner = directory / "owner.json"
+            owner_bytes = owner.read_bytes()
+            payload = stage.path / "sentinel.bin"
+            payload.write_bytes(b"keep")
+            owner_stream = Path(f"{owner}:review")
+            owner_stream.write_bytes(b"unhashed owner stream")
+            assert owner_stream.read_bytes() == b"unhashed owner stream"
+
+        report = store.cleanup_abandoned()
+
+        assert directory.name not in report.removed
+        reason = dict(report.retained)[directory.name]
+        assert "alternate data stream" in reason
+        assert directory.is_dir()
+        assert owner.read_bytes() == owner_bytes
+        assert owner_stream.read_bytes() == b"unhashed owner stream"
+        assert payload.read_bytes() == b"keep"
 
 
 @pytest.mark.portable
@@ -103,6 +164,53 @@ def test_cleanup_retains_canonical_invalid_ownership_markers(
     assert directory.name not in report.removed
     assert "Invalid staging ownership marker" in dict(report.retained)[directory.name]
     assert (directory / "payload" / "sentinel").read_bytes() == b"keep"
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("job_id", [123, b"x", ["a"], ""])
+def test_stage_rejects_invalid_job_identity_before_creating_stage_or_lease(
+    store: ResultStore, job_id: object
+) -> None:
+    staging = store.root / "staging"
+    leases = store.root / "stage-leases"
+    staging_before = set(staging.iterdir())
+    leases_before = set(leases.iterdir())
+
+    with pytest.raises(ValueError, match="nonempty job identity"):
+        with store.stage(cast(str, job_id)):
+            pytest.fail("Invalid job identity yielded a writable stage")
+
+    assert set(staging.iterdir()) == staging_before
+    assert set(leases.iterdir()) == leases_before
+
+
+@pytest.mark.portable
+def test_stage_fails_closed_when_new_lease_cannot_be_acquired(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = store.root / "staging"
+    leases = store.root / "stage-leases"
+    staging_before = set(staging.iterdir())
+    leases_before = set(leases.iterdir())
+
+    @contextmanager
+    def refuse_lease(_path: Path, *, root: Path | None = None) -> Iterator[None]:
+        assert root == store.root
+        yield None
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.staging.try_lock", refuse_lease
+    )
+    with pytest.raises(StorageError, match="could not be acquired"):
+        with store.stage("lease-refused"):
+            pytest.fail("Stage was yielded without an acquired lease")
+
+    assert set(staging.iterdir()) == staging_before
+    created_leases = set(leases.iterdir()) - leases_before
+    assert len(created_leases) == 1
+    (lease_path,) = created_leases
+    assert lease_path.is_file()
+    assert lease_path.read_bytes()
 
 
 @pytest.mark.portable
@@ -234,6 +342,25 @@ def test_missing_or_mismatched_lease_is_ambiguous(store: ResultStore) -> None:
     report = store.cleanup_abandoned()
     assert not report.removed
     assert {name for name, _ in report.retained} == {abandoned.name, mismatch.name}
+
+
+@pytest.mark.portable
+def test_cleanup_accepts_valid_marker_with_process_id_one(store: ResultStore) -> None:
+    with store.stage("pid-one-owner") as stage:
+        directory = stage.path.parent
+        (stage.path / "sentinel.bin").write_bytes(b"keep until cleanup")
+
+    marker_path = directory / "owner.json"
+    marker = json.loads(marker_path.read_bytes())
+    marker["process"] = 1
+    raw = canonical_json(marker)
+    marker_path.write_bytes(raw)
+    (store.root / "stage-leases" / f"{directory.name}.lock").write_bytes(raw)
+
+    report = store.cleanup_abandoned()
+
+    assert directory.name in report.removed
+    assert not directory.exists()
 
 
 @pytest.mark.portable

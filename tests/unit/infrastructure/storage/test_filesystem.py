@@ -17,13 +17,16 @@ from muteinous.infrastructure.storage._filesystem import (
     checked_directory,
     checked_stat,
     file_record,
+    is_digest,
     read_json,
+    read_regular,
     safe_name,
     walk_files,
 )
 from tests.support.storage import (
     install_directory_listing,
     install_fake_stream_api,
+    make_directory_link,
     stat_namespace,
 )
 
@@ -112,6 +115,11 @@ def test_invalid_or_noncanonical_json_is_rejected(raw: bytes) -> None:
         "a\\b",
         "C:drive",
         "NUL.txt",
+        "PRN",
+        "AUX",
+        "PRN.txt",
+        "AUX.txt",
+        "prn.txt",
         "COM1",
         "COM¹",
         "COM²",
@@ -134,6 +142,11 @@ def test_unsafe_path_components_are_rejected(name: str) -> None:
 
 def test_safe_name_allows_space_inside_component() -> None:
     safe_name("name with spaces.txt")
+
+
+@pytest.mark.parametrize("name", ["COMA", "LPTX", "CONSOLE", "com10"])
+def test_safe_name_allows_names_outside_reserved_device_set(name: str) -> None:
+    safe_name(name)
 
 
 def test_safe_name_rejects_unencodable_utf8_component() -> None:
@@ -373,3 +386,61 @@ def test_checked_directory_rejects_path_outside_controlled_root(
     outside.mkdir()
     with pytest.raises(StorageError, match="outside controlled root"):
         checked_directory(outside, root=controlled)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [123, None, [], "0" * 63, "A" * 64, "g" * 64],
+)
+def test_is_digest_rejects_invalid_values(value: object) -> None:
+    assert is_digest(value) is False
+
+
+def test_is_digest_accepts_lowercase_sha256_hex() -> None:
+    assert is_digest("a" * 64) is True
+
+
+def test_filesystem_helpers_work_without_controlled_root(tmp_path: Path) -> None:
+    directory = tmp_path / "uncontrolled"
+    directory.mkdir()
+    member = directory / "member.bin"
+    member.write_bytes(b"payload")
+
+    assert checked_directory(directory).st_dev == directory.stat().st_dev
+    assert read_regular(member) == b"payload"
+    assert walk_files(directory) == [member]
+
+
+@pytest.mark.parametrize("helper", ["checked_directory", "read_regular", "walk_files"])
+def test_filesystem_helpers_without_root_reject_parent_components(
+    tmp_path: Path, helper: str
+) -> None:
+    directory = tmp_path / "root"
+    directory.mkdir()
+    member = directory / "member.bin"
+    member.write_bytes(b"payload")
+    traversing_directory = directory / ".." / "root"
+
+    with pytest.raises(StorageError, match="Parent traversal"):
+        if helper == "checked_directory":
+            checked_directory(traversing_directory)
+        elif helper == "read_regular":
+            read_regular(traversing_directory / "member.bin")
+        else:
+            walk_files(traversing_directory)
+
+
+def test_filesystem_helpers_without_root_reject_linked_paths(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    member = target / "member.bin"
+    member.write_bytes(b"payload")
+    linked = tmp_path / "linked"
+    make_directory_link(linked, target)
+
+    with pytest.raises(StorageError, match="Unsafe link"):
+        checked_directory(linked)
+    with pytest.raises(StorageError, match="Unsafe link"):
+        read_regular(linked / "member.bin")
+    with pytest.raises(StorageError, match="Unsafe link"):
+        walk_files(linked)
