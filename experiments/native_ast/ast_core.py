@@ -27,6 +27,10 @@ INFO = PCMFormat(RATE, CHANNELS, "s16", FRAMES, 3)
 Boundary = Literal["start", "end"]
 Decoder = Callable[[str, Path, Path, PCMFormat], None]
 Encoder = Callable[[str, Path, Path, PCMFormat], None]
+NativeValidator = Callable[[str, bytes, bytes, PCMFormat], None]
+ReconstructionVerifier = Callable[
+    [str, bytes, bytes, bytes, Sequence[tuple[int, int]], PCMFormat], None
+]
 
 
 class NativeStageError(ValueError):
@@ -322,18 +326,21 @@ def _merge_ranges(ranges: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
 
 
 def group_edits(
-    assets: Mapping[str, bytes], edits: Sequence[Edit]
+    assets: Mapping[str, bytes],
+    edits: Sequence[Edit],
+    *,
+    total_frames: int = FRAMES,
 ) -> dict[str, list[tuple[int, int]]]:
     """Map segment-relative ranges to native assets and merge touching spans."""
-    if not edits:
+    if not edits or total_frames <= 0:
         raise ValueError("no required edits")
     groups: dict[str, list[tuple[int, int]]] = {}
     for edit in edits:
         if edit.asset not in assets:
             raise NativeValidationError(edit.asset, "unknown required asset")
         if not (
-            0 <= edit.segment_start < FRAMES
-            and 0 < edit.segment_frames <= FRAMES - edit.segment_start
+            0 <= edit.segment_start < total_frames
+            and 0 < edit.segment_frames <= total_frames - edit.segment_start
             and 0 <= edit.start < edit.end <= edit.segment_frames
         ):
             raise NativeValidationError(edit.asset, "invalid segment mapping or edit")
@@ -343,9 +350,9 @@ def group_edits(
     return {asset: _merge_ranges(ranges) for asset, ranges in groups.items()}
 
 
-def _pcm_blocks(path: Path) -> Iterable[bytes]:
+def _pcm_blocks_for(path: Path, info: PCMFormat) -> Iterable[bytes]:
     with path.open("rb") as stream:
-        while block := stream.read(BLOCK_FRAMES * INFO.frame_bytes):
+        while block := stream.read(BLOCK_FRAMES * info.frame_bytes):
             yield block
 
 
@@ -379,6 +386,28 @@ def _verify_edited_pcm(
             raise EditError(asset_id, "unaffected frames changed")
 
 
+def _validate_ast_native(
+    asset_id: str, native: bytes, pcm: bytes, info: PCMFormat
+) -> None:
+    validate_fixture(native, pcm, asset_id=asset_id, info=info)
+
+
+def _verify_exact_reconstruction(
+    asset_id: str,
+    original: bytes,
+    edited: bytes,
+    decoded: bytes,
+    ranges: Sequence[tuple[int, int]],
+    info: PCMFormat,
+) -> None:
+    del original, ranges
+    if len(decoded) != info.frames * info.frame_bytes:
+        raise ValueError("rebuilt PCM frame count changed")
+    if decoded != edited:
+        raise ValueError("rebuilt native decoded PCM mismatch")
+    del asset_id
+
+
 def prepare(
     root: Path,
     assets: Mapping[str, bytes],
@@ -388,13 +417,26 @@ def prepare(
     decoder: Decoder,
     encoder: Encoder,
     storage: WaveStorage | None = None,
+    info: PCMFormat = INFO,
+    native_extension: str = ".ast",
+    native_validator: NativeValidator | None = None,
+    reconstruction_verifier: ReconstructionVerifier | None = None,
 ) -> dict[str, bytes]:
-    """Prepare every affected asset privately; return only after all validate."""
-    groups = group_edits(assets, edits)
+    """Prepare every affected asset privately; return only after all validate.
+
+    The defaults retain the strict AST profile. A sibling isolated experiment may
+    supply only its native validator and decoded-output verifier while reusing
+    this bounded PCM/scratch orchestration.
+    """
+    if not native_extension.startswith(".") or "/" in native_extension:
+        raise ValueError("native extension must be a simple dotted suffix")
+    groups = group_edits(assets, edits, total_frames=info.frames)
     if assets.keys() != originals.keys():
         raise ValueError("fixture asset/original identity mismatch")
     root.mkdir(parents=True, exist_ok=True)
     pcm_storage = storage or WaveStorage()
+    validate_native = native_validator or _validate_ast_native
+    verify_reconstruction = reconstruction_verifier or _verify_exact_reconstruction
     staged: dict[str, bytes] = {}
 
     with tempfile.TemporaryDirectory(prefix="native-prepare-", dir=root) as private:
@@ -402,18 +444,18 @@ def prepare(
         for index, (asset_id, ranges) in enumerate(groups.items()):
             native = assets[asset_id]
             original_pcm = originals[asset_id]
-            validate_fixture(native, original_pcm, asset_id=asset_id)
+            validate_native(asset_id, native, original_pcm, info)
             directory = working / str(index)
             directory.mkdir()
-            source = directory / "source.ast"
+            source = directory / f"source{native_extension}"
             extracted = directory / "extracted.pcm"
             edited = directory / "edited.pcm"
-            rebuilt = directory / "rebuilt.ast"
+            rebuilt = directory / f"rebuilt{native_extension}"
             validated_pcm = directory / "validated.pcm"
             source.write_bytes(native)
 
             try:
-                decoder(asset_id, source, extracted, INFO)
+                decoder(asset_id, source, extracted, info)
                 extracted_pcm = extracted.read_bytes()
                 if extracted_pcm != original_pcm:
                     raise ValueError("extracted PCM differs from verified source")
@@ -424,13 +466,13 @@ def prepare(
             expected_pcm: bytes
             try:
                 with audio_scratch(directory / "scratch", pcm_storage) as scratch:
-                    scratch.write_source(INFO, _pcm_blocks(extracted))
+                    scratch.write_source(info, _pcm_blocks_for(extracted, info))
                     seconds = [
                         (
                             frame_boundary_seconds(
-                                start, INFO.rate, INFO.frames, "start"
+                                start, info.rate, info.frames, "start"
                             ),
-                            frame_boundary_seconds(end, INFO.rate, INFO.frames, "end"),
+                            frame_boundary_seconds(end, info.rate, info.frames, "end"),
                         )
                         for start, end in ranges
                     ]
@@ -439,33 +481,34 @@ def prepare(
                         pcm_storage.open(result) as reader,
                         edited.open("xb") as output,
                     ):
-                        if reader.info != INFO:
+                        if reader.info != info:
                             raise ValueError("intermediate PCM metadata mismatch")
                         for block in reader.blocks():
                             output.write(block)
                 expected_pcm = edited.read_bytes()
                 if source.read_bytes() != native:
-                    raise ValueError("source AST changed during PCM edit")
+                    raise ValueError("native source changed during PCM edit")
             except Exception as exc:
                 detail = str(exc) or type(exc).__name__
                 raise EditError(asset_id, detail) from exc
 
-            _verify_edited_pcm(asset_id, original_pcm, expected_pcm, ranges, INFO)
+            _verify_edited_pcm(asset_id, original_pcm, expected_pcm, ranges, info)
 
             try:
-                encoder(asset_id, edited, rebuilt, INFO)
+                encoder(asset_id, edited, rebuilt, info)
                 native_output = rebuilt.read_bytes()
-                validate_fixture(
-                    native_output,
+                validate_native(asset_id, native_output, expected_pcm, info)
+                decoder(asset_id, rebuilt, validated_pcm, info)
+                verify_reconstruction(
+                    asset_id,
+                    original_pcm,
                     expected_pcm,
-                    asset_id=asset_id,
-                    info=INFO,
+                    validated_pcm.read_bytes(),
+                    ranges,
+                    info,
                 )
-                decoder(asset_id, rebuilt, validated_pcm, INFO)
-                if validated_pcm.read_bytes() != expected_pcm:
-                    raise ValueError("rebuilt AST decoded PCM mismatch")
                 if source.read_bytes() != native:
-                    raise ValueError("source AST changed during reconstruction")
+                    raise ValueError("native source changed during reconstruction")
             except Exception as exc:
                 detail = (
                     exc.detail

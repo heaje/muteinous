@@ -1,6 +1,6 @@
-# Native AST feasibility investigation (M1.5)
+# Native AST lossless structural specimen (M1.5)
 
-This is an isolated synthetic experiment for [Issue #20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported-format declaration, game compatibility claim, or completed censorship/Apply demonstration. The current scope is one uncompressed PCM16 stereo AST profile. No Ogg/Vorbis or other second format is included.
+This is an isolated synthetic experiment for [Issue #20](https://github.com/heaje/muteinous/issues/20), not a production adapter, supported-format declaration, game compatibility claim, or completed censorship/Apply demonstration. AST remains the narrow **lossless structural specimen**: one uncompressed PCM16 stereo profile exercises parsing, grouping and exact shared-PCM edits. It is not representative of the Windows-first release's broader lossy-audio risk; the sibling [Ogg Vorbis experiment](../native_ogg/README.md) is the Windows-relevant **lossy** specimen.
 
 ## What is exercised
 

@@ -1,0 +1,183 @@
+import struct
+
+import pytest
+
+from experiments.native_ogg.ogg_core import (
+    OggFormatError,
+    build_ogg_fixture,
+    ogg_crc,
+    parse_ogg_vorbis,
+)
+from experiments.native_ogg.ogg_prepare import bitrate_is_approximately_preserved
+
+pytestmark = pytest.mark.portable
+
+
+def _page_offsets(native: bytes) -> list[tuple[int, int]]:
+    offsets = []
+    cursor = 0
+    while cursor < len(native):
+        count = native[cursor + 26]
+        table_end = cursor + 27 + count
+        end = table_end + sum(native[cursor + 27 : table_end])
+        offsets.append((cursor, end))
+        cursor = end
+    return offsets
+
+
+def _patch_page(native: bytes, page_index: int, offset: int, value: bytes) -> bytes:
+    pages = _page_offsets(native)
+    start, end = pages[page_index]
+    page = bytearray(native[start:end])
+    page[offset : offset + len(value)] = value
+    page[22:26] = bytes(4)
+    struct.pack_into("<I", page, 22, ogg_crc(page))
+    return native[:start] + bytes(page) + native[end:]
+
+
+def test_pure_python_writer_builds_pages_crc_headers_and_tags() -> None:
+    native = build_ogg_fixture()
+    parsed = parse_ogg_vorbis(native, expected_frames=44_100)
+    assert parsed.channels == 2
+    assert parsed.rate == 44_100
+    assert parsed.frames == 44_100
+    assert parsed.nominal_bitrate == 128_000
+    assert parsed.vendor == "native_ogg synthetic fixture"
+    assert parsed.comments == (
+        ("LOOPSTART", "4410"),
+        ("LOOPLENGTH", "22050"),
+        ("FIXTURE", "synthetic"),
+    )
+    assert parsed.audio_packet_count == 1
+    assert parsed.page_count == 1
+
+
+def test_bitrate_class_comparison_has_a_bounded_tolerance() -> None:
+    assert bitrate_is_approximately_preserved(128_000, 144_000)
+    assert not bitrate_is_approximately_preserved(128_000, 160_000)
+    assert not bitrate_is_approximately_preserved(-1, 128_000)
+
+
+def test_packet_reassembly_across_continued_pages() -> None:
+    native = build_ogg_fixture(
+        frames=88_200,
+        vendor="v" * 900,
+        max_segments_per_page=1,
+    )
+    parsed = parse_ogg_vorbis(native, expected_frames=88_200)
+    pages = _page_offsets(native)
+    assert parsed.page_count == len(pages)
+    assert parsed.vendor == "v" * 900
+    assert any(native[start + 5] & 0x01 for start, _ in pages[1:])
+
+
+@pytest.mark.parametrize(
+    ("case", "reason"),
+    [
+        ("capture", "invalid Ogg capture pattern"),
+        ("truncated", "truncated Ogg page body"),
+        ("segment table", "truncated Ogg segment table"),
+        ("trailing", "trailing bytes after Ogg EOS page"),
+        ("crc", "Ogg page CRC mismatch"),
+        ("version", "unsupported Ogg bitstream version"),
+        ("reserved flags", "reserved Ogg header-type flag set"),
+        ("sequence", "Ogg page sequence gap"),
+        ("serial", "chained or multiplexed Ogg streams are unsupported"),
+        ("continuation", "Ogg continued-packet flag mismatch"),
+        ("missing EOS", "missing Ogg EOS page"),
+        ("early EOS", "trailing bytes after Ogg EOS page"),
+        ("non-Vorbis", "missing or malformed Vorbis identification header"),
+        ("six channels", "unsupported Vorbis channel profile"),
+        ("wrong rate", "unsupported Vorbis sample-rate profile"),
+        ("identification framing", "missing Vorbis identification framing bit"),
+        ("comment framing", "missing Vorbis comment framing bit"),
+        ("comment length", "oversized Vorbis vendor"),
+        ("missing setup", "missing or malformed Vorbis setup header"),
+        (
+            "empty page granule",
+            "Ogg page without completed packets has a granule position",
+        ),
+        ("granule", "final Ogg granule position differs from decoded frame count"),
+    ],
+)
+def test_parser_rejects_malformed_or_unsupported_streams(
+    case: str, reason: str
+) -> None:
+    native = build_ogg_fixture()
+    if case == "capture":
+        changed = bytearray(native)
+        changed[0] = ord("X")
+        native = bytes(changed)
+    elif case == "truncated":
+        native = native[:-1]
+    elif case == "segment table":
+        native = _patch_page(native, 0, 26, b"\xff")
+    elif case == "trailing":
+        native += b"\x00"
+    elif case == "crc":
+        changed = bytearray(native)
+        changed[-1] ^= 1
+        native = bytes(changed)
+    elif case == "version":
+        native = _patch_page(native, 0, 4, b"\x01")
+    elif case == "reserved flags":
+        native = _patch_page(native, 0, 5, b"\x82")
+    elif case == "sequence":
+        native = _patch_page(native, 0, 18, struct.pack("<I", 1))
+    elif case == "serial":
+        native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
+        native = _patch_page(native, 1, 14, struct.pack("<I", 7))
+    elif case == "continuation":
+        native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
+        native = _patch_page(native, 1, 5, b"\x03")
+    elif case == "missing EOS":
+        native = _patch_page(native, 0, 5, b"\x02")
+    elif case == "early EOS":
+        native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
+        native = _patch_page(native, 0, 5, b"\x06")
+    elif case == "non-Vorbis":
+        native = _patch_page(native, 0, 31, b"\x80")
+    elif case == "six channels":
+        native = build_ogg_fixture(channels=6)
+    elif case == "wrong rate":
+        native = build_ogg_fixture(rate=48_000)
+    elif case == "identification framing":
+        native = _patch_page(native, 0, 31 + 29, b"\x00")
+    elif case == "comment framing":
+        vendor_bytes = b"native_ogg synthetic fixture"
+        comment_lengths = (14, 16, 17)
+        comment_packet_bytes = (
+            7
+            + 4
+            + len(vendor_bytes)
+            + 4
+            + sum(4 + length for length in comment_lengths)
+            + 1
+        )
+        native = _patch_page(
+            native,
+            0,
+            31 + 30 + comment_packet_bytes - 1,
+            b"\x00",
+        )
+    elif case == "comment length":
+        native = _patch_page(native, 0, 31 + 30 + 7, struct.pack("<I", 0xFFFFFFFF))
+    elif case == "missing setup":
+        native = build_ogg_fixture(setup_packet=b"")
+    elif case == "empty page granule":
+        native = build_ogg_fixture(vendor="v" * 900, max_segments_per_page=1)
+        native = _patch_page(native, 1, 6, struct.pack("<Q", 0))
+    elif case == "granule":
+        native = _patch_page(native, 0, 6, struct.pack("<Q", 44_099))
+
+    with pytest.raises(OggFormatError, match=reason.replace(".", r"\.")):
+        parse_ogg_vorbis(native, expected_frames=44_100)
+
+
+def test_parser_rejects_unsupported_opus_packet_and_wrong_decoded_frame_count() -> None:
+    native = _patch_page(build_ogg_fixture(), 0, 31, b"\x80")
+    with pytest.raises(OggFormatError, match="identification header"):
+        parse_ogg_vorbis(native)
+
+    with pytest.raises(OggFormatError, match="decoded frame count"):
+        parse_ogg_vorbis(build_ogg_fixture(), expected_frames=44_101)
