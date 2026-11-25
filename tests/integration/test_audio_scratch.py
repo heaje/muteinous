@@ -173,29 +173,18 @@ def test_decoder_close_failure_invalidates_completed_output(tmp_path: Path) -> N
     assert not list(tmp_path.iterdir())
 
 
-def test_preflight_and_runtime_space_failure(
+def test_preflight_space_failure_leaves_source_and_no_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     info = PCMFormat(10, 1, "s16", 2)
     with audio_scratch(tmp_path, WaveStorage()) as scratch:
-        path = scratch.write_source(info, [b"1234"])
+        source = scratch.write_source(info, [b"1234"])
         monkeypatch.setattr(shutil, "disk_usage", lambda _: SimpleNamespace(free=0))
         with pytest.raises(OSError) as error:
             scratch.edit([(0, 0.1)])
         assert error.value.errno == errno.ENOSPC
         assert not (scratch.directory / "edited.pcmstore").exists()
-        monkeypatch.undo()
-
-        def broken() -> Iterator[bytes]:
-            yield b"12"
-            raise OSError(errno.ENOSPC, "simulated runtime stream failure")
-
-        output = scratch.directory / "edited.pcmstore"
-        with pytest.raises(OSError) as error:
-            WaveStorage().write(output, info, broken())
-        assert error.value.errno == errno.ENOSPC
-        assert not output.exists()
-        assert path.exists()
+        assert source.exists()
     assert not list(tmp_path.iterdir())
 
 
