@@ -9,7 +9,7 @@ from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from threading import Condition, Event, Thread
+from threading import TIMEOUT_MAX, Condition, Event, Thread
 from uuid import uuid4
 
 _MAX_DETAIL = 4096
@@ -177,6 +177,7 @@ class _Record:
     published_revision: int = 1
     last_validated_at: float | None = None
     cancelled: Event = field(default_factory=Event)
+    start_aborted: bool = False
 
 
 class JobQueue:
@@ -419,6 +420,8 @@ class JobQueue:
                 with self._condition:
                     self._condition.notify_all()
                     timeout = self._next_revalidation_delay()
+                    if timeout is not None:
+                        timeout = min(timeout, TIMEOUT_MAX)
                     self._condition.wait_for(
                         lambda: self._closed or self._generation != generation,
                         timeout=timeout,
@@ -461,7 +464,6 @@ class JobQueue:
         detail: str,
         *,
         reserved: bool = False,
-        thread: Thread | None = None,
     ) -> None:
         record = self._records.get(job_id)
         if record is None:
@@ -471,8 +473,6 @@ class JobQueue:
             self._used.subtract(record.snapshot.plan.resources)
             self._active.discard(job_id)
             self._capacity_revision += 1
-        if thread is not None:
-            self._threads.discard(thread)
         old = record.snapshot
         failed = replace(
             old,
@@ -530,19 +530,20 @@ class JobQueue:
             self._threads.add(thread)
             thread.start()
         except BaseException as error:
-            if thread is not None and thread.ident is not None:
-                # Swallow post-launch errors; _run owns this reservation now.
-                return
+            record.start_aborted = True
+            if thread is not None:
+                self._threads.discard(thread)
             self._fail_job(
                 job_id,
                 _error_detail(error, prefix="Worker start failed"),
                 reserved=reserved,
-                thread=thread,
             )
 
     def _run(self, job_id: str, worker: Worker) -> None:
         with self._condition:
-            record = self._records[job_id]
+            record = self._records.get(job_id)
+            if record is None or record.start_aborted:
+                return
             plan = record.snapshot.plan
             context = JobContext(self, job_id, record.cancelled)
         state = JobState.COMPLETED
