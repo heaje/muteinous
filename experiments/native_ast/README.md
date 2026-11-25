@@ -4,13 +4,13 @@ This is an isolated synthetic experiment for [Issue #20](https://github.com/heaj
 
 ## What is exercised
 
-[`ast_core.py`](ast_core.py) is the pure-Python implementation: a canonical AST fixture writer, strict parser/validator, asset grouping, exact integer-frame-to-time mapping, and private all-or-nothing preparation. Its encoder and decoder are injected callables. Required pytest coverage uses those callables as deterministic fakes and exercises the real upstream `PCMFormat`, `WaveStorage`, `audio_scratch`, and `Scratch.edit`; it uses no FFmpeg and never skips.
+[`ast_core.py`](ast_core.py) is the pure-Python implementation: a canonical AST fixture writer, strict parser/validator, asset grouping, exact integer-frame-to-time mapping, and private all-or-nothing preparation. Its encoder and decoder are injected callables. Required pytest coverage is deliberately limited to safety-critical shared-editor integration: exhaustive frame-boundary mapping, exact `Scratch.edit` frames, grouped edits and one rebuild per affected asset, independent edit-completeness checks, staged refusal/cleanup, default-profile pinning, and private native-path containment. Fake codecs keep these required tests independent of FFmpeg; they never skip.
 
 The accepted fixture has 32 kHz, stereo signed PCM16, 8,192 frames, and exact loop bounds 1,024–6,144. AST uses a 64-byte STRM header and 32-byte BLCK headers. The observed FFmpeg `pcm_s16be_planar` packet layout is four blocks, each 4,096 bytes per channel (2,048 frames); only the final block may be shorter for another frame count. The validator rejects nonzero reserved/header padding, nonzero BLCK padding, unexpected partitions, inconsistent fields, extra bytes, and sample changes rather than accepting bytes that reconstruction would normalize. FFmpeg's muxer writes an unknown fixed little-endian `0x7f` marker at STRM bytes 40–43; other bytes in the checked header padding are zero.
 
 Because AST establishes two channels but does not provide an explicit WAVE speaker mask, the intermediate uses the standard stereo WAVE mask `FL|FR = 3`. The manual script also checks that FFmpeg decodes rebuilt AST as `stereo`. Frame boundaries are nudged by adjacent float values until the upstream floor/ceil mapping selects the exact intended frames; the exact-duration end boundary uses upstream's `seconds == duration` special case.
 
-[`ffmpeg_tools.py`](ffmpeg_tools.py) is used only by the manual scripts. It resolves FFmpeg once to an absolute path, checks its version, AST muxer/demuxer, and both decoder and encoder capabilities for `pcm_s16be_planar`. It uses argument lists without a shell, redirects stdout/stderr to private temporary files, retains only a 64-KiB tail from either stream, and includes at most the last 400 stderr characters in failures. Each process starts in a new process group/session; timeout kills its whole process tree (Windows `taskkill /T /F`, POSIX process group), waits for termination, and decodes diagnostic text with UTF-8 replacement. Missing or unsuitable FFmpeg fails loudly.
+[`ffmpeg_tools.py`](ffmpeg_tools.py) is used only by the manual scripts. It resolves FFmpeg once to an absolute path, checks its version, AST muxer/demuxer, and both decoder and encoder capabilities for `pcm_s16be_planar`. It uses argument lists without a shell, redirects stdout/stderr to private temporary files, retains only a 64-KiB tail from either stream, and includes at most the last 400 stderr characters in failures. Each process starts in a new process group/session; timeout kills its whole process tree (Windows `taskkill /T /F`, POSIX process group), waits for termination, and decodes diagnostic text with UTF-8 replacement. Missing or unsuitable FFmpeg fails loudly. Wrapper behavior is no longer routine pytest coverage: the manual probe checks real capability preflight and runs Python-backed negative controls for bounded diagnostics and Windows process-tree timeout. The POSIX process-group path has not been verified on Linux/macOS.
 
 ## Reproduction on Windows
 
@@ -26,13 +26,15 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Env
 
 The first script compares actual FFmpeg output bytes against the independent pure-Python writer, performs an identity decode/rebuild, validates the decoded stereo layout, and checks refusals. The second invokes the actual shared PCM/scratch APIs; its fixtures include overlapping and touching segment-relative edits, checks one encoder call per affected asset and none for the untouched asset, and proves cleanup/unchanged originals on failures. Its reconstruction negative control leaves valid edited PCM in place and makes the output destination exist so FFmpeg `-n` refuses the encode.
 
-The required deterministic checks do not need native tools:
+The required deterministic checks cover only the safety-critical shared-editor boundary and do not need native tools:
 
 ~~~powershell
 & .venv/Scripts/python.exe -m pytest tests/unit/test_native_ast.py tests/integration/test_native_ast_prepare.py -q
 ~~~
 
-Observed manual-script output on this Windows environment:
+Parser/header/padding/partition matrices and FFmpeg-wrapper timeout/output-bound tests are not routine required coverage. The manual probe retains malformed, unsupported, and noncanonical AST negative controls; the manual shared-edit script exercises native-stage refusals and real `-n` encoder failures. The manual probe's wrapper negative controls use Python child processes rather than FFmpeg and exercise bounded diagnostics and Windows tree-kill behavior.
+
+Observed manual-script output on this Windows environment (including the retained malformed, unsupported, and noncanonical parser negative controls):
 
 ~~~text
 PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers

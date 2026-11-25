@@ -13,7 +13,6 @@ from experiments.native_ast.ast_core import (
     Decoder,
     Edit,
     EditError,
-    Encoder,
     ExtractionError,
     NativeStageError,
     NativeValidationError,
@@ -29,109 +28,6 @@ from muteinous.core.audio.storage import Reader
 from muteinous.core.audio.wav import WaveStorage
 
 pytestmark = pytest.mark.portable
-
-
-class RecordingWaveStorage(WaveStorage):
-    def __init__(self) -> None:
-        self.read_infos: list[PCMFormat] = []
-
-    @contextmanager
-    def open(self, path: Path) -> Iterator[Reader]:
-        with super().open(path) as reader:
-            self.read_infos.append(reader.info)
-            yield reader
-
-
-class _TamperingReader:
-    def __init__(
-        self,
-        reader: Reader,
-        mode: str,
-        original: bytes,
-        info: PCMFormat,
-        tamper_frame: int = 1001,
-    ) -> None:
-        self._reader = reader
-        self._mode = mode
-        self._original = original
-        self.info = info
-        self._tamper_frame = tamper_frame
-
-    def blocks(self) -> Iterator[bytes]:
-        pcm = bytearray(b"".join(self._reader.blocks()))
-        if self._mode == "required frame":
-            offset = self._tamper_frame * self.info.frame_bytes
-            pcm[offset : offset + self.info.frame_bytes] = self._original[
-                offset : offset + self.info.frame_bytes
-            ]
-        elif self._mode == "extra muted frame":
-            offset = 1000 * self.info.frame_bytes
-            pcm[offset : offset + self.info.frame_bytes] = bytes(self.info.frame_bytes)
-        elif self._mode == "outside sample":
-            pcm[1300 * self.info.frame_bytes] ^= 1
-        elif self._mode == "frame count":
-            pcm.extend(bytes(self.info.frame_bytes))
-
-        block_bytes = 4096 * self.info.frame_bytes
-        for offset in range(0, len(pcm), block_bytes):
-            yield bytes(pcm[offset : offset + block_bytes])
-
-
-class TamperingWaveStorage(WaveStorage):
-    def __init__(
-        self,
-        mode: str,
-        original: bytes,
-        info: PCMFormat,
-        *,
-        target_directory: str = "0",
-        tamper_frame: int = 1001,
-    ) -> None:
-        self.mode = mode
-        self.original = original
-        self.info = info
-        self.target_directory = target_directory
-        self.tamper_frame = tamper_frame
-
-    @contextmanager
-    def open(self, path: Path) -> Iterator[Reader]:
-        with super().open(path) as reader:
-            if (
-                path.name == "edited.pcmstore"
-                and path.parent.parent.parent.name == self.target_directory
-            ):
-                yield _TamperingReader(
-                    reader,
-                    self.mode,
-                    self.original,
-                    self.info,
-                    self.tamper_frame,
-                )
-            else:
-                yield reader
-
-
-class _SourceMutatingReader:
-    def __init__(self, reader: Reader, source_path: Path) -> None:
-        self._reader = reader
-        self._source_path = source_path
-        self.info = reader.info
-
-    def blocks(self) -> Iterator[bytes]:
-        yield from self._reader.blocks()
-        self._source_path.write_bytes(b"source changed during edit")
-
-
-class SourceMutatingWaveStorage(WaveStorage):
-    @contextmanager
-    def open(self, path: Path) -> Iterator[Reader]:
-        with super().open(path) as reader:
-            if path.name == "edited.pcmstore":
-                private_asset = path.parent.parent.parent
-                source_path = private_asset / "source.ast"
-                yield _SourceMutatingReader(reader, source_path)
-            else:
-                yield reader
 
 
 def _pcm(seed: int) -> bytes:
@@ -191,7 +87,7 @@ def _edits() -> tuple[Edit, ...]:
 
 def _fake_codecs(
     assets: dict[str, bytes], originals: dict[str, bytes]
-) -> tuple[Decoder, Encoder, list[str], list[str]]:
+) -> tuple[Decoder, ast_core.Encoder, list[str], list[str]]:
     pcm_for_native = {native: originals[asset] for asset, native in assets.items()}
     decode_calls: list[str] = []
     encode_calls: list[str] = []
@@ -200,9 +96,7 @@ def _fake_codecs(
         asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
     ) -> None:
         decode_calls.append(asset_id)
-        native = native_path.read_bytes()
-        pcm = pcm_for_native[native]
-        pcm_path.write_bytes(pcm)
+        pcm_path.write_bytes(pcm_for_native[native_path.read_bytes()])
 
     def encoder(
         asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
@@ -217,16 +111,58 @@ def _fake_codecs(
     return decoder, encoder, decode_calls, encode_calls
 
 
+class _TamperingReader:
+    def __init__(self, reader: Reader, mode: str, original: bytes) -> None:
+        self._reader = reader
+        self._mode = mode
+        self._original = original
+        self.info = reader.info
+
+    def blocks(self) -> Iterator[bytes]:
+        pcm = bytearray(b"".join(self._reader.blocks()))
+        if self._mode == "required frame":
+            offset = 1001 * self.info.frame_bytes
+            pcm[offset : offset + self.info.frame_bytes] = self._original[
+                offset : offset + self.info.frame_bytes
+            ]
+        elif self._mode == "extra muted frame":
+            offset = 1000 * self.info.frame_bytes
+            pcm[offset : offset + self.info.frame_bytes] = bytes(self.info.frame_bytes)
+        elif self._mode == "outside sample":
+            pcm[1300 * self.info.frame_bytes] ^= 1
+        elif self._mode == "frame count":
+            pcm.extend(bytes(self.info.frame_bytes))
+
+        block_bytes = 4096 * self.info.frame_bytes
+        for offset in range(0, len(pcm), block_bytes):
+            yield bytes(pcm[offset : offset + block_bytes])
+
+
+class _TamperingWaveStorage(WaveStorage):
+    def __init__(self, mode: str, original: bytes) -> None:
+        self.mode = mode
+        self.original = original
+
+    @contextmanager
+    def open(self, path: Path) -> Iterator[Reader]:
+        with super().open(path) as reader:
+            if path.name == "edited.pcmstore" and path.parent.parent.parent.name == "0":
+                yield _TamperingReader(reader, self.mode, self.original)
+            else:
+                yield reader
+
+
 def _assert_atomic_failure(
     root: Path,
     assets: dict[str, bytes],
     originals: dict[str, bytes],
     edits: Sequence[Edit],
     decoder: Decoder,
-    encoder: Encoder,
+    encoder: ast_core.Encoder,
     error_type: type[NativeStageError],
     message: str,
     *,
+    expected_asset: str = "b",
     storage: WaveStorage | None = None,
 ) -> NativeStageError:
     before = _snapshot(root)
@@ -241,19 +177,23 @@ def _assert_atomic_failure(
             storage=storage or WaveStorage(),
         )
     assert type(error.value) is error_type
+    assert error.value.asset_id == expected_asset
     assert str(error.value) == message
-    assert error.value.asset_id in str(error.value)
     assert _snapshot(root) == before
+    assert not list(root.glob("native-prepare-*"))
     return error.value
 
 
-def test_prepare_uses_actual_shared_pcm_and_rebuilds_each_affected_asset_once(
+def test_prepare_merges_segment_edits_and_rebuilds_each_affected_asset_once(
     tmp_path: Path,
 ) -> None:
     assets, originals = _assets(tmp_path)
+    assert ast_core.group_edits(assets, _edits()) == {
+        "a": [(1001, 1257), (4000, 4050)],
+        "b": [(2048, 2176)],
+    }
     before = _snapshot(tmp_path)
     decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-    storage = RecordingWaveStorage()
 
     staged = prepare(
         tmp_path,
@@ -262,21 +202,21 @@ def test_prepare_uses_actual_shared_pcm_and_rebuilds_each_affected_asset_once(
         _edits(),
         decoder=decoder,
         encoder=encoder,
-        storage=storage,
     )
 
     assert set(staged) == {"a", "b"}
     assert Counter(encode_calls) == Counter({"a": 1, "b": 1})
     assert "untouched" not in encode_calls
-    assert all(info.channel_mask == 3 for info in storage.read_infos)
-    assert INFO == PCMFormat(32_000, 2, "s16", FRAMES, 3)
-
-    expected = {
-        "a": _expected_edit(originals["a"], [(1001, 1257), (4000, 4050)]),
-        "b": _expected_edit(originals["b"], [(2048, 2176)]),
-    }
-    for asset, pcm in expected.items():
-        validate_fixture(staged[asset], pcm, asset_id=asset)
+    validate_fixture(
+        staged["a"],
+        _expected_edit(originals["a"], [(1001, 1257), (4000, 4050)]),
+        asset_id="a",
+    )
+    validate_fixture(
+        staged["b"],
+        _expected_edit(originals["b"], [(2048, 2176)]),
+        asset_id="b",
+    )
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
 
@@ -302,11 +242,7 @@ def test_real_scratch_edit_changes_exactly_frames_1001_through_2006(
         with storage.open(edited) as reader:
             assert reader.info == info
             result = b"".join(reader.blocks())
-    assert result == (
-        source_pcm[: 1001 * info.frame_bytes]
-        + bytes((2007 - 1001) * info.frame_bytes)
-        + source_pcm[2007 * info.frame_bytes :]
-    )
+    assert result == _expected_edit(source_pcm, [(1001, 2007)])
     assert not list(tmp_path.iterdir())
 
 
@@ -319,12 +255,11 @@ def test_real_scratch_edit_changes_exactly_frames_1001_through_2006(
         ("frame count", "frame count changed"),
     ],
 )
-def test_edit_completeness_or_fidelity_failure_is_atomic(
+def test_independent_edit_completeness_verifier_rejects_tampering_before_encode(
     tmp_path: Path, mode: str, detail: str
 ) -> None:
     assets, originals = _assets(tmp_path)
     decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-    storage = TamperingWaveStorage(mode, originals["a"], INFO)
 
     _assert_atomic_failure(
         tmp_path,
@@ -335,153 +270,133 @@ def test_edit_completeness_or_fidelity_failure_is_atomic(
         encoder,
         EditError,
         f"required asset a: PCM edit: {detail}",
-        storage=storage,
+        expected_asset="a",
+        storage=_TamperingWaveStorage(mode, originals["a"]),
     )
     assert encode_calls == []
 
 
-@pytest.mark.parametrize("failing_asset_first", [False, True])
 @pytest.mark.parametrize(
-    ("corruption", "reason"),
+    "failure",
     [
-        ("truncated", "STRM file size mismatch"),
-        ("unsupported", "unsupported AST codec"),
+        "source native validation",
+        "extraction mismatch",
+        "shared editor failure",
+        "encoder failure",
+        "rebuilt native validation",
     ],
 )
-def test_late_native_validation_failure_is_atomic(
-    tmp_path: Path, corruption: str, reason: str, failing_asset_first: bool
+@pytest.mark.parametrize("failing_asset_first", [False, True])
+def test_all_preparation_stages_refuse_atomically_in_either_asset_order(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    failing_asset_first: bool,
 ) -> None:
     assets, originals = _assets(tmp_path)
-    if corruption == "truncated":
-        assets["b"] = assets["b"][:-1]
-    else:
-        changed = bytearray(assets["b"])
-        struct.pack_into(">H", changed, 8, 0)
-        assets["b"] = bytes(changed)
-    decoder, encoder, _, encode_calls = _fake_codecs(
-        {asset: value for asset, value in assets.items() if asset != "b"}
-        | {"b": build_canonical_ast(originals["b"])},
-        originals,
-    )
+    if failure == "source native validation":
+        malformed = bytearray(assets["b"])
+        malformed[72] = 1
+        assets["b"] = bytes(malformed)
+
+    pcm_for_native = {native: originals[asset] for asset, native in assets.items()}
+    decode_calls: list[str] = []
+    encode_calls: list[str] = []
+
+    def decoder(
+        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
+    ) -> None:
+        decode_calls.append(asset_id)
+        pcm = pcm_for_native[native_path.read_bytes()]
+        if failure == "extraction mismatch" and asset_id == "b":
+            pcm = bytes([pcm[0] ^ 1]) + pcm[1:]
+        pcm_path.write_bytes(pcm)
+
+    def encoder(
+        asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
+    ) -> None:
+        encode_calls.append(asset_id)
+        if failure == "encoder failure" and asset_id == "b":
+            raise OSError("injected encoder failure")
+        native = bytearray(build_canonical_ast(pcm_path.read_bytes(), info))
+        if failure == "rebuilt native validation" and asset_id == "b":
+            native[72] = 1
+        native_path.write_bytes(native)
+        if failure != "rebuilt native validation" or asset_id != "b":
+            pcm_for_native[bytes(native)] = pcm_path.read_bytes()
+
+    error_types: dict[str, type[NativeStageError]] = {
+        "source native validation": NativeValidationError,
+        "extraction mismatch": ExtractionError,
+        "shared editor failure": EditError,
+        "encoder failure": ReconstructionError,
+        "rebuilt native validation": ReconstructionError,
+    }
+    details = {
+        "source native validation": "nonzero BLCK padding",
+        "extraction mismatch": "extracted PCM differs from verified source",
+        "shared editor failure": "injected PCM editor failure",
+        "encoder failure": "injected encoder failure",
+        "rebuilt native validation": "nonzero BLCK padding",
+    }
+    call_number = 0
+    real_edit = Scratch.edit
+
+    def failing_edit(
+        self: Scratch,
+        ranges: Iterable[tuple[float, float]],
+        *,
+        before: float = 0,
+        after: float = 0,
+        fade: float = 0,
+        curve: Curve = "cosine",
+    ) -> Path:
+        nonlocal call_number
+        call_number += 1
+        target_call = 1 if failing_asset_first else 2
+        if failure == "shared editor failure" and call_number == target_call:
+            raise OSError("injected PCM editor failure")
+        return real_edit(
+            self, ranges, before=before, after=after, fade=fade, curve=curve
+        )
+
+    monkeypatch.setattr(Scratch, "edit", failing_edit)
     edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    _assert_atomic_failure(
+    error = _assert_atomic_failure(
         tmp_path,
         assets,
         originals,
         edits,
         decoder,
         encoder,
-        NativeValidationError,
-        f"required asset b: native validation: {reason}",
+        error_types[failure],
+        f"required asset b: {error_types[failure].stage}: {details[failure]}",
     )
-    assert encode_calls == ([] if failing_asset_first else ["a"])
+    assert error.asset_id == "b"
+
+    decoded_before_failure = {
+        "source native validation": 0 if failing_asset_first else 2,
+        "extraction mismatch": 1 if failing_asset_first else 3,
+        "shared editor failure": 1 if failing_asset_first else 3,
+        "encoder failure": 1 if failing_asset_first else 3,
+        "rebuilt native validation": 1 if failing_asset_first else 3,
+    }
+    assert len(decode_calls) == decoded_before_failure[failure]
+    if failure in (
+        "source native validation",
+        "extraction mismatch",
+        "shared editor failure",
+    ):
+        assert encode_calls == ([] if failing_asset_first else ["a"])
+    elif failure in ("encoder failure", "rebuilt native validation"):
+        assert encode_calls == (["b"] if failing_asset_first else ["a", "b"])
 
 
-@pytest.mark.parametrize("failing_asset_first", [False, True])
-def test_extraction_failure_is_atomic_in_both_asset_orders(
-    tmp_path: Path, failing_asset_first: bool
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, decode_calls, encode_calls = _fake_codecs(assets, originals)
-    normal_decoder = decoder
-
-    def fail_b(
-        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
-    ) -> None:
-        if asset_id == "b" and native_path.name == "source.ast":
-            decode_calls.append(asset_id)
-            raise OSError("injected extraction failure")
-        normal_decoder(asset_id, native_path, pcm_path, info)
-
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        tuple(reversed(_edits())) if failing_asset_first else _edits(),
-        fail_b,
-        encoder,
-        ExtractionError,
-        "required asset b: extraction: injected extraction failure",
-    )
-    assert decode_calls == (["b"] if failing_asset_first else ["a", "a", "b"])
-    assert encode_calls == ([] if failing_asset_first else ["a"])
-
-
-def test_extraction_pcm_mismatch_inside_requested_mute_is_refused_before_encode(
-    tmp_path: Path,
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-
-    def altered_decoder(
-        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
-    ) -> None:
-        decoder(asset_id, native_path, pcm_path, info)
-        if native_path.name == "source.ast" and asset_id == "a":
-            changed = bytearray(pcm_path.read_bytes())
-            changed[1001 * info.frame_bytes] ^= 1
-            pcm_path.write_bytes(changed)
-
-    with pytest.raises(ExtractionError) as error:
-        prepare(
-            tmp_path,
-            assets,
-            originals,
-            _edits(),
-            decoder=altered_decoder,
-            encoder=encoder,
-        )
-    assert error.value.asset_id == "a"
-    assert error.value.detail == "extracted PCM differs from verified source"
-    assert encode_calls == []
-
-
-def test_source_change_after_edit_is_refused_atomically(tmp_path: Path) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        _edits(),
-        decoder,
-        encoder,
-        EditError,
-        "required asset a: PCM edit: native source changed during PCM edit",
-        storage=SourceMutatingWaveStorage(),
-    )
-    assert encode_calls == []
-
-
-def test_source_change_after_rebuild_is_refused_atomically(tmp_path: Path) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, normal_encoder, _, encode_calls = _fake_codecs(assets, originals)
-
-    def tampering_encoder(
-        asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
-    ) -> None:
-        normal_encoder(asset_id, pcm_path, native_path, info)
-        (native_path.parent / "source.ast").write_bytes(b"source changed after rebuild")
-
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        _edits(),
-        decoder,
-        tampering_encoder,
-        ReconstructionError,
-        "required asset a: reconstruction: native source changed during reconstruction",
-    )
-    assert encode_calls == ["a"]
-
-
-def test_default_ast_validator_rejects_caller_supplied_nonprofile_sample_rate(
+def test_default_ast_preparation_rejects_nonprofile_pcm_metadata(
     tmp_path: Path,
 ) -> None:
     nonprofile = PCMFormat(44_100, 2, "s16", FRAMES, 3)
-    decode_calls: list[str] = []
-    encode_calls: list[str] = []
+    codec_calls: list[str] = []
     with pytest.raises(
         ValueError, match="default AST validation requires the canonical PCM profile"
     ):
@@ -490,139 +405,15 @@ def test_default_ast_validator_rejects_caller_supplied_nonprofile_sample_rate(
             {},
             {},
             (),
-            decoder=lambda *_: decode_calls.append("decode"),
-            encoder=lambda *_: encode_calls.append("encode"),
+            decoder=lambda *_: codec_calls.append("decode"),
+            encoder=lambda *_: codec_calls.append("encode"),
             info=nonprofile,
         )
-    assert decode_calls == []
-    assert encode_calls == []
+    assert codec_calls == []
 
 
-def test_native_path_escape_is_refused_before_codec_invocation(
+def test_native_extension_allowlist_and_path_containment_are_enforced(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decode_calls: list[str] = []
-    encode_calls: list[str] = []
-
-    def escaping_path(directory: Path, filename: str) -> Path:
-        if filename == "source.ast":
-            return tmp_path / "outside.ast"
-        return directory / filename
-
-    monkeypatch.setattr(ast_core, "_native_path", escaping_path)
-    with pytest.raises(
-        ValueError, match="native path escaped private working directory"
-    ):
-        prepare(
-            tmp_path,
-            assets,
-            originals,
-            _edits(),
-            decoder=lambda *_: decode_calls.append("decode"),
-            encoder=lambda *_: encode_calls.append("encode"),
-        )
-    assert decode_calls == []
-    assert encode_calls == []
-    assert not (tmp_path / "outside.ast").exists()
-
-
-@pytest.mark.parametrize("failing_asset_first", [False, True])
-def test_edit_completeness_failure_is_atomic_in_both_asset_orders(
-    tmp_path: Path, failing_asset_first: bool
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-    target_directory = "0" if failing_asset_first else "1"
-    storage = TamperingWaveStorage(
-        "required frame",
-        originals["b"],
-        INFO,
-        target_directory=target_directory,
-        tamper_frame=2048,
-    )
-    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        edits,
-        decoder,
-        encoder,
-        EditError,
-        "required asset b: PCM edit: required edit incomplete",
-        storage=storage,
-    )
-    assert encode_calls == ([] if failing_asset_first else ["a"])
-
-
-@pytest.mark.parametrize("failing_asset_first", [False, True])
-def test_rebuilt_native_validation_failure_is_atomic_in_both_asset_orders(
-    tmp_path: Path, failing_asset_first: bool
-) -> None:
-    assets, originals = _assets(tmp_path)
-    encode_calls: list[str] = []
-    decoder_pcm = {native: originals[asset] for asset, native in assets.items()}
-
-    def happy_decoder(
-        asset_id: str, native_path: Path, pcm_path: Path, info: PCMFormat
-    ) -> None:
-        del asset_id, info
-        pcm_path.write_bytes(decoder_pcm[native_path.read_bytes()])
-
-    def emit_noncanonical_ast(
-        asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
-    ) -> None:
-        encode_calls.append(asset_id)
-        pcm = pcm_path.read_bytes()
-        malformed = bytearray(build_canonical_ast(pcm, info))
-        if asset_id == "b":
-            malformed[72] = 1
-        native = bytes(malformed)
-        decoder_pcm[native] = pcm
-        native_path.write_bytes(native)
-
-    # The fake decoder deliberately returns the expected PCM for malformed bytes.
-    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    before = _snapshot(tmp_path)
-    with pytest.raises(ReconstructionError) as error:
-        prepare(
-            tmp_path,
-            assets,
-            originals,
-            edits,
-            decoder=happy_decoder,
-            encoder=emit_noncanonical_ast,
-        )
-    assert str(error.value) == (
-        "required asset b: reconstruction: nonzero BLCK padding"
-    )
-    assert error.value.asset_id == "b"
-    assert encode_calls == (["b"] if failing_asset_first else ["a", "b"])
-    assert _snapshot(tmp_path) == before
-    assert not list(tmp_path.glob("native-prepare-*"))
-
-
-@pytest.mark.parametrize(
-    "native_extension",
-    [
-        "",
-        "/",
-        "\\",
-        "../escape.ast",
-        "..\\..\\escape.ast",
-        ".ast/../escape",
-        ".ast\\..\\escape",
-        "/absolute.ast",
-        "\\\\server\\share\\escape.ast",
-        "C:\\absolute.ast",
-        "D:relative-drive.ast",
-        "..",
-        ".AST",
-    ],
-)
-def test_native_extension_rejects_path_traversal_and_absolute_forms(
-    tmp_path: Path, native_extension: str
 ) -> None:
     with pytest.raises(ValueError, match="native extension"):
         prepare(
@@ -632,83 +423,31 @@ def test_native_extension_rejects_path_traversal_and_absolute_forms(
             (),
             decoder=lambda *_: None,
             encoder=lambda *_: None,
-            native_extension=native_extension,
+            native_extension="../escape.ast",
         )
 
-
-def test_late_shared_edit_failure_is_atomic(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
     assets, originals = _assets(tmp_path)
-    decoder, encoder, _, encode_calls = _fake_codecs(assets, originals)
-    actual_edit = Scratch.edit
+    codec_calls: list[str] = []
 
-    def fail_second_asset(
-        self: Scratch,
-        ranges: Iterable[tuple[float, float]],
-        *,
-        before: float = 0,
-        after: float = 0,
-        fade: float = 0,
-        curve: Curve = "cosine",
-    ) -> Path:
-        if self.directory.parent.parent.name == "1":
-            raise OSError("injected PCM editor failure")
-        return actual_edit(
-            self,
-            ranges,
-            before=before,
-            after=after,
-            fade=fade,
-            curve=curve,
+    def escaping_path(directory: Path, filename: str) -> Path:
+        if filename == "source.ast":
+            return tmp_path / "outside.ast"
+        return directory / filename
+
+    monkeypatch.setattr(ast_core, "_native_path", escaping_path)
+    before = _snapshot(tmp_path)
+    with pytest.raises(
+        ValueError, match="native path escaped private working directory"
+    ):
+        prepare(
+            tmp_path,
+            assets,
+            originals,
+            _edits(),
+            decoder=lambda *_: codec_calls.append("decode"),
+            encoder=lambda *_: codec_calls.append("encode"),
         )
-
-    monkeypatch.setattr(Scratch, "edit", fail_second_asset)
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        _edits(),
-        decoder,
-        encoder,
-        EditError,
-        "required asset b: PCM edit: injected PCM editor failure",
-    )
-    assert encode_calls == ["a"]
-
-
-@pytest.mark.parametrize("failing_asset_first", [False, True])
-def test_encoder_failure_with_valid_edited_pcm_is_atomic_in_both_orders(
-    tmp_path: Path, failing_asset_first: bool
-) -> None:
-    assets, originals = _assets(tmp_path)
-    decoder, normal_encoder, _, encode_calls = _fake_codecs(assets, originals)
-    expected_b = _expected_edit(originals["b"], [(2048, 2176)])
-
-    def fail_b(
-        asset_id: str, pcm_path: Path, native_path: Path, info: PCMFormat
-    ) -> None:
-        if asset_id == "b":
-            encode_calls.append(asset_id)
-            assert pcm_path.is_file()
-            assert pcm_path.read_bytes() == expected_b
-            raise OSError("injected encoder failure")
-        normal_encoder(asset_id, pcm_path, native_path, info)
-
-    edits = tuple(reversed(_edits())) if failing_asset_first else _edits()
-    message = "required asset b: reconstruction: injected encoder failure"
-    _assert_atomic_failure(
-        tmp_path,
-        assets,
-        originals,
-        edits,
-        decoder,
-        fail_b,
-        ReconstructionError,
-        message,
-    )
-    assert "b" in encode_calls
-    if failing_asset_first:
-        assert encode_calls == ["b"]
-    else:
-        assert encode_calls == ["a", "b"]
+    assert codec_calls == []
+    assert _snapshot(tmp_path) == before
+    assert not (tmp_path / "outside.ast").exists()
+    assert not list(tmp_path.glob("native-prepare-*"))

@@ -7,14 +7,16 @@ Branch `m1/issue-20-native-format-poc`, stacked on `feat/m1-4-pcm-scratch-19`. A
 ## State
 
 - Two isolated, synthetic experiments use the real shared `PCMFormat` / `audio_scratch` / `WaveStorage` / `Scratch.edit` boundary: [AST](../../experiments/native_ast/README.md) (lossless Nintendo-console PCM16 container, byte-exact) and [Ogg Vorbis](../../experiments/native_ogg/README.md) (lossy, Windows-relevant loose standard container, measured tolerances and padded edits).
-- Required tests use injected fake codecs and need no FFmpeg; the real-FFmpeg scripts are manual native-tool checks (`python -m experiments.native_ast.probe`, `.native_ast.shared_edit`, `experiments.native_ogg.probe`, `.native_ogg.shared_edit`).
+- Required tests cover only safety-critical shared-editor integration behavior, use injected fake codecs, need no FFmpeg, and never skip. Run the manual scripts from the repository root:
+  - Windows: `.venv/Scripts/python.exe -m experiments.native_ast.probe`, `.venv/Scripts/python.exe -m experiments.native_ast.shared_edit`, `.venv/Scripts/python.exe -m experiments.native_ogg.probe`, `.venv/Scripts/python.exe -m experiments.native_ogg.shared_edit`.
+  - POSIX: `.venv/bin/python -m experiments.native_ast.probe`, `.venv/bin/python -m experiments.native_ast.shared_edit`, `.venv/bin/python -m experiments.native_ogg.probe`, `.venv/bin/python -m experiments.native_ogg.shared_edit`.
 - `experiments/` is covered by `task lint`, `format-check` and `typecheck`; it is excluded from the wheel and sdist.
 - No production adapter, game-facing write, dependency change, loader trial or title-specific rule.
 
 ## Remaining before merge (coordinator-owned steps marked *)
 
 1. Merge order: PR #27 / Issue #19 first. After its squash merge, replay only the #20 commits onto current `main`, retarget PR #25 to `main`, rerun `task setup` and `task check` plus the four manual scripts on the exact merged upstream.
-2. Remote CI and Linux/macOS behaviour have not been observed; local evidence is Windows only. Preserve the outstanding infrastructure verification tracked in [#4](https://github.com/heaje/muteinous/issues/4).
+2. Remote CI and Linux/macOS behaviour have not been observed; local evidence is Windows only. The FFmpeg wrapper's POSIX process-tree termination path (`start_new_session`/`killpg`) is unexercised on Linux/macOS. Preserve the outstanding infrastructure verification tracked in [#4](https://github.com/heaje/muteinous/issues/4).
 3. Remove this handoff and its pointer in [`README.md`](README.md); retire or promote the two findings (`ast-pcm-roundtrip.md`, `vorbis-lossy-roundtrip.md`) per [the finding lifecycle](../README.md#reusable-findings).
 4. *Decision-coverage ledger, coordination snapshot, merge and issue closure belong to the coordinator.
 
