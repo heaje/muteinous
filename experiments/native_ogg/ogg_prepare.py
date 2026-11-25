@@ -161,18 +161,6 @@ def _merge_ranges(ranges: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
-def _padded_ranges(
-    ranges: Sequence[tuple[int, int]], frames: int, padding: int
-) -> list[tuple[int, int]]:
-    """Widen edits in integer frames, clamp to the clip, and merge touching spans."""
-    if frames <= 0 or padding < 0:
-        raise ValueError("invalid Ogg edit padding bounds")
-    _validate_ranges(ranges, frames)
-    return _merge_ranges(
-        [(max(0, start - padding), min(frames, end + padding)) for start, end in ranges]
-    )
-
-
 def _padded_segment_ranges(
     ranges: Sequence[SegmentBoundedRange], frames: int, padding: int
 ) -> list[tuple[int, int]]:

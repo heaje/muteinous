@@ -24,7 +24,7 @@ from experiments.native_ogg.ogg_core import (
 )
 from experiments.native_ogg.ogg_prepare import (
     QualityPolicy,
-    _padded_ranges,
+    _merge_ranges,
     _padded_segment_ranges,
     prepare_ogg,
     verify_lossy_reconstruction,
@@ -279,8 +279,19 @@ def test_prepare_merges_edits_pads_and_rebuilds_each_affected_asset_once(
         assert parsed.vendor == "fake libvorbis generation"
         assert native != assets[asset]
         assert pcm_for_native[native] == expected[asset]
-    assert _padded_ranges([(0, 10), (10, 20), (90, 100)], 100, 5) == [
-        (0, 25),
+    edge_edits = (
+        Edit("a", 0, 100, 0, 10),
+        Edit("a", 0, 100, 20, 30),
+        Edit("a", 0, 100, 32, 36),
+        Edit("a", 0, 100, 90, 100),
+    )
+    edge_ranges = group_edits_with_segment_bounds(
+        assets, edge_edits, total_frames=INFO.frames
+    )["a"]
+    padded_edge_ranges = _padded_segment_ranges(edge_ranges, INFO.frames, 5)
+    assert padded_edge_ranges == [(0, 15), (15, 35), (27, 41), (85, 100)]
+    assert _merge_ranges(padded_edge_ranges) == [
+        (0, 41),
         (85, 100),
     ]
     assert _snapshot(tmp_path) == before
@@ -576,7 +587,12 @@ def test_default_padding_silence_reconstruction_passes_after_decode() -> None:
         policy=QUALITY,
         requested_ranges=requested,
     )
-    assert _padded_ranges(requested, INFO.frames, QUALITY.padding_frames) == [
+    bounded = group_edits_with_segment_bounds(
+        {"padded": b""},
+        (Edit("padded", 0, INFO.frames, 500, 1_600),),
+        total_frames=INFO.frames,
+    )["padded"]
+    assert _padded_segment_ranges(bounded, INFO.frames, QUALITY.padding_frames) == [
         (436, 1_664)
     ]
     assert padded[436 * INFO.frame_bytes : 1_664 * INFO.frame_bytes] == bytes(

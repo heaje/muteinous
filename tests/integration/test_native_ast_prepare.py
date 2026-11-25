@@ -3,6 +3,7 @@ from collections import Counter
 from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -219,6 +220,43 @@ def test_prepare_merges_segment_edits_and_rebuilds_each_affected_asset_once(
     )
     assert _snapshot(tmp_path) == before
     assert not list(tmp_path.glob("native-prepare-*"))
+
+
+@pytest.mark.parametrize(
+    ("field", "values"),
+    [
+        ("segment_start", (True, 4096, 100, 200)),
+        ("segment_start", (10.0, 4096, 100, 200)),
+        ("segment_frames", (0, True, 0, 1)),
+        ("segment_frames", (0, 4096.0, 100, 200)),
+        ("start", (0, 4096, True, 200)),
+        ("start", (0, 4096, 100.0, 200)),
+        ("end", (0, 4096, 0, True)),
+        ("end", (0, 4096, 100, 200.0)),
+    ],
+)
+def test_prepare_rejects_non_integer_edit_bounds_before_codec_calls(
+    tmp_path: Path, field: str, values: tuple[object, object, object, object]
+) -> None:
+    assets, originals = _assets(tmp_path)
+    decoder, encoder, decode_calls, encode_calls = _fake_codecs(assets, originals)
+    invalid_bounds = cast(tuple[int, int, int, int], values)
+
+    with pytest.raises(
+        NativeValidationError, match=f"{field} must be an exact int"
+    ) as error:
+        prepare(
+            tmp_path,
+            assets,
+            originals,
+            (Edit("a", *invalid_bounds),),
+            decoder=decoder,
+            encoder=encoder,
+        )
+
+    assert error.value.asset_id == "a"
+    assert decode_calls == []
+    assert encode_calls == []
 
 
 def test_real_scratch_edit_changes_exactly_frames_1001_through_2006(

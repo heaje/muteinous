@@ -10,6 +10,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import ClassVar
 
+from muteinous.core.audio.pcm import PCMFormat
+
 from .ast_core import (
     FRAMES,
     INFO,
@@ -172,6 +174,33 @@ def _expect_refusal(operation: object, reason: str) -> None:
         raise AssertionError(f"unexpected acceptance: {reason}")
 
 
+def _probe_zero_frame_refusal() -> None:
+    info = PCMFormat(32_000, 2, "s16", 0, 3)
+    header = struct.pack(
+        ">4sI4H5I",
+        b"STRM",
+        0,
+        1,
+        16,
+        2,
+        0xFFFF,
+        info.rate,
+        info.frames,
+        0,
+        0,
+        0,
+    )
+    header += bytes(4) + struct.pack("<I", 0x7F) + bytes(20)
+    try:
+        validate_fixture(header, b"", info=info, loop_start=0, loop_end=0)
+    except NativeValidationError as exc:
+        if "zero-frame AST is unsupported" not in str(exc):
+            raise AssertionError(f"wrong zero-frame AST refusal: {exc}") from exc
+    else:
+        raise AssertionError("zero-frame AST negative control unexpectedly passed")
+    print("PASS: zero-frame AST fixture refused")
+
+
 def main() -> None:
     tools = FFmpegTools.discover()
     print(f"PASS: {tools.version}")
@@ -222,6 +251,7 @@ def main() -> None:
         )
         print("PASS: FFmpeg output equals the pure-Python writer and identity rebuild")
         print("PASS: malformed, unsupported, and noncanonical AST inputs refused")
+        _probe_zero_frame_refusal()
 
     if root.exists():
         raise AssertionError("probe scratch was not removed")

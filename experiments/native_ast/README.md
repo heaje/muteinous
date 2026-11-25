@@ -4,7 +4,7 @@ This is an isolated synthetic experiment for [Issue #20](https://github.com/heaj
 
 ## What is exercised
 
-[`ast_core.py`](ast_core.py) is the pure-Python implementation: a canonical AST fixture writer, strict parser/validator, asset grouping, exact integer-frame-to-time mapping, and private all-or-nothing preparation. Its encoder and decoder are injected callables. Required pytest coverage is deliberately limited to safety-critical shared-editor integration: exhaustive frame-boundary mapping, exact `Scratch.edit` frames, grouped edits and one rebuild per affected asset, independent edit-completeness checks, staged refusal/cleanup, default-profile pinning, and private native-path containment. Fake codecs keep these required tests independent of FFmpeg; they never skip.
+[`ast_core.py`](ast_core.py) is the pure-Python implementation: a canonical AST fixture writer, strict parser/validator, asset grouping, exact integer-frame-to-time mapping, and private all-or-nothing preparation. Its encoder and decoder are injected callables. Required pytest coverage is deliberately limited to safety-critical shared-editor integration: exhaustive frame-boundary mapping, exact `Scratch.edit` frames, grouped edits and one rebuild per affected asset, strict edit-bound type validation before codec calls, independent edit-completeness checks, staged refusal/cleanup, default-profile pinning, and private native-path containment. Fake codecs keep these required tests independent of FFmpeg; they never skip.
 
 The accepted fixture has 32 kHz, stereo signed PCM16, 8,192 frames, and exact loop bounds 1,024–6,144. AST uses a 64-byte STRM header and 32-byte BLCK headers. The observed FFmpeg `pcm_s16be_planar` packet layout is four blocks, each 4,096 bytes per channel (2,048 frames); only the final block may be shorter for another frame count. The validator rejects nonzero reserved/header padding, nonzero BLCK padding, unexpected partitions, inconsistent fields, extra bytes, and sample changes rather than accepting bytes that reconstruction would normalize. FFmpeg's muxer writes an unknown fixed little-endian `0x7f` marker at STRM bytes 40–43; other bytes in the checked header padding are zero.
 
@@ -32,9 +32,9 @@ The required deterministic checks cover only the safety-critical shared-editor b
 & .venv/Scripts/python.exe -m pytest tests/unit/test_native_ast.py tests/integration/test_native_ast_prepare.py -q
 ~~~
 
-Parser/header/padding/partition matrices and FFmpeg-wrapper timeout/output-bound tests are not routine required coverage. The manual probe retains malformed, unsupported, and noncanonical AST negative controls; the manual shared-edit script exercises native-stage refusals and real `-n` encoder failures. The manual probe's wrapper negative controls use Python child processes rather than FFmpeg and exercise bounded tail reads/diagnostics and best-effort Windows timeout termination.
+Parser/header/padding/partition matrices and FFmpeg-wrapper timeout/output-bound tests are not routine required coverage. The manual probe retains malformed, unsupported, noncanonical, and zero-frame AST negative controls; the manual shared-edit script exercises native-stage refusals and real `-n` encoder failures. The manual probe's wrapper negative controls use Python child processes rather than FFmpeg and exercise bounded tail reads/diagnostics and best-effort Windows timeout termination.
 
-Observed manual-script output on this Windows environment (including the retained malformed, unsupported, and noncanonical parser negative controls):
+Observed manual-script output on this Windows environment (including the retained malformed, unsupported, noncanonical, and zero-frame refusal controls):
 
 ~~~text
 PASS: ffmpeg version n7.1.5-12-g1fdbca85aa-20260731 Copyright (c) 2000-2026 the FFmpeg developers
@@ -42,6 +42,7 @@ PASS: FFmpeg AST muxer/demuxer and pcm_s16be_planar decoder/encoder are availabl
 PASS: 8192 stereo PCM16 frames, 4 canonical blocks, 32960 native bytes
 PASS: FFmpeg output equals the pure-Python writer and identity rebuild
 PASS: malformed, unsupported, and noncanonical AST inputs refused
+PASS: zero-frame AST fixture refused
 PASS: disposable scratch removed
 ~~~
 

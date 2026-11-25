@@ -348,6 +348,13 @@ def group_edits_with_segment_bounds(
     """Map segment-relative edits while retaining each segment's asset bounds."""
     if not edits or total_frames <= 0:
         raise ValueError("no required edits")
+    for edit in edits:
+        for field in ("segment_start", "segment_frames", "start", "end"):
+            if type(getattr(edit, field)) is not int:
+                raise NativeValidationError(
+                    edit.asset,
+                    f"{field} must be an exact int (bool and subclasses are invalid)",
+                )
     groups: dict[str, list[SegmentBoundedRange]] = {}
     for edit in edits:
         if edit.asset not in assets:
