@@ -18,13 +18,20 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
   Eligible plans are always revalidated immediately before dispatch. Busy plans
   are revalidated for staleness only after `revalidate_interval` (default 1.0
   second), measured by the injectable monotonic `clock`; this can be configured
-  as a positive finite constructor argument. Domain-specific freshness checks
-  remain necessary at result acceptance and any irreversible effect.
+  as a positive finite constructor argument. The injected clock is trusted,
+  must be monotonic and must not raise; clock failures on worker/completion
+  paths are not contained. Domain-specific freshness checks remain necessary at
+  result acceptance and any irreversible effect.
 - The worker receives a `JobContext` with cooperative cancellation and optional
   progress reporting. Adapters must ensure all physical work has stopped before
   returning or raising, including asynchronous provider operations. Queue
   cancellation rejects late returned results and reports but cannot undo
-  provider side effects; providers must not publish cancelled work.
+  provider side effects; providers must not publish cancelled work. Successful
+  results are stored and exposed by reference: providers must return immutable
+  or unshared values and not mutate them after returning; the queue does not copy
+  or re-version results.
+- Failure details are truncated to 4,096 characters with the suffix
+  `... [truncated]`.
 - Workers may omit progress. Report full latest stage/activity/count snapshots;
   mark meaningful forward progress explicitly and use heartbeat for liveness.
   Only set `WorkCount.reliable` when the denominator is established. Overall

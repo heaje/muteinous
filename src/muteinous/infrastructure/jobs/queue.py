@@ -12,6 +12,9 @@ from enum import StrEnum
 from threading import Condition, Event, Thread
 from uuid import uuid4
 
+_MAX_DETAIL = 4096
+_DETAIL_TRUNCATION_SUFFIX = "... [truncated]"
+
 
 class JobState(StrEnum):
     QUEUED = "Queued"
@@ -22,11 +25,22 @@ class JobState(StrEnum):
     NEEDS_ATTENTION = "Needs attention"
 
 
-def _error_detail(error: BaseException) -> str:
+def _truncate_detail(detail: str) -> str:
+    if len(detail) <= _MAX_DETAIL:
+        return detail
+    return detail[: _MAX_DETAIL - len(_DETAIL_TRUNCATION_SUFFIX)] + (
+        _DETAIL_TRUNCATION_SUFFIX
+    )
+
+
+def _error_detail(error: BaseException, *, prefix: str | None = None) -> str:
     try:
-        return f"{type(error).__name__}: {error}"
+        detail = f"{type(error).__name__}: {error}"
     except BaseException:
-        return type(error).__name__
+        detail = type(error).__name__
+    if prefix is not None:
+        detail = f"{prefix}: {detail}"
+    return _truncate_detail(detail)
 
 
 def _reject_constant(value: str) -> None:
@@ -173,6 +187,10 @@ class JobQueue:
     It runs outside the scheduler lock, including for resource-blocked plans.
     Workers must return only once their physical provider work has actually stopped.
     Callers own result publication and must not commit effects from cancelled jobs.
+    The injected clock is trusted, must be monotonic and must not raise; clock
+    failures on worker/completion paths are not contained. Worker results are
+    stored by reference, so providers must return immutable or unshared values
+    and not mutate them after returning.
     """
 
     def __init__(
@@ -221,6 +239,8 @@ class JobQueue:
     def _store(
         self, record: _Record, snapshot: JobSnapshot, *, material: bool = True
     ) -> None:
+        if snapshot.detail is not None:
+            snapshot = replace(snapshot, detail=_truncate_detail(snapshot.detail))
         snapshot = replace(snapshot, revision=record.snapshot.revision + 1)
         record.snapshot = snapshot
         if material:
@@ -326,9 +346,15 @@ class JobQueue:
 
     def _validate_plan(self, plan: JobPlan) -> str | None:
         try:
-            return self._validate(plan)
+            reason = self._validate(plan)
         except BaseException as error:
-            return f"Plan validation failed: {_error_detail(error)}"
+            return _error_detail(error, prefix="Plan validation failed")
+        if reason is not None and not isinstance(reason, str):
+            return (
+                f"Plan validation returned {type(reason).__name__}, "
+                "expected str or None"
+            )
+        return reason
 
     def _schedule(self) -> None:
         while True:
@@ -401,7 +427,7 @@ class JobQueue:
                         if processing_job_id in self._pending:
                             self._fail_job(
                                 processing_job_id,
-                                f"Scheduler failed: {_error_detail(error)}",
+                                _error_detail(error, prefix="Scheduler failed"),
                             )
                     self._condition.notify_all()
                     if self._closed:
@@ -451,7 +477,7 @@ class JobQueue:
             state=JobState.FAILED,
             physical_running=False,
             result=None,
-            detail=detail,
+            detail=_truncate_detail(detail),
             revision=old.revision + 1,
         )
         record.snapshot = failed
@@ -507,7 +533,7 @@ class JobQueue:
                 return
             self._fail_job(
                 job_id,
-                f"Worker start failed: {_error_detail(error)}",
+                _error_detail(error, prefix="Worker start failed"),
                 reserved=reserved,
                 thread=thread,
             )

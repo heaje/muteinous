@@ -336,6 +336,101 @@ def test_busy_wait_does_not_expire_after_large_clock_advance(
         queue.close()
 
 
+def test_zero_capacity_makes_queued_job_needs_attention_without_revival(
+    workers: Callable[..., ControlledWorker],
+) -> None:
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+    owner, waiting = workers(), workers()
+    try:
+        queue.submit(plan("cpu", source="owner"), owner)
+        assert owner.entered.wait(5)
+        waiting_id = queue.submit(plan("cpu", source="waiting"), waiting)
+        eventually(lambda: queue.snapshot(waiting_id).detail == "Waiting for: cpu")
+
+        queue.set_capacity("cpu", 0)
+        eventually(lambda: queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION)
+        unavailable = queue.snapshot(waiting_id)
+        assert unavailable.detail == "Unavailable: cpu"
+        assert waiting.calls == 0
+
+        queue.set_capacity("cpu", 1)
+        assert queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION
+        assert waiting.calls == 0
+        owner.release.set()
+        assert queue.drain(5)
+        assert queue.snapshot(waiting_id).state == JobState.NEEDS_ATTENTION
+        assert waiting.calls == 0
+    finally:
+        owner.release.set()
+        waiting.release.set()
+        queue.close()
+
+
+def test_worker_start_prelaunch_baseexception_releases_slot_and_scheduler_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedPreLaunchFailure(BaseException):
+        pass
+
+    original_thread = getattr(queue_module, "Thread")
+    thread_errors: list[BaseException] = []
+
+    def capture_thread_exception(args: object) -> None:
+        error = getattr(args, "exc_value", None)
+        if isinstance(error, BaseException):
+            thread_errors.append(error)
+
+    class FailingBeforeLaunchThread(Thread):
+        def start(self) -> None:
+            if self.name.startswith("job-"):
+                raise InjectedPreLaunchFailure("injected pre-launch failure")
+            super().start()
+
+    monkeypatch.setattr(threading, "excepthook", capture_thread_exception)
+    monkeypatch.setattr(queue_module, "Thread", FailingBeforeLaunchThread)
+    before = set(threading.enumerate())
+    queue = JobQueue({"cpu": 1}, lambda _: None)
+    first_calls = 0
+    later_calls = 0
+    later_entered = Event()
+
+    def first_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal first_calls
+        first_calls += 1
+        return None
+
+    def later_worker(submitted: JobPlan, context: JobContext) -> object:
+        nonlocal later_calls
+        later_calls += 1
+        later_entered.set()
+        return submitted.input_json
+
+    try:
+        failed = queue.submit(plan("cpu", source="first"), first_worker)
+        eventually(lambda: queue.snapshot(failed).state == JobState.FAILED)
+        failed_snapshot = queue.snapshot(failed)
+        assert "InjectedPreLaunchFailure" in (failed_snapshot.detail or "")
+        assert not failed_snapshot.physical_running
+        assert first_calls == 0
+        assert queue.drain(5)
+
+        monkeypatch.setattr(queue_module, "Thread", original_thread)
+        later = queue.submit(plan("cpu", source="later"), later_worker)
+        assert later_entered.wait(5)
+        assert queue.drain(5)
+        queue.close()
+        assert later_calls == 1
+        assert queue._used["cpu"] == 0
+        assert thread_errors == []
+        assert not any(
+            thread.name == "muteinous-jobs" or thread.name.startswith("job-")
+            for thread in set(threading.enumerate()) - before
+        )
+        assert queue.snapshot(later).state == JobState.COMPLETED
+    finally:
+        queue.close()
+
+
 def test_worker_start_baseexception_releases_slot_and_scheduler_continues(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -767,6 +862,51 @@ def test_validator_failure_is_not_execution_failure_or_retry() -> None:
             "Plan validation failed: RuntimeError: provider unavailable"
         )
         assert not called.is_set()
+    finally:
+        queue.close()
+
+
+def test_worker_and_validator_failure_details_are_bounded() -> None:
+    large_message = "x" * 1_000_000
+    validator_worker_called = Event()
+    assert queue_module._error_detail(RuntimeError("short")) == "RuntimeError: short"
+
+    def validate(submitted: JobPlan) -> str | None:
+        if submitted.input_json == '{"source":"validator-failure"}':
+            raise RuntimeError(f"validator-prefix:{large_message}")
+        return None
+
+    def failed_worker(submitted: JobPlan, context: JobContext) -> object:
+        raise RuntimeError(f"worker-prefix:{large_message}")
+
+    def validator_worker(submitted: JobPlan, context: JobContext) -> object:
+        validator_worker_called.set()
+        return None
+
+    queue = JobQueue({"worker": 1, "validator": 1}, validate)
+    try:
+        worker_failure = queue.submit(
+            plan("worker", source="worker-failure"), failed_worker
+        )
+        validator_failure = queue.submit(
+            plan("validator", source="validator-failure"), validator_worker
+        )
+        assert queue.drain(5)
+
+        worker_detail = queue.snapshot(worker_failure).detail
+        validator_detail = queue.snapshot(validator_failure).detail
+        assert queue.snapshot(worker_failure).state == JobState.FAILED
+        assert queue.snapshot(validator_failure).state == JobState.NEEDS_ATTENTION
+        assert worker_detail is not None and validator_detail is not None
+        assert len(worker_detail) <= queue_module._MAX_DETAIL
+        assert len(validator_detail) <= queue_module._MAX_DETAIL
+        assert worker_detail.startswith("RuntimeError: worker-prefix:")
+        assert validator_detail.startswith(
+            "Plan validation failed: RuntimeError: validator-prefix:"
+        )
+        assert worker_detail.endswith(queue_module._DETAIL_TRUNCATION_SUFFIX)
+        assert validator_detail.endswith(queue_module._DETAIL_TRUNCATION_SUFFIX)
+        assert not validator_worker_called.is_set()
     finally:
         queue.close()
 

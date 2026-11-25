@@ -2,10 +2,13 @@
 
 import json
 from dataclasses import asdict
+from typing import cast
 
 import pytest
 
 from muteinous.infrastructure.jobs.queue import JobPlan, JobQueue, WorkCount
+
+pytestmark = pytest.mark.portable
 
 
 def test_plan_is_serializable_and_preserves_resolved_choices() -> None:
@@ -59,6 +62,33 @@ def test_reject_pathologically_nested_json_as_value_error(depth: int) -> None:
     payload = "[" * depth + "0" + "]" * depth
     with pytest.raises(ValueError, match="too deeply nested"):
         JobPlan("fake", "cpu", ("cpu",), payload)
+
+
+@pytest.mark.parametrize("reason", [7, True])
+def test_non_string_validator_reasons_are_coerced_to_text(reason: object) -> None:
+    called = False
+
+    def validate(submitted: JobPlan) -> str | None:
+        return cast(str | None, reason)
+
+    def worker(submitted: JobPlan, context: object) -> object:
+        nonlocal called
+        called = True
+        return None
+
+    queue = JobQueue({"cpu": 1}, validate)
+    try:
+        job = queue.submit(JobPlan("fake", "cpu", ("cpu",), "{}"), worker)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state.value == "Needs attention"
+        assert isinstance(snapshot.detail, str)
+        assert snapshot.detail == (
+            f"Plan validation returned {type(reason).__name__}, expected str or None"
+        )
+        assert not called
+    finally:
+        queue.close()
 
 
 @pytest.mark.parametrize(
