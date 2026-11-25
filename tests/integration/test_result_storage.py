@@ -7,16 +7,18 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from muteinous.infrastructure.storage import bundles, space
 from muteinous.infrastructure.storage._filesystem import (
     InsufficientSpace,
     StorageError,
     canonical_json,
+    checked_directory,
     digest,
 )
 from muteinous.infrastructure.storage.bundles import (
@@ -24,7 +26,12 @@ from muteinous.infrastructure.storage.bundles import (
     ResultStore,
     Selection,
 )
-from muteinous.infrastructure.storage.space import SpaceRequirement, preflight
+from muteinous.infrastructure.storage.space import (
+    SpaceRequirement,
+    preflight,
+    translate_write_error,
+)
+from muteinous.infrastructure.storage.staging import try_lock
 
 IDENTITY = ResultIdentity("source-a", "config-a", "generation-a")
 
@@ -90,7 +97,7 @@ def test_atomic_operation_failure_preserves_previous_selection(
         raise OSError(errno.ENOTSUP, "atomic operation unavailable")
 
     with monkeypatch.context() as patch:
-        patch.setattr(bundles.os, operation, fail)
+        patch.setattr(f"muteinous.infrastructure.storage.bundles.os.{operation}", fail)
         with pytest.raises(OSError, match="atomic operation unavailable"):
             publish(store, b"replacement")
     assert store.selection("scan") == first
@@ -125,7 +132,7 @@ def test_interrupt_after_directory_rename_before_manifest_switch(
         raise Interrupted()
 
     with monkeypatch.context() as patch:
-        patch.setattr(bundles.os, "replace", interrupt)
+        patch.setattr("muteinous.infrastructure.storage.bundles.os.replace", interrupt)
         with pytest.raises(Interrupted):
             publish(store, b"candidate")
     restarted = ResultStore(store.root, atomic_rename_supported=True)
@@ -135,6 +142,7 @@ def test_interrupt_after_directory_rename_before_manifest_switch(
     assert len(list((store.root / "bundles").iterdir())) == 2
 
 
+@pytest.mark.portable
 def test_stale_producer_and_final_generation_change_cannot_win(
     store: ResultStore,
 ) -> None:
@@ -151,6 +159,9 @@ def test_stale_producer_and_final_generation_change_cannot_win(
                 is_current=lambda: True,
                 validate_domain=validate_domain,
             )
+        assert not (older.path / "integrity.json").exists()
+        assert not (older.path.parent / "candidate.json").exists()
+        assert (older.path / "payload.bin").read_bytes() == b"older"
     with store.stage("changed-generation") as stage:
         (stage.path / "payload.bin").write_bytes(b"stale")
         checks = iter([True, False])
@@ -289,6 +300,151 @@ def test_domain_failure_prevents_publication_and_reuse(store: ResultStore) -> No
 
 
 @pytest.mark.portable
+def test_pre_rename_domain_refusal_leaves_stage_retryable(store: ResultStore) -> None:
+    previous = publish(store)
+    calls = 0
+
+    def reject_once(path: Path) -> None:
+        nonlocal calls
+        calls += 1
+        validate_domain(path)
+        if calls == 1:
+            raise StorageError("Temporary domain validation refusal")
+
+    with store.stage("domain-retry") as stage:
+        (stage.path / "payload.bin").write_bytes(b"retry-after-domain")
+        with pytest.raises(StorageError, match="Temporary domain"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=reject_once,
+            )
+        assert not (stage.path / "integrity.json").exists()
+        assert not (stage.path.parent / "candidate.json").exists()
+        assert (stage.path / "payload.bin").read_bytes() == b"retry-after-domain"
+        selected = store.publish(
+            stage,
+            "scan",
+            IDENTITY,
+            expected=previous,
+            is_current=lambda: True,
+            validate_domain=validate_domain,
+        )
+    assert store.selection("scan") == selected
+    assert read(store) == b"retry-after-domain"
+
+
+@pytest.mark.portable
+def test_slow_open_validation_does_not_hold_selection_guard(store: ResultStore) -> None:
+    selection = publish(store)
+    validating = threading.Event()
+    continue_validation = threading.Event()
+
+    def slow_validator(path: Path) -> None:
+        validate_domain(path)
+        validating.set()
+        if not continue_validation.wait(5):
+            raise TimeoutError("Test did not release slow validation")
+
+    def slow_open() -> bytes:
+        with store.open_current(
+            "scan", IDENTITY, validate_domain=slow_validator
+        ) as path:
+            return (path / "payload.bin").read_bytes()
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(slow_open)
+        assert validating.wait(5), "Open validation did not start"
+        try:
+            assert store.selection("scan") == selection
+            with store.open_current(
+                "scan", IDENTITY, validate_domain=validate_domain
+            ) as path:
+                assert (path / "payload.bin").read_bytes() == b"original"
+        finally:
+            continue_validation.set()
+        assert future.result(timeout=5) == b"original"
+
+
+@pytest.mark.portable
+def test_slow_publish_validation_does_not_hold_selection_guard(
+    store: ResultStore,
+) -> None:
+    previous = publish(store)
+    validating = threading.Event()
+    continue_validation = threading.Event()
+
+    def publish_slowly() -> Selection:
+        calls = 0
+
+        def slow_validator(path: Path) -> None:
+            nonlocal calls
+            calls += 1
+            validate_domain(path)
+            if calls == 2:
+                validating.set()
+                if not continue_validation.wait(5):
+                    raise TimeoutError("Test did not release slow validation")
+
+        with store.stage("slow-publish") as stage:
+            (stage.path / "payload.bin").write_bytes(b"candidate")
+            return store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=slow_validator,
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(publish_slowly)
+        assert validating.wait(5), "Committed-bundle validation did not start"
+        try:
+            assert store.selection("scan") == previous
+        finally:
+            continue_validation.set()
+        selected = future.result(timeout=5)
+    assert store.selection("scan") == selected
+    assert read(store) == b"candidate"
+
+
+@pytest.mark.portable
+def test_publish_racing_with_open_recheck_refuses_stale_open(
+    store: ResultStore,
+) -> None:
+    old = publish(store)
+    validating = threading.Event()
+    continue_validation = threading.Event()
+
+    def slow_validator(path: Path) -> None:
+        validate_domain(path)
+        validating.set()
+        if not continue_validation.wait(5):
+            raise TimeoutError("Test did not release slow validation")
+
+    def slow_open() -> None:
+        with store.open_current("scan", IDENTITY, validate_domain=slow_validator):
+            pass
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(slow_open)
+        assert validating.wait(5), "Open validation did not start"
+        try:
+            new = publish(store, b"new-current")
+        finally:
+            continue_validation.set()
+        with pytest.raises(StorageError, match="selection changed"):
+            future.result(timeout=5)
+    assert new != old
+    assert store.selection("scan") == new
+    assert read(store) == b"new-current"
+
+
+@pytest.mark.portable
 def test_cleanup_protects_live_owner_and_ambiguous_paths(store: ResultStore) -> None:
     with store.stage("inactive") as stage:
         abandoned = stage.path.parent
@@ -330,6 +486,94 @@ print(repr(report.removed))
         }
         assert unrelated.read_bytes() == b"user data"
         assert (unmarked / "file").read_bytes() == b"unknown"
+
+
+@pytest.mark.portable
+def test_empty_selection_guard_is_initialized_and_usable(tmp_path: Path) -> None:
+    (tmp_path / "selection.lock").touch()
+    store = ResultStore(tmp_path, atomic_rename_supported=True)
+    assert store.selection("scan") is None
+    selected = publish(store)
+    assert store.selection("scan") == selected
+    with store.open_current("scan", IDENTITY, validate_domain=validate_domain) as path:
+        assert (path / "payload.bin").read_bytes() == b"original"
+
+
+@pytest.mark.portable
+def test_busy_publish_can_retry_with_the_same_stage(store: ResultStore) -> None:
+    previous = publish(store)
+    lock_path = store.root / "selection.lock"
+    locked = threading.Event()
+    release = threading.Event()
+    holder_errors: list[BaseException] = []
+
+    def hold_guard() -> None:
+        try:
+            with try_lock(lock_path) as held:
+                if held is None:
+                    raise AssertionError("Could not acquire test selection guard")
+                locked.set()
+                if not release.wait(5):
+                    raise TimeoutError("Test did not release selection guard")
+        except BaseException as exc:
+            holder_errors.append(exc)
+
+    holder = threading.Thread(target=hold_guard)
+    holder.start()
+    try:
+        assert locked.wait(5), "Test selection guard was not acquired"
+        with store.stage("retry") as stage:
+            (stage.path / "payload.bin").write_bytes(b"retry")
+            with pytest.raises(StorageError, match="busy"):
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=previous,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+            release.set()
+            holder.join(timeout=5)
+            assert not holder.is_alive()
+            assert not holder_errors
+            selected = store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+    finally:
+        release.set()
+        holder.join(timeout=5)
+    assert not holder.is_alive()
+    assert store.selection("scan") == selected
+    assert read(store) == b"retry"
+
+
+@pytest.mark.portable
+def test_producer_supplied_integrity_file_is_refused_untouched(
+    store: ResultStore,
+) -> None:
+    supplied = b"producer data"
+    with store.stage("reserved-metadata") as stage:
+        (stage.path / "payload.bin").write_bytes(b"payload")
+        integrity = stage.path / "integrity.json"
+        integrity.write_bytes(supplied)
+        with pytest.raises(StorageError, match="integrity"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=None,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+        assert integrity.read_bytes() == supplied
+        assert not (stage.path.parent / "candidate.json").exists()
+    assert store.selection("scan") is None
 
 
 @pytest.mark.portable
@@ -413,6 +657,59 @@ def test_link_traversal_is_refused_for_publication_cleanup_and_reuse(
         read(store)
 
 
+@pytest.mark.portable
+def test_store_root_under_linked_parent_works_and_cleans_up(
+    tmp_path: Path,
+) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "linked-parent"
+    make_directory_link(linked_parent, real_parent)
+    root = linked_parent / "store"
+    root.mkdir()
+    store = ResultStore(root, atomic_rename_supported=True)
+    with store.stage("publish") as stage:
+        stage_directory = stage.path.parent
+        (stage.path / "payload.bin").write_bytes(b"root-under-link")
+        store.publish(
+            stage,
+            "scan",
+            IDENTITY,
+            expected=None,
+            is_current=lambda: True,
+            validate_domain=validate_domain,
+        )
+    with store.open_current("scan", IDENTITY, validate_domain=validate_domain) as path:
+        assert (path / "payload.bin").read_bytes() == b"root-under-link"
+    report = store.cleanup_abandoned()
+    assert stage_directory.name in report.removed
+    assert (root / "stage-leases" / f"{stage_directory.name}.lock").is_file()
+
+
+@pytest.mark.portable
+def test_store_root_that_is_a_link_is_refused(tmp_path: Path) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    root_link = tmp_path / "root-link"
+    make_directory_link(root_link, target)
+    with pytest.raises(StorageError, match="Unsafe link"):
+        ResultStore(root_link, atomic_rename_supported=True)
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("directory", ["bundles", "current", "staging", "stage-leases"])
+def test_links_in_storage_directories_are_refused(
+    tmp_path: Path, directory: str
+) -> None:
+    root = tmp_path / "store"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    make_directory_link(root / directory, outside)
+    with pytest.raises(StorageError, match="Unsafe link"):
+        ResultStore(root, atomic_rename_supported=True)
+
+
 def test_hardlinked_payload_is_refused(store: ResultStore, tmp_path: Path) -> None:
     target = tmp_path / "unrelated.bin"
     target.write_bytes(b"untouched")
@@ -437,7 +734,8 @@ def test_preflight_known_minimum_unknown_estimate_and_aggregation(
 ) -> None:
     first = publish(store)
     monkeypatch.setattr(
-        space.shutil, "disk_usage", lambda path: SimpleNamespace(free=10)
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=10),
     )
     with pytest.raises(InsufficientSpace):
         with store.stage("too-large", minimum_bytes=11):
@@ -467,6 +765,48 @@ def test_preflight_known_minimum_unknown_estimate_and_aggregation(
 
 
 @pytest.mark.portable
+@pytest.mark.parametrize(
+    ("estimates", "available", "expected", "uncertain"),
+    [
+        ((4, 7), 10, 11, True),
+        ((4, 5), 10, 9, False),
+    ],
+)
+def test_preflight_sums_finite_estimates_and_reports_uncertainty(
+    store: ResultStore,
+    monkeypatch: pytest.MonkeyPatch,
+    estimates: tuple[int, int],
+    available: int,
+    expected: int,
+    uncertain: bool,
+) -> None:
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=available),
+    )
+    (assessment,) = preflight(
+        [
+            SpaceRequirement(store.root, 1, estimates[0]),
+            SpaceRequirement(store.root / "staging", 1, estimates[1]),
+        ]
+    )
+    assert assessment.estimate == expected
+    assert assessment.uncertain is uncertain
+
+
+@pytest.mark.portable
+@pytest.mark.parametrize("winerror", [39, 112, 1295])
+def test_windows_disk_full_errors_are_classified_as_insufficient_space(
+    winerror: int,
+) -> None:
+    error = OSError(errno.EINVAL, "Windows disk capacity error")
+    setattr(error, "winerror", winerror)
+    with pytest.raises(InsufficientSpace) as exc:
+        translate_write_error(error)
+    assert exc.value.__cause__ is error
+
+
+@pytest.mark.portable
 def test_runtime_disk_full_after_successful_preflight_preserves_current(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -480,7 +820,7 @@ def test_runtime_disk_full_after_successful_preflight_preserves_current(
         raise OSError(errno.ENOSPC, "disk full during manifest switch")
 
     with monkeypatch.context() as patch:
-        patch.setattr(bundles.os, "replace", disk_full)
+        patch.setattr("muteinous.infrastructure.storage.bundles.os.replace", disk_full)
         with pytest.raises(InsufficientSpace):
             publish(store, b"replacement")
     assert store.selection("scan") == first
@@ -516,7 +856,8 @@ def test_unknown_upper_bound_can_publish_when_space_is_available(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        space.shutil, "disk_usage", lambda path: SimpleNamespace(free=1024 * 1024)
+        "muteinous.infrastructure.storage.space.shutil.disk_usage",
+        lambda path: SimpleNamespace(free=1024 * 1024),
     )
     with store.stage("unknown-size", minimum_bytes=1) as stage:
         assert stage.space_assessments[0].uncertain
@@ -544,6 +885,48 @@ def test_cleanup_retains_unexpected_staging_root_entry(store: ResultStore) -> No
     assert unrelated.read_bytes() == b"uncertain ownership"
 
 
+@pytest.mark.portable
+def test_publication_refuses_mismatched_filesystem_before_rename(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = publish(store)
+    real_checked_directory = checked_directory
+    rename_calls: list[tuple[object, ...]] = []
+
+    def different_current_device(path: Path, *, root: Path | None = None) -> object:
+        info = real_checked_directory(path, root=root)
+        if path == store.root / "current":
+            return SimpleNamespace(st_dev=info.st_dev + 1)
+        return info
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.bundles.checked_directory",
+        different_current_device,
+    )
+
+    def record_rename(*args: object) -> None:
+        rename_calls.append(args)
+
+    monkeypatch.setattr(
+        "muteinous.infrastructure.storage.bundles.os.rename", record_rename
+    )
+    with store.stage("different-device") as stage:
+        (stage.path / "payload.bin").write_bytes(b"candidate")
+        with pytest.raises(StorageError, match="destination-filesystem"):
+            store.publish(
+                stage,
+                "scan",
+                IDENTITY,
+                expected=previous,
+                is_current=lambda: True,
+                validate_domain=validate_domain,
+            )
+    assert not rename_calls
+    assert store.selection("scan") == previous
+    assert read(store) == b"original"
+
+
+@pytest.mark.portable
 @pytest.mark.parametrize("failure", [errno.EXDEV, errno.ENOSPC])
 def test_directory_rename_failure_preserves_current(
     store: ResultStore, monkeypatch: pytest.MonkeyPatch, failure: int
@@ -554,12 +937,13 @@ def test_directory_rename_failure_preserves_current(
         raise OSError(failure, "cannot rename")
 
     with monkeypatch.context() as patch:
-        patch.setattr(bundles.os, "rename", fail)
+        patch.setattr("muteinous.infrastructure.storage.bundles.os.rename", fail)
         if failure == errno.ENOSPC:
             with pytest.raises(InsufficientSpace):
                 publish(store, b"candidate")
         else:
-            with pytest.raises(OSError):
+            with pytest.raises(OSError) as exc:
                 publish(store, b"candidate")
+            assert exc.value.errno == failure
     assert store.selection("scan") == first
     assert read(store) == b"original"

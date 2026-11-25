@@ -41,8 +41,14 @@ def test_metadata_has_exact_canonical_bytes_and_order(tmp_path: Path) -> None:
             "source": "source",
         }
     )
-    assert _metadata(tmp_path, "scan", bundle, identity) == expected
-    assert _metadata(tmp_path, "scan", bundle, identity) == expected
+    assert (
+        _metadata(tmp_path, "scan", bundle, identity, controlled_root=tmp_path)
+        == expected
+    )
+    assert (
+        _metadata(tmp_path, "scan", bundle, identity, controlled_root=tmp_path)
+        == expected
+    )
     assert canonical_json({"key": "é"}) == '{"key":"é"}'.encode("utf-8")
     assert canonical_json({"z": 2, "a": 1}) == b'{"a":1,"z":2}'
 

@@ -29,9 +29,9 @@ _OWNER = "owner.json"
 
 
 @contextmanager
-def try_lock(path: Path) -> Iterator[BinaryIO | None]:
+def try_lock(path: Path, *, root: Path | None = None) -> Iterator[BinaryIO | None]:
     """An OS-held exclusive nonblocking lease, released even on process exit."""
-    checked_directory(path.parent)
+    checked_directory(path.parent, root=root)
     if checked_stat(path, directory=False).st_size < 1:
         raise StorageError(f"Empty lease file: {path}")
     with path.open("r+b") as stream:
@@ -82,9 +82,10 @@ class StagingArea:
 
 
 class Staging:
-    def __init__(self, root: Path, leases: Path) -> None:
+    def __init__(self, root: Path, leases: Path, *, controlled_root: Path) -> None:
         self.root = root
         self.leases = leases
+        self.controlled_root = controlled_root
         self._session = uuid4().hex
 
     @contextmanager
@@ -106,11 +107,11 @@ class Staging:
         directory = self.root / token
         lease = self.leases / f"{token}.lock"
         try:
-            checked_directory(self.root)
-            checked_directory(self.leases)
+            checked_directory(self.root, root=self.controlled_root)
+            checked_directory(self.leases, root=self.controlled_root)
             with lease.open("xb") as stream:
                 stream.write(marker)
-            with try_lock(lease) as held:
+            with try_lock(lease, root=self.controlled_root) as held:
                 if held is None:
                     raise StorageError("New staging lease could not be acquired")
                 directory.mkdir()
@@ -126,8 +127,11 @@ class Staging:
 
     def cleanup_abandoned(self) -> CleanupReport:
         """Delete only marked, inactive, safely inspectable staging trees."""
-        root_device = checked_directory(self.root).st_dev
-        if checked_directory(self.leases).st_dev != root_device:
+        root_device = checked_directory(self.root, root=self.controlled_root).st_dev
+        if (
+            checked_directory(self.leases, root=self.controlled_root).st_dev
+            != root_device
+        ):
             raise StorageError("Staging lease directory is on another filesystem")
         removed: list[str] = []
         retained: list[tuple[str, str]] = []
@@ -135,8 +139,8 @@ class Staging:
             try:
                 if not is_token(directory.name):
                     raise StorageError("Not an application staging identity")
-                checked_directory(directory)
-                raw = read_regular(directory / _OWNER)
+                checked_directory(directory, root=self.controlled_root)
+                raw = read_regular(directory / _OWNER, root=self.controlled_root)
                 marker = read_json(raw)
                 if (
                     set(marker) != {"schema", "stage", "session", "process", "job"}
@@ -151,21 +155,32 @@ class Staging:
                 ):
                     raise StorageError("Invalid staging ownership marker")
                 lease = self.leases / f"{directory.name}.lock"
-                with try_lock(lease) as held:
+                with try_lock(lease, root=self.controlled_root) as held:
                     if held is None:
                         raise StorageError("Staging owner is active")
                     # Never infer abandonment from age or a reused PID.
                     # Windows locks the first byte; read through the held handle.
                     held.seek(0)
-                    if held.read() != raw or read_regular(directory / _OWNER) != raw:
+                    if (
+                        held.read() != raw
+                        or read_regular(directory / _OWNER, root=self.controlled_root)
+                        != raw
+                    ):
                         raise StorageError("Staging ownership evidence disagrees")
-                    if checked_directory(directory).st_dev != root_device:
+                    if (
+                        checked_directory(directory, root=self.controlled_root).st_dev
+                        != root_device
+                    ):
                         raise StorageError("Staging directory is on another filesystem")
                     for entry in directory.iterdir():
                         if entry.name not in {_OWNER, "payload", "candidate.json"}:
                             raise StorageError("Unexpected entry at staging root")
                         checked_stat(entry, directory=entry.name == "payload")
-                    walk_files(directory, allow_empty=True)
+                    walk_files(
+                        directory,
+                        allow_empty=True,
+                        controlled_root=self.controlled_root,
+                    )
                     shutil.rmtree(directory)
                 removed.append(directory.name)
             except (OSError, StorageError) as exc:

@@ -48,11 +48,26 @@ class SpaceAssessment:
         return self.estimate is None or self.estimate > self.available
 
 
-def preflight(requirements: Iterable[SpaceRequirement]) -> tuple[SpaceAssessment, ...]:
+def preflight(
+    requirements: Iterable[SpaceRequirement], *, root: Path | None = None
+) -> tuple[SpaceAssessment, ...]:
     """Aggregate simultaneous requirements by filesystem; never reserve bytes."""
     grouped: dict[int, list[SpaceRequirement]] = {}
     for requirement in requirements:
-        device = checked_directory(requirement.directory).st_dev
+        directory = requirement.directory.absolute()
+        if root is None:
+            boundary = directory
+        else:
+            controlled_root = root.absolute()
+            try:
+                directory.relative_to(controlled_root)
+            except ValueError:
+                # Additional caller-supplied requirements may be on another
+                # filesystem; their requested directory is their boundary.
+                boundary = directory
+            else:
+                boundary = controlled_root
+        device = checked_directory(directory, root=boundary).st_dev
         grouped.setdefault(device, []).append(requirement)
     assessments = []
     for group in grouped.values():
@@ -82,6 +97,8 @@ def translate_write_error(exc: OSError) -> Never:
     """Preserve ordinary I/O errors; classify actual insufficient-space failures."""
     if exc.errno in {errno.ENOSPC, getattr(errno, "EDQUOT", -1)} or getattr(
         exc, "winerror", None
-    ) in {39, 112}:
-        raise InsufficientSpace("Storage ran out of space; affected work stopped") from exc
+    ) in {39, 112, 1295}:
+        raise InsufficientSpace(
+            "Storage ran out of space; affected work stopped"
+        ) from exc
     raise exc

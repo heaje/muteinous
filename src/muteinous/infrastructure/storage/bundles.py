@@ -63,10 +63,15 @@ def _result_key(result: str) -> str:
 
 
 def _metadata(
-    directory: Path, result: str, bundle: str, identity: ResultIdentity
+    directory: Path,
+    result: str,
+    bundle: str,
+    identity: ResultIdentity,
+    *,
+    controlled_root: Path,
 ) -> bytes:
     records = []
-    for path in walk_files(directory):
+    for path in walk_files(directory, controlled_root=controlled_root):
         relative = path.relative_to(directory).as_posix()
         if relative == _METADATA:
             continue
@@ -94,13 +99,17 @@ def _validate(
     selection: Selection,
     identity: ResultIdentity,
     validate_domain: DomainValidator,
+    *,
+    controlled_root: Path,
 ) -> None:
-    raw = read_regular(directory / _METADATA)
+    raw = read_regular(directory / _METADATA, root=controlled_root)
     if digest(raw) != selection.metadata_sha256:
         raise StorageError("Integrity metadata digest mismatch")
     # Exact canonical equality with the freshly generated inventory rejects
     # unknown schemas, wrong types, duplicate keys, missing and extra members.
-    if raw != _metadata(directory, result, selection.bundle, identity):
+    if raw != _metadata(
+        directory, result, selection.bundle, identity, controlled_root=controlled_root
+    ):
         raise StorageError("Bundle identity, structure or integrity mismatch")
     validate_domain(directory)
 
@@ -117,21 +126,29 @@ class ResultStore:
     def __init__(self, root: Path, *, atomic_rename_supported: bool = False) -> None:
         self.root = root.absolute()
         self._atomic_rename_supported = atomic_rename_supported is True
-        checked_directory(self.root)
+        checked_directory(self.root, root=self.root)
         self._bundles = self.root / "bundles"
         self._current = self.root / "current"
         staging = self.root / "staging"
         leases = self.root / "stage-leases"
         for directory in (self._bundles, self._current, staging, leases):
             directory.mkdir(exist_ok=True)
-            checked_directory(directory)
-        self._staging = Staging(staging, leases)
+            checked_directory(directory, root=self.root)
+        self._staging = Staging(staging, leases, controlled_root=self.root)
         self._guard = self.root / "selection.lock"
         try:
             with self._guard.open("xb") as stream:
                 stream.write(b"1")
         except FileExistsError:
-            checked_stat(self._guard, directory=False)
+            info = checked_stat(self._guard, directory=False)
+            if info.st_size == 0:
+                # An initializer may have crashed after exclusive creation but
+                # before writing the lock byte. Appending is safe if concurrent
+                # initializers both observe the empty file.
+                with self._guard.open("ab") as stream:
+                    stream.write(b"1")
+                if checked_stat(self._guard, directory=False).st_size == 0:
+                    raise StorageError("Selection guard could not be initialized")
 
     @contextmanager
     def stage(
@@ -147,34 +164,34 @@ class ResultStore:
             SpaceRequirement(self._staging.root, minimum_bytes, estimate_bytes),
             *other_requirements,
         )
-        assessments = preflight(requirements)
+        assessments = preflight(requirements, root=self.root)
         with self._staging.create(job_id, assessments) as area:
             yield area
 
     def cleanup_abandoned(self) -> CleanupReport:
-        """Call at startup, before submitting jobs; published bundles are excluded."""
+        """Safely reclaim abandoned stages at startup or after jobs complete."""
         if not self._atomic_rename_supported:
             raise StorageError("Local filesystem lease semantics are not established")
         return self._staging.cleanup_abandoned()
 
     @contextmanager
     def _selection_guard(self) -> Iterator[None]:
-        with try_lock(self._guard) as held:
+        with try_lock(self._guard, root=self.root) as held:
             if held is None:
                 raise StorageError("Result selection is busy; retry the operation")
             yield
 
     def _manifest_path(self, result: str) -> Path:
-        checked_directory(self._current)
+        checked_directory(self._current, root=self.root)
         return self._current / f"{_result_key(result)}.json"
 
     def _selection(self, result: str) -> Selection | None:
         path = self._manifest_path(result)
         try:
-            raw = read_regular(path)
+            raw = read_regular(path, root=self.root)
         except FileNotFoundError:
             # Missing manifest is the only absence condition, not a bad parent.
-            checked_directory(self._current)
+            checked_directory(self._current, root=self.root)
             return None
         value = read_json(raw)
         if (
@@ -217,17 +234,26 @@ class ResultStore:
             raise StorageError(
                 "Atomic publication is not established for this filesystem"
             )
+        integrity_path = path / _METADATA
+        candidate_manifest = staging._directory / "candidate.json"
+        created_integrity = False
+        created_candidate = False
+        renamed = False
         try:
-            device = checked_directory(path).st_dev
+            device = checked_directory(path, root=self.root).st_dev
             if any(
-                checked_directory(directory).st_dev != device
+                checked_directory(directory, root=self.root).st_dev != device
                 for directory in (staging._directory, self._bundles, self._current)
             ):
                 raise StorageError(
                     "Publication requires destination-filesystem staging"
                 )
+            if os.path.lexists(integrity_path):
+                raise StorageError("Reserved integrity metadata is already present")
             bundle = uuid4().hex
-            metadata = _metadata(path, result, bundle, identity)
+            metadata = _metadata(
+                path, result, bundle, identity, controlled_root=self.root
+            )
             selection = Selection(bundle, digest(metadata))
             manifest = canonical_json(
                 {
@@ -237,14 +263,25 @@ class ResultStore:
                 }
             )
             preflight(
-                [SpaceRequirement(staging._directory, len(metadata) + len(manifest))]
+                [SpaceRequirement(staging._directory, len(metadata) + len(manifest))],
+                root=self.root,
             )
             # Exclusive creation: staged inputs cannot provide their own metadata.
-            with (path / _METADATA).open("xb") as stream:
+            with integrity_path.open("xb") as stream:
+                created_integrity = True
                 stream.write(metadata)
-            _validate(path, result, selection, identity, validate_domain)
-            candidate_manifest = staging._directory / "candidate.json"
+            _validate(
+                path,
+                result,
+                selection,
+                identity,
+                validate_domain,
+                controlled_root=self.root,
+            )
+            if os.path.lexists(candidate_manifest):
+                raise StorageError("Reserved candidate metadata is already present")
             with candidate_manifest.open("xb") as stream:
+                created_candidate = True
                 stream.write(manifest)
             destination = self._bundles / bundle
             with self._selection_guard():
@@ -253,32 +290,61 @@ class ResultStore:
                 if os.path.lexists(destination):
                     raise StorageError("Bundle identity already exists")
                 os.rename(path, destination)
+                renamed = True
                 staging._published = True
-                # Validate the exact committed directory and check freshness again
-                # before the only operation that changes the authoritative pointer.
-                _validate(destination, result, selection, identity, validate_domain)
+            # Hashing and domain validation run outside the short selection guard.
+            _validate(
+                destination,
+                result,
+                selection,
+                identity,
+                validate_domain,
+                controlled_root=self.root,
+            )
+            with self._selection_guard():
                 if self._selection(result) != expected or is_current() is not True:
                     raise StorageError("Result producer was superseded")
                 os.replace(candidate_manifest, self._manifest_path(result))
             return selection
         except OSError as exc:
             translate_write_error(exc)
+        finally:
+            if not renamed:
+                if created_candidate:
+                    candidate_manifest.unlink(missing_ok=True)
+                if created_integrity:
+                    integrity_path.unlink(missing_ok=True)
 
     @contextmanager
     def open_current(
         self, result: str, identity: ResultIdentity, *, validate_domain: DomainValidator
     ) -> Iterator[Path]:
-        """Acquire a validated read-only reference; no published deletion exists."""
+        """Yield a validated path for caller-convention read-only use.
+
+        This does not hold a lifetime reader pin. Safety currently relies on this
+        component never deleting published bundles; implement D112 reader
+        acquisition before adding any published-bundle reclamation.
+        """
         with self._selection_guard():
             selection = self._selection(result)
             if selection is None:
                 raise StorageError("No committed result manifest")
-            checked_directory(self._bundles)
-            path = self._bundles / selection.bundle
-            try:
-                _validate(path, result, selection, identity, validate_domain)
-            except OSError as exc:
-                raise StorageError("Committed result cannot be verified") from exc
+        checked_directory(self._bundles, root=self.root)
+        path = self._bundles / selection.bundle
+        try:
+            _validate(
+                path,
+                result,
+                selection,
+                identity,
+                validate_domain,
+                controlled_root=self.root,
+            )
+        except OSError as exc:
+            raise StorageError("Committed result cannot be verified") from exc
+        with self._selection_guard():
+            if self._selection(result) != selection:
+                raise StorageError("Result selection changed during validation")
         # Bundles, including unreferenced and superseded versions, are retained.
-        # Thus release does not need a counter until reclamation is implemented.
+        # No lifetime reference is acquired because this component never deletes.
         yield path

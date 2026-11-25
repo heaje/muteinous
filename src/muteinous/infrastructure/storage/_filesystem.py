@@ -84,21 +84,42 @@ def checked_stat(path: Path, *, directory: bool) -> os.stat_result:
     return info
 
 
-def checked_directory(path: Path) -> os.stat_result:
-    # Do not resolve links before checking them, including ancestor directories.
-    for ancestor in reversed(path.absolute().parents):
-        checked_stat(ancestor, directory=True)
-    return checked_stat(path, directory=True)
+def checked_directory(path: Path, *, root: Path | None = None) -> os.stat_result:
+    """Check a directory and its controlled-root path without following links.
+
+    When ``root`` is supplied, ancestors above that caller-established boundary
+    are intentionally outside this component's control and are not inspected.
+    """
+    path = path.absolute()
+    if root is None:
+        components = [*reversed(path.parents), path]
+    else:
+        root = root.absolute()
+        try:
+            relative = path.relative_to(root)
+        except ValueError as exc:
+            raise StorageError(f"Directory is outside controlled root: {path}") from exc
+        components = [root]
+        for part in relative.parts:
+            components.append(components[-1] / part)
+    for component in components:
+        info = checked_stat(component, directory=True)
+    return info
 
 
-def read_regular(path: Path) -> bytes:
-    checked_directory(path.parent)
+def read_regular(path: Path, *, root: Path | None = None) -> bytes:
+    checked_directory(path.parent, root=root)
     checked_stat(path, directory=False)
     return path.read_bytes()
 
 
-def walk_files(root: Path, *, allow_empty: bool = False) -> list[Path]:
-    device = checked_directory(root).st_dev
+def walk_files(
+    root: Path,
+    *,
+    allow_empty: bool = False,
+    controlled_root: Path | None = None,
+) -> list[Path]:
+    device = checked_directory(root, root=controlled_root).st_dev
     files: list[Path] = []
 
     def visit(directory: Path) -> None:
