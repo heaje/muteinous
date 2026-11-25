@@ -1,8 +1,8 @@
 # Issue #20 / draft PR #25 handoff - AST and Ogg Vorbis specimens
 
-Related: [Issue #20](https://github.com/heaje/muteinous/issues/20), [draft PR #25](https://github.com/heaje/muteinous/pull/25), [PR #27](https://github.com/heaje/muteinous/pull/27) (Issue #19, upstream).
+Related: [Issue #20](https://github.com/heaje/muteinous/issues/20), [draft PR #25](https://github.com/heaje/muteinous/pull/25), [PR #27](https://github.com/heaje/muteinous/pull/27) (Issue #19, merged).
 
-Branch `m1/issue-20-native-format-poc`, stacked on `feat/m1-4-pcm-scratch-19`. All work is committed and pushed; the PR description records the exact pushed head, upstream base SHA and the local validation results. Verify them with `git rev-parse HEAD` and `git merge-base HEAD origin/feat/m1-4-pcm-scratch-19` rather than trusting this note.
+Branch `m1/issue-20-native-format-poc`, rebased onto `main` after #27 / #19 was squash-merged; PR #25 targets `main`. All work is committed and pushed; the PR description records the exact pushed head, base and the local validation results. Verify them with `git rev-parse HEAD` and `git merge-base HEAD origin/main` rather than trusting this note.
 
 ## State
 
@@ -15,7 +15,7 @@ Branch `m1/issue-20-native-format-poc`, stacked on `feat/m1-4-pcm-scratch-19`. A
 
 ## Remaining before merge (coordinator-owned steps marked *)
 
-1. Merge order: PR #27 / Issue #19 first. After its squash merge, replay only the #20 commits onto current `main`, retarget PR #25 to `main`, rerun `task setup` and `task check` plus the four manual scripts on the exact merged upstream.
+1. Already done: #27 / #19 merged; only the #20 commits were replayed onto `main`, PR #25 was retargeted, and `task setup`, `task check` and the four manual scripts were rerun locally on the merged upstream. If `main` has moved since, rebase again and repeat.
 2. Remote CI and Linux/macOS behaviour have not been observed; local evidence is Windows only. The FFmpeg wrapper's POSIX process-tree termination path (`start_new_session`/`killpg`) is unexercised on Linux/macOS. Preserve the outstanding infrastructure verification tracked in [#4](https://github.com/heaje/muteinous/issues/4).
 3. Remove this handoff and its pointer in [`README.md`](README.md); retire or promote the two findings (`ast-pcm-roundtrip.md`, `vorbis-lossy-roundtrip.md`) per [the finding lifecycle](../README.md#reusable-findings).
 4. *Decision-coverage ledger, coordination snapshot, merge and issue closure belong to the coordinator.
