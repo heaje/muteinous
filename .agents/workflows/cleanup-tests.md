@@ -1,0 +1,8 @@
+# Clean up tests
+
+1. Complete [full-task discovery](../README.md#task-start-discovery); verify target Issue/PR and exact revision, scope, relevant architecture and existing tests. Isolate the authorized branch and establish baseline test outcomes.
+2. Use [contract-based testing](../../docs/testing.md#contract-based-testing) to map tests to actual guarantees. Identify redundant, brittle, incidental, nondeterministic or unsupported-behavior assertions and any real coverage gaps.
+3. Remove, consolidate or simplify unjustified cases while retaining representative tests of meaningful contracts and safety/failure paths. Make nondeterministic tests deterministic without introducing scheduling guarantees. Do not add production defensive behavior to satisfy artificial assertions; any production change requires separate authorization for a confirmed defect.
+4. Map retained coverage to acceptance criteria, applicable decisions and meaningful invariants. Run focused tests and applicable repository validation; disclose actual commands, results and limitations. Do not optimize toward an arbitrary mutation score or test count.
+5. Obtain [independent review](../../docs/development.md#delegation-and-independent-review); supervisor confirms findings, revalidates and requests re-review after meaningful corrections. Follow [termination policy](../../docs/development.md#review-loop-termination).
+6. Commit conventionally, push the authorized branch, verify the revision and update the PR with coverage and validation evidence. If review or checks are unavailable, stop at the gate and request them; do not claim completion. Leave merge to the maintainer.

@@ -1,15 +1,17 @@
-# Temporary implementation knowledge
+# Agent knowledge and workflows
 
-This directory is a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Notes are version-controlled and shared through discoverable branches and task handoffs, without depending on an individual agent's conversation history.
+This directory houses [permanent reusable workflows](workflows/README.md) and a **time-limited knowledge exchange between coding agents**, not a second architecture decision log, task tracker, or permanent diary. Notes are version-controlled and shared through discoverable branches and task handoffs, without depending on an individual agent's conversation history.
 
 ## Task-start discovery
 
-Tools do not necessarily discover Markdown files in `.agents/` automatically. On **every new or resumed task**, after opening [`AGENTS.md`](../AGENTS.md):
+Tools do not necessarily discover Markdown files in `.agents/` automatically. On **every new or resumed full task**, after opening [`AGENTS.md`](../AGENTS.md), select the applicable workflow and:
 
 1. Read the [coordination snapshot](current-state.md), then verify potentially stale status against the assigned Issue/PR and checked-out code.
 2. **Enumerate the files** under [`findings/`](findings/README.md), not just its README, and read findings relevant to the assigned work. Verify their evidence against the current implementation before using them.
 3. If resuming unfinished work, use the task's provided branch/ref and handoff path to locate the relevant note under [`handoffs/`](handoffs/README.md). If the pointer is absent, obtain it from the coordinator; a note on another branch is not visible automatically.
 4. Before pausing or completing work, consult the [finding lifecycle](#reusable-findings), [handoff rules](#unfinished-work-handoffs) and [cleanup guidance](#coordination-and-cleanup) as applicable.
+
+For a focused delegated investigation or correction, follow the [scoped discovery rules](../docs/development.md#delegation-and-independent-review). The supervisor completes full-task discovery and passes relevant findings, coordination constraints and handoff pointers to the delegate. Do not load unrelated notes or workflows.
 
 ## Where information belongs
 
@@ -20,9 +22,10 @@ Tools do not necessarily discover Markdown files in `.agents/` automatically. On
 | Incomplete implementation handoff | Issue / PR; optionally a branch-local `handoffs/<task>.md` ([handoff guidance](handoffs/README.md)) | Until work resumes/completes |
 | Reusable, nonobvious technical discovery | `findings/<topic>.md` ([finding guidance](findings/README.md)) | Until incorporated, disproved or irrelevant |
 | Cross-task next steps and blockers | [`current-state.md`](current-state.md) | Reconciled periodically |
+| Reusable agent workflow | [`workflows/`](workflows/README.md) | Permanent |
 | Enduring setup, tooling or testing procedure | [`docs/development.md`](../docs/development.md); [`docs/testing.md`](../docs/testing.md) | Permanent |
 
-Never use these notes to override the [architecture decision log](../docs/architecture/decisions.md) or infer that an unverified suggestion is implemented. Read only findings relevant to the task and verify against the code.
+Temporary notes never override the [architecture decision log](../docs/architecture/decisions.md) or infer that an unverified suggestion is implemented. Read only findings relevant to the task and verify against the code.
 
 ## Reusable findings
 
@@ -66,4 +69,4 @@ Before handing off, push a checkpoint commit if safe and possible; uncommitted l
 
 ## Coordination and cleanup
 
-The coordinator updates [`current-state.md`](current-state.md) after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. A PR that fixes a documented workaround should retire/delete its temporary finding, or mark it resolved/superseded with a link to the fix, so stale advice is not left active. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the directory small; **a discovery is valuable, not its chronological investigation log**.
+The coordinator updates [`current-state.md`](current-state.md) after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. A PR that fixes a documented workaround should retire/delete its temporary finding, or mark it resolved/superseded with a link to the fix, so stale advice is not left active. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the temporary notes small; permanent workflows are maintained separately; **a discovery is valuable, not its chronological investigation log**.
