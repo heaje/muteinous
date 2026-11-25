@@ -9,12 +9,6 @@ from threading import Event
 from weakref import ReferenceType, ref
 
 import pytest
-from job_queue import (
-    ControlledWorker,
-    FakeClock,
-    eventually,
-    plan,
-)
 
 from muteinous.infrastructure.jobs.queue import (
     JobContext,
@@ -23,6 +17,12 @@ from muteinous.infrastructure.jobs.queue import (
     JobState,
     Progress,
     WorkCount,
+)
+from tests.support.job_queue import (
+    ControlledWorker,
+    FakeClock,
+    eventually,
+    plan,
 )
 
 pytestmark = pytest.mark.portable

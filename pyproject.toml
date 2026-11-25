@@ -37,6 +37,7 @@ allowed_prefixes = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-ra --strict-markers --strict-config"
 markers = ["portable: portability-sensitive tests that run on Windows, Linux and macOS"]
 
@@ -49,6 +50,6 @@ select = ["E4", "E7", "E9", "F", "I"]
 [tool.mypy]
 python_version = "3.14"
 files = ["src", "scripts", "tests"]
-mypy_path = [".", "src", "tests/support"]
+mypy_path = ["src"]
 explicit_package_bases = true
 strict = true

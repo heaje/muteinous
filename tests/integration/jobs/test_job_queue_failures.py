@@ -14,12 +14,6 @@ from collections.abc import Callable
 from threading import Event, Thread, current_thread
 
 import pytest
-from job_queue import (
-    FakeClock,
-    capture_thread_exceptions,
-    eventually,
-    plan,
-)
 
 import muteinous.infrastructure.jobs.queue as queue_module
 from muteinous.infrastructure.jobs.queue import (
@@ -28,8 +22,82 @@ from muteinous.infrastructure.jobs.queue import (
     JobQueue,
     JobState,
 )
+from tests.support.job_queue import (
+    FakeClock,
+    capture_thread_exceptions,
+    eventually,
+    plan,
+)
 
 pytestmark = pytest.mark.portable
+
+
+def test_dispatcher_native_start_error_closes_queue_and_exits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedDispatcherStartFailure(BaseException):
+        pass
+
+    launched: list[Thread] = []
+    queue_instances: list[JobQueue] = []
+    schedule_entered = Event()
+    original_schedule = JobQueue._schedule
+
+    def capture_schedule(queue: JobQueue) -> None:
+        queue_instances.append(queue)
+        schedule_entered.set()
+        original_schedule(queue)
+
+    class LaunchThenRaiseThread(Thread):
+        def start(self) -> None:
+            if self.name == "muteinous-jobs":
+                launched.append(self)
+                super().start()
+                raise InjectedDispatcherStartFailure("launched then failed")
+            super().start()
+
+    monkeypatch.setattr(JobQueue, "_schedule", capture_schedule)
+    monkeypatch.setattr(queue_module, "Thread", LaunchThenRaiseThread)
+    try:
+        with pytest.raises(InjectedDispatcherStartFailure):
+            JobQueue({"cpu": 1}, lambda _: None)
+
+        assert schedule_entered.wait(5)
+        eventually(lambda: not launched[0].is_alive())
+        assert queue_instances[0]._closed
+    finally:
+        if queue_instances:
+            with queue_instances[0]._condition:
+                queue_instances[0]._closed = True
+                queue_instances[0]._wake()
+        for thread in launched:
+            if thread.ident is not None:
+                thread.join(5)
+
+
+def test_dispatcher_prelaunch_start_error_does_not_leak_thread(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InjectedDispatcherStartFailure(BaseException):
+        pass
+
+    launched: list[Thread] = []
+
+    class FailBeforeLaunchThread(Thread):
+        def start(self) -> None:
+            if self.name == "muteinous-jobs":
+                launched.append(self)
+                raise InjectedDispatcherStartFailure("failed before launch")
+            super().start()
+
+    monkeypatch.setattr(queue_module, "Thread", FailBeforeLaunchThread)
+    with pytest.raises(InjectedDispatcherStartFailure):
+        JobQueue({"cpu": 1}, lambda _: None)
+
+    assert len(launched) == 1
+    assert not launched[0].is_alive()
+    assert launched[0].ident is None
+    assert launched[0] not in threading.enumerate()
 
 
 def test_worker_start_prelaunch_baseexception_releases_slot_and_scheduler_continues(

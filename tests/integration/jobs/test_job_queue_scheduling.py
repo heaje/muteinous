@@ -9,14 +9,6 @@ from collections.abc import Callable
 from threading import Event, Thread
 
 import pytest
-from job_queue import (
-    ControlledWorker,
-    CountingFakeClock,
-    FakeClock,
-    capture_thread_exceptions,
-    eventually,
-    plan,
-)
 
 import muteinous.infrastructure.jobs.queue as queue_module
 from muteinous.infrastructure.jobs.queue import (
@@ -24,6 +16,14 @@ from muteinous.infrastructure.jobs.queue import (
     JobPlan,
     JobQueue,
     JobState,
+)
+from tests.support.job_queue import (
+    ControlledWorker,
+    CountingFakeClock,
+    FakeClock,
+    capture_thread_exceptions,
+    eventually,
+    plan,
 )
 
 pytestmark = pytest.mark.portable
