@@ -38,6 +38,7 @@ Exclusive creation avoids overwriting existing paths. Each write checks the know
 ~~~
 
 `--case` accepts one or more case indexes from 0 through 6 and may be repeated.
+Unexpected tool failures are reported separately from explicit representation exclusions and make the script exit nonzero after printing all requested cases.
 
 The generator alternates silence, tones and seeded noise (seed 19), in blocks; it does not use a speech or game corpus. Cases cover mono, stereo and 5.1, 8–96 kHz, all six full-width representations and a larger 20-second six-channel workload. WAV uses the actual production backend. FLAC and WavPack use FFmpeg encoders/decoders (one encoder thread), bounded raw spool files and the same PCM editor. The encoder requests a sample format and, for integer PCM, `bits_per_raw_sample` derived from the supplied `PCMFormat`: WavPack requests its planar u8/s16/s32/f32 encoder formats, while FLAC requests s16 for u8/s16 and s32 for s24/s32. The script hashes initial decoded PCM against the original and edited decoded PCM against the original passed through the editor. It reports byte-exactness separately from metadata preservation (rate, channels, layout, reported precision and decoded frame count); `exact-with-metadata-widening` means samples match but reported precision is wider, not that metadata was preserved.
 

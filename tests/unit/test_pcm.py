@@ -48,6 +48,34 @@ def test_outward_rounding_and_all_channels() -> None:
     assert edited == original[:4] + bytes(8) + original[12:]
 
 
+@pytest.mark.parametrize(("rate", "frames"), [(44100, 13), (7, 29), (11, 25)])
+def test_segment_end_rounding_stays_within_frame_count(rate: int, frames: int) -> None:
+    duration = frames / rate
+    assert math.ceil(duration * rate) > frames
+
+    info = PCMFormat(rate, 1, "s16", frames)
+    frame = struct.pack("<h", 1234)
+    original = frame * frames
+    silence = bytes(info.frame_bytes)
+
+    full = b"".join(censor_blocks(info, [original], [(0, duration)]))
+    assert len(full) == frames * info.frame_bytes
+    assert full == bytes(len(original))
+
+    padded = b"".join(
+        censor_blocks(
+            info,
+            [original],
+            [((frames - 1) / rate, duration)],
+            before=1 / rate,
+            after=1 / rate,
+        )
+    )
+    assert len(padded) == frames * info.frame_bytes
+    assert padded[: info.frame_bytes] == original[: info.frame_bytes]
+    assert padded[-info.frame_bytes :] == silence
+
+
 def test_censor_blocks_yields_before_requesting_next_input_block() -> None:
     info = PCMFormat(4096, 1, "s16", 2 * 4096 + 3)
     frame = b"\x34\x12"
@@ -191,6 +219,103 @@ def test_fades_only_in_margins(curve: Curve, gain: float) -> None:
     assert values[5] == pytest.approx((gain, -0.5 * gain))
     assert values[10] == pytest.approx((gain, -0.5 * gain))
     assert values[6:10] == [(0.0, 0.0)] * 4
+
+
+@pytest.mark.parametrize("curve", ["linear", "cosine", "equal_power"])
+@pytest.mark.parametrize("sample", [200, 40])
+def test_u8_fractional_fades_scale_about_unsigned_midpoint(
+    curve: Curve, sample: int
+) -> None:
+    rate = 8000
+    info = PCMFormat(rate, 1, "u8", 8)
+    original = bytes([sample] * info.frames)
+    edited = b"".join(
+        censor_blocks(
+            info,
+            [original],
+            [(2 / rate, 4 / rate)],
+            before=2 / rate,
+            after=2 / rate,
+            fade=2 / rate,
+            curve=curve,
+        )
+    )
+
+    # Independent D39 curve formulas; Python round is ties-to-even.
+    if curve == "linear":
+        gain = 0.5
+    elif curve == "cosine":
+        gain = (1 - math.cos(math.pi / 2)) / 2
+    else:
+        gain = math.sin(math.pi / 4)
+    faded = round((sample - 128) * gain) + 128
+    expected = [sample, faded, 128, 128, faded, sample, sample, sample]
+    assert list(edited) == expected
+    assert edited[6:] == original[6:]
+    if curve == "linear" and sample == 200:
+        assert list(edited) == [200, 164, 128, 128, 164, 200, 200, 200]
+
+
+@pytest.mark.parametrize(("representation", "width"), [("s24", 3), ("s32", 4)])
+def test_fractional_signed_integer_fades_handle_extremes(
+    representation: Representation, width: int
+) -> None:
+    rate = 8000
+    maximum = (1 << (width * 8 - 1)) - 1
+    minimum = -(1 << (width * 8 - 1))
+    samples = [maximum, maximum, maximum, minimum, minimum, maximum, minimum, maximum]
+    original = b"".join(
+        value.to_bytes(width, "little", signed=True) for value in samples
+    )
+    info = PCMFormat(rate, 1, representation, len(samples))
+    edited = b"".join(
+        censor_blocks(
+            info,
+            [original],
+            [(2 / rate, 4 / rate)],
+            before=2 / rate,
+            after=2 / rate,
+            fade=2 / rate,
+            curve="linear",
+        )
+    )
+
+    expected = samples.copy()
+    expected[1] = round(samples[1] * 0.5)
+    expected[2:4] = [0, 0]
+    expected[4] = round(samples[4] * 0.5)
+    expected_bytes = b"".join(
+        value.to_bytes(width, "little", signed=True) for value in expected
+    )
+    assert edited == expected_bytes
+    assert edited[:width] == original[:width]
+    assert edited[5 * width :] == original[5 * width :]
+
+
+def test_fractional_f64_fade_preserves_unmodified_samples() -> None:
+    rate = 8000
+    samples = (0.75, -0.5, 1.0, -1.0, -0.25, 0.5, -0.75, 1.0)
+    original = struct.pack("<8d", *samples)
+    info = PCMFormat(rate, 1, "f64", len(samples))
+    edited = b"".join(
+        censor_blocks(
+            info,
+            [original],
+            [(2 / rate, 4 / rate)],
+            before=2 / rate,
+            after=2 / rate,
+            fade=2 / rate,
+            curve="linear",
+        )
+    )
+
+    expected = list(samples)
+    expected[1] *= 0.5
+    expected[2:4] = [0.0, 0.0]
+    expected[4] *= 0.5
+    assert edited == struct.pack("<8d", *expected)
+    assert edited[:8] == original[:8]
+    assert edited[5 * 8 :] == original[5 * 8 :]
 
 
 def test_default_cosine_and_zero_margin() -> None:

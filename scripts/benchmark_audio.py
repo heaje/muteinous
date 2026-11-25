@@ -141,7 +141,6 @@ def trial(
     if codec == "wavpack" and info.representation == "f64":
         return {"excluded": "FFmpeg WavPack encoder has float32, not float64 input"}
     scratch = root / codec
-    scratch.mkdir()
     encoded = (
         scratch
         / {
@@ -160,12 +159,17 @@ def trial(
     fmt = info.representation + ("le" if info.width > 1 else "")
     spec = json.dumps(info.__dict__)
     ffmpeg = ["ffmpeg", "-nostdin", "-v", "error", "-threads", "1"]
+    command: list[str] = []
 
-    def measure(name: str, command: list[str]) -> None:
-        nonlocal peak, rss
+    def measure(name: str, invocation: list[str]) -> None:
+        nonlocal command, peak, rss
+        command = invocation
         started = time.perf_counter()
         subprocess.run(
-            ["/usr/bin/time", "-f", "%M", "-o", str(metrics), *command], check=True
+            ["/usr/bin/time", "-f", "%M", "-o", str(metrics), *invocation],
+            check=True,
+            capture_output=True,
+            text=True,
         )
         times[name] = round(time.perf_counter() - started, 4)
         rss = max(rss, int(metrics.read_text().strip()))
@@ -207,6 +211,7 @@ def trial(
         )
 
     try:
+        scratch.mkdir()
         if codec == "wav":
             python_op("encode", "encode", source, encoded)
             python_op("decode", "decode", encoded, decoded)
@@ -214,21 +219,21 @@ def trial(
             encode("encode", source, encoded)
             decode("decode", encoded, decoded)
         exact = digest(source) == digest(decoded)
-        probe = json.loads(
-            subprocess.check_output(
-                [
-                    "ffprobe",
-                    "-v",
-                    "error",
-                    "-select_streams",
-                    "a:0",
-                    "-show_streams",
-                    "-of",
-                    "json",
-                    str(encoded),
-                ]
-            )
-        )["streams"][0]
+        command = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_streams",
+            "-of",
+            "json",
+            str(encoded),
+        ]
+        probe_result = subprocess.run(
+            command, check=True, capture_output=True, text=True
+        )
+        probe = json.loads(probe_result.stdout)["streams"][0]
         # A missing precision/layout is not evidence of preserved metadata.
         raw_bits = probe.get("bits_per_raw_sample")
         bits = int(raw_bits) if raw_bits not in (None, "", "N/A") else 0
@@ -288,12 +293,30 @@ def trial(
             },
         }
     except subprocess.CalledProcessError as error:
-        return {"excluded": f"tool exit {error.returncode}"}
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode(errors="replace")
+        return {
+            "failed": {
+                "command": command,
+                "returncode": error.returncode,
+                "stderr": stderr[-2000:],
+            }
+        }
+    except Exception as error:
+        return {
+            "failed": {
+                "command": command,
+                "returncode": None,
+                "stderr": f"{type(error).__name__}: {error}"[-2000:],
+            }
+        }
     finally:
-        shutil.rmtree(scratch)
+        if scratch.exists():
+            shutil.rmtree(scratch)
 
 
-def main() -> None:
+def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--worker":
         worker(
             sys.argv[2],
@@ -301,7 +324,7 @@ def main() -> None:
             Path(sys.argv[4]),
             Path(sys.argv[5]),
         )
-        return
+        return 0
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", type=int, choices=range(len(_CASES)), action="append")
     args = parser.parse_args()
@@ -309,6 +332,7 @@ def main() -> None:
         subprocess.check_output(["ffmpeg", "-version"], text=True).splitlines()[0],
         flush=True,
     )
+    failed = False
     with tempfile.TemporaryDirectory(prefix="audio-benchmark-") as directory:
         root = Path(directory)
         source = root / "fixture.raw"
@@ -316,21 +340,23 @@ def main() -> None:
             rep, rate, channels, mask, layout, seconds = _CASES[index]
             info = PCMFormat(rate, channels, rep, seconds * rate, mask)
             fixture(source, info)
-            result = {
+            results = {
                 codec: trial(root, source, info, layout, codec)
                 for codec in ("wav", "flac", "wavpack")
             }
+            failed = failed or any("failed" in result for result in results.values())
             print(
                 json.dumps(
                     {
                         "case": info.__dict__,
                         "raw_bytes": source.stat().st_size,
-                        "results": result,
+                        "results": results,
                     }
                 ),
                 flush=True,
             )
+    return int(failed)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
