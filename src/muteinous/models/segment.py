@@ -5,14 +5,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class Segment:
-    """A plugin-assigned identity unique within its content item (D27–D28)."""
+    """A plugin-assigned identity unique within its content item."""
 
     id: str
 
 
 @dataclass(frozen=True, slots=True)
 class SegmentKey:
-    """An occurrence key for use across content items (D28–D29).
+    """An occurrence key for use across content items.
 
     The content ID identifies a plugin-defined compatible occurrence namespace,
     not an installation. Key equality is not evidence of unchanged original
