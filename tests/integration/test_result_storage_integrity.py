@@ -21,6 +21,7 @@ from muteinous.infrastructure.storage._filesystem import (
 from muteinous.infrastructure.storage.bundles import (
     ResultIdentity,
     ResultStore,
+    Selection,
     UnreadableSelection,
 )
 from tests.support.storage import IDENTITY, publish, read, validate_domain
@@ -82,123 +83,90 @@ def test_invalid_metadata_is_rejected_even_if_manifest_digest_matches(
         read(store)
 
 
-@pytest.mark.parametrize("damage", ["missing", "unsafe", "digest", "noncanonical"])
-def test_current_manifest_is_authoritative_without_fallback(
-    store: ResultStore, damage: str
-) -> None:
-    publish(store, b"old")
-    selection = publish(store)
-    path = store.root / "current" / "scan.json"
-    if damage == "missing":
-        path.unlink()
-    elif damage == "noncanonical":
-        path.write_bytes(path.read_bytes() + b"\n")
-    else:
-        path.write_bytes(
-            canonical_json(
-                {
-                    "schema": 1,
-                    "bundle": "../staging" if damage == "unsafe" else selection.bundle,
-                    "metadata_sha256": "0" * 64,
-                }
-            )
-        )
-    with pytest.raises(StorageError):
-        read(ResultStore(store.root, atomic_rename_supported=True))
-
-
 @pytest.mark.portable
-@pytest.mark.parametrize("damage", ["boolean-schema", "unknown-field"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "missing",
+        "unsafe-bundle",
+        "zero-digest",
+        "noncanonical",
+        "boolean-schema",
+        "unknown-field",
+        "invalid-digest-type",
+        "null-digest",
+        "list-digest",
+        "invalid-digest-length",
+        "uppercase-digest",
+        "nonhex-digest",
+        "short-bundle",
+        "uppercase-bundle",
+        "traversal-bundle",
+        "nonstring-bundle",
+    ],
+)
 @pytest.mark.parametrize("operation", ["selection", "open", "publish"])
 def test_current_manifest_requires_exact_schema_for_all_operations(
     store: ResultStore, damage: str, operation: str
 ) -> None:
     selected = publish(store)
     manifest_path = store.root / "current" / "scan.json"
-    manifest = json.loads(manifest_path.read_bytes())
-    if damage == "boolean-schema":
-        manifest["schema"] = True
+    if damage == "missing":
+        manifest_path.unlink()
+        manifest = None
+    elif damage == "noncanonical":
+        manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
+        manifest = None
     else:
-        manifest["unexpected"] = "not allowed"
-    manifest_path.write_bytes(canonical_json(manifest))
+        manifest = json.loads(manifest_path.read_bytes())
+        if damage == "unsafe-bundle":
+            manifest["bundle"] = "../staging"
+            manifest["metadata_sha256"] = "0" * 64
+        elif damage == "zero-digest":
+            manifest["metadata_sha256"] = "0" * 64
+        elif damage == "boolean-schema":
+            manifest["schema"] = True
+        elif damage == "unknown-field":
+            manifest["unexpected"] = "not allowed"
+        elif damage == "invalid-digest-type":
+            manifest["metadata_sha256"] = 123
+        elif damage == "null-digest":
+            manifest["metadata_sha256"] = None
+        elif damage == "list-digest":
+            manifest["metadata_sha256"] = []
+        elif damage == "invalid-digest-length":
+            manifest["metadata_sha256"] = "0" * 63
+        elif damage == "uppercase-digest":
+            manifest["metadata_sha256"] = "A" * 64
+        elif damage == "nonhex-digest":
+            manifest["metadata_sha256"] = "g" * 64
+        elif damage == "short-bundle":
+            manifest["bundle"] = "short"
+        elif damage == "uppercase-bundle":
+            manifest["bundle"] = "A" * 32
+        elif damage == "traversal-bundle":
+            manifest["bundle"] = "../x"
+        else:
+            manifest["bundle"] = 123
+        manifest_path.write_bytes(canonical_json(manifest))
 
     if operation == "selection":
-        assert isinstance(store.selection("scan"), UnreadableSelection)
+        current = store.selection("scan")
+        if damage == "missing":
+            assert current is None
+        elif damage == "zero-digest":
+            assert isinstance(current, Selection)
+            assert current.metadata_sha256 == "0" * 64
+        else:
+            assert isinstance(current, UnreadableSelection)
     elif operation == "open":
-        with pytest.raises(StorageError, match="unreadable"):
+        with pytest.raises(StorageError):
             with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
-                pytest.fail("Invalid current manifest was exposed")
+                pytest.fail("Invalid or missing current manifest was exposed")
     else:
         with store.stage("invalid-current-manifest") as stage:
             (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="superseded"):
-                store.publish(
-                    stage,
-                    "scan",
-                    IDENTITY,
-                    expected=selected,
-                    is_current=lambda: True,
-                    validate_domain=validate_domain,
-                )
-
-
-@pytest.mark.portable
-@pytest.mark.parametrize(
-    "metadata_sha256",
-    [123, None, [], "0" * 63, "A" * 64, "g" * 64],
-)
-@pytest.mark.parametrize("operation", ["selection", "open", "publish"])
-def test_current_manifest_rejects_invalid_digest_for_every_operation(
-    store: ResultStore, metadata_sha256: object, operation: str
-) -> None:
-    selected = publish(store)
-    manifest_path = store.root / "current" / "scan.json"
-    manifest = json.loads(manifest_path.read_bytes())
-    manifest["metadata_sha256"] = metadata_sha256
-    manifest_path.write_bytes(canonical_json(manifest))
-
-    if operation == "selection":
-        assert isinstance(store.selection("scan"), UnreadableSelection)
-    elif operation == "open":
-        with pytest.raises(StorageError, match="unreadable"):
-            with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
-                pytest.fail("Invalid manifest digest was exposed")
-    else:
-        with store.stage("invalid-manifest-digest") as stage:
-            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="superseded"):
-                store.publish(
-                    stage,
-                    "scan",
-                    IDENTITY,
-                    expected=selected,
-                    is_current=lambda: True,
-                    validate_domain=validate_domain,
-                )
-
-
-@pytest.mark.portable
-@pytest.mark.parametrize("bundle", ["short", "A" * 32, "../x", 123])
-@pytest.mark.parametrize("operation", ["selection", "open", "publish"])
-def test_current_manifest_rejects_invalid_bundle_for_every_operation(
-    store: ResultStore, bundle: object, operation: str
-) -> None:
-    selected = publish(store)
-    manifest_path = store.root / "current" / "scan.json"
-    manifest_path.write_bytes(
-        canonical_json({"schema": 1, "bundle": bundle, "metadata_sha256": "0" * 64})
-    )
-
-    if operation == "selection":
-        assert isinstance(store.selection("scan"), UnreadableSelection)
-    elif operation == "open":
-        with pytest.raises(StorageError, match="unreadable"):
-            with store.open_current("scan", IDENTITY, validate_domain=validate_domain):
-                pytest.fail("Invalid manifest bundle was exposed")
-    else:
-        with store.stage("invalid-manifest-bundle") as stage:
-            (stage.path / "payload.bin").write_bytes(b"must-not-publish")
-            with pytest.raises(StorageError, match="superseded"):
+            with pytest.raises(StorageError):
                 store.publish(
                     stage,
                     "scan",

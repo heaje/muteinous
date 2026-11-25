@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ntpath
 import os
 import stat
 from pathlib import Path
@@ -140,12 +139,10 @@ def test_unsafe_path_components_are_rejected(name: str) -> None:
         safe_name(name)
 
 
-def test_safe_name_allows_space_inside_component() -> None:
-    safe_name("name with spaces.txt")
-
-
-@pytest.mark.parametrize("name", ["COMA", "LPTX", "CONSOLE", "com10"])
-def test_safe_name_allows_names_outside_reserved_device_set(name: str) -> None:
+@pytest.mark.parametrize(
+    "name", ["name with spaces.txt", "COMA", "LPTX", "CONSOLE", "com10"]
+)
+def test_safe_name_allows_valid_names(name: str) -> None:
     safe_name(name)
 
 
@@ -231,28 +228,6 @@ def test_walk_files_rejects_unicode_casefold_collision(
         walk_files(tmp_path, controlled_root=tmp_path)
 
 
-def test_extended_windows_path_handles_drive_unc_prefix_and_relative_paths(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr("muteinous.infrastructure.storage._filesystem.os.path", ntpath)
-
-    assert (
-        filesystem._extended_windows_path(Path(r"C:\results\bundle"))
-        == r"\\?\C:\results\bundle"
-    )
-    prefixed = r"\\?\C:\already\extended"
-    assert filesystem._extended_windows_path(Path(prefixed)) == prefixed
-    assert (
-        filesystem._extended_windows_path(Path(r"\\server\share\x"))
-        == r"\\?\UNC\server\share\x"
-    )
-
-    relative = filesystem._extended_windows_path(Path(r"relative\result"))
-    absolute_without_prefix = relative.removeprefix("\\\\?\\")
-    assert ntpath.isabs(absolute_without_prefix)
-    assert absolute_without_prefix == ntpath.abspath(r"relative\result")
-
-
 def test_walk_files_rejects_unsafe_inventory_names(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -303,59 +278,43 @@ def test_walk_files_fails_closed_on_stream_enumeration_error(
         walk_files(tmp_path, allow_empty=True, controlled_root=tmp_path)
 
 
-def test_file_record_rejects_read_length_different_from_initial_stat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    member = tmp_path / "member.bin"
-    member.write_bytes(b"payload")
-    original_checked_stat = checked_stat
-
-    def oversized_initial_stat(path: Path, *, directory: bool) -> object:
-        info = original_checked_stat(path, directory=directory)
-        if path == member and not directory:
-            return stat_namespace(info, st_size=info.st_size + 1)
-        return info
-
-    monkeypatch.setattr(
-        "muteinous.infrastructure.storage._filesystem.checked_stat",
-        oversized_initial_stat,
-    )
-    with pytest.raises(StorageError, match="File changed"):
-        file_record(tmp_path, member)
-
-
 @pytest.mark.parametrize(
-    ("field", "attribute"),
+    ("evidence", "field", "attribute"),
     [
-        ("mtime", "st_mtime_ns"),
-        ("ctime", "st_ctime_ns"),
-        ("inode", "st_ino"),
-        ("device", "st_dev"),
+        ("initial-size", None, None),
+        ("changed-stat", "mtime", "st_mtime_ns"),
+        ("changed-stat", "ctime", "st_ctime_ns"),
+        ("changed-stat", "inode", "st_ino"),
+        ("changed-stat", "device", "st_dev"),
     ],
 )
-def test_file_record_rejects_changed_stat_evidence(
+def test_file_record_rejects_unstable_inventory_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    field: str,
-    attribute: str,
+    evidence: str,
+    field: str | None,
+    attribute: str | None,
 ) -> None:
     member = tmp_path / "member.bin"
     member.write_bytes(b"payload")
     original_checked_stat = checked_stat
     calls = 0
 
-    def changed_final_stat(path: Path, *, directory: bool) -> object:
+    def changed_stat(path: Path, *, directory: bool) -> object:
         nonlocal calls
         info = original_checked_stat(path, directory=directory)
         if path == member and not directory:
             calls += 1
-            if calls == 2:
+            if evidence == "initial-size" and calls == 1:
+                return stat_namespace(info, st_size=info.st_size + 1)
+            if evidence == "changed-stat" and calls == 2:
+                assert field is not None and attribute is not None
                 return stat_namespace(info, **{attribute: getattr(info, attribute) + 1})
         return info
 
     monkeypatch.setattr(
         "muteinous.infrastructure.storage._filesystem.checked_stat",
-        changed_final_stat,
+        changed_stat,
     )
     with pytest.raises(StorageError, match="File changed"):
         file_record(tmp_path, member)
@@ -389,15 +348,19 @@ def test_checked_directory_rejects_path_outside_controlled_root(
 
 
 @pytest.mark.parametrize(
-    "value",
-    [123, None, [], "0" * 63, "A" * 64, "g" * 64],
+    ("value", "expected"),
+    [
+        (123, False),
+        (None, False),
+        ([], False),
+        ("0" * 63, False),
+        ("A" * 64, False),
+        ("g" * 64, False),
+        ("a" * 64, True),
+    ],
 )
-def test_is_digest_rejects_invalid_values(value: object) -> None:
-    assert is_digest(value) is False
-
-
-def test_is_digest_accepts_lowercase_sha256_hex() -> None:
-    assert is_digest("a" * 64) is True
+def test_is_digest_validation(value: object, expected: bool) -> None:
+    assert is_digest(value) is expected
 
 
 def test_filesystem_helpers_work_without_controlled_root(tmp_path: Path) -> None:

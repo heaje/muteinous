@@ -19,23 +19,25 @@ pytestmark = pytest.mark.portable
 
 
 @pytest.mark.parametrize(
-    ("value", "error"),
+    ("value", "expected", "error"),
     [
-        ("", ValueError),
-        ("Uppercase", ValueError),
-        ("x" * 65, ValueError),
-        ("bad/name", ValueError),
-        ("con", StorageError),
-        (None, ValueError),
+        ("", None, ValueError),
+        ("Uppercase", None, ValueError),
+        ("x" * 65, None, ValueError),
+        ("bad/name", None, ValueError),
+        ("con", None, StorageError),
+        (None, None, ValueError),
+        ("result_1-v2", "result_1-v2", None),
     ],
 )
-def test_result_key_rejects_invalid_keys(value: object, error: type[Exception]) -> None:
-    with pytest.raises(error):
-        _result_key(cast(str, value))
-
-
-def test_result_key_preserves_valid_key() -> None:
-    assert _result_key("result_1-v2") == "result_1-v2"
+def test_result_key_validation(
+    value: object, expected: str | None, error: type[Exception] | None
+) -> None:
+    if error is not None:
+        with pytest.raises(error):
+            _result_key(cast(str, value))
+    else:
+        assert _result_key(cast(str, value)) == expected
 
 
 def test_metadata_has_exact_canonical_bytes_and_order(tmp_path: Path) -> None:

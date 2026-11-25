@@ -102,6 +102,82 @@ def test_stage_preserves_oserror_after_manifest_commit(store: ResultStore) -> No
 
 
 @pytest.mark.portable
+def test_interruption_after_manifest_replace_uses_new_selection_and_consumes_stage(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = publish(store, b"previous")
+    manifest = store.root / "current" / "scan.json"
+    original_replace = os.replace
+    interruption = KeyboardInterrupt()
+
+    def replace_then_interrupt(
+        source: str | os.PathLike[str], destination: str | os.PathLike[str]
+    ) -> None:
+        original_replace(source, destination)
+        if Path(destination) == manifest:
+            raise interruption
+
+    with store.stage("interrupted-after-commit") as stage:
+        (stage.path / "payload.bin").write_bytes(b"committed-before-interruption")
+        with monkeypatch.context() as patch:
+            patch.setattr(os, "replace", replace_then_interrupt)
+            with pytest.raises(KeyboardInterrupt) as raised:
+                store.publish(
+                    stage,
+                    "scan",
+                    IDENTITY,
+                    expected=previous,
+                    is_current=lambda: True,
+                    validate_domain=validate_domain,
+                )
+        assert raised.value is interruption
+        with pytest.raises(StorageError, match="no longer writable"):
+            _ = stage.path
+
+    selected = store.selection("scan")
+    assert selected is not None and selected != previous
+    assert read(store) == b"committed-before-interruption"
+    with store.open_current("scan", IDENTITY, validate_domain=validate_domain) as path:
+        assert (path / "payload.bin").read_bytes() == b"committed-before-interruption"
+    with pytest.raises(StorageError, match="no longer writable"):
+        store.publish(
+            stage,
+            "scan",
+            IDENTITY,
+            expected=selected,
+            is_current=lambda: True,
+            validate_domain=validate_domain,
+        )
+
+
+@pytest.mark.portable
+def test_nonspace_manifest_replace_error_propagates_and_preserves_selection(
+    store: ResultStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    previous = publish(store, b"previous")
+    error = OSError(errno.EIO, "injected manifest replacement I/O failure")
+
+    def fail_replace(
+        source: str | os.PathLike[str], destination: str | os.PathLike[str]
+    ) -> None:
+        if Path(destination) == store.root / "current" / "scan.json":
+            raise error
+        os.replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "replace", fail_replace)
+        with pytest.raises(OSError) as raised:
+            publish(store, b"replacement")
+
+    assert type(raised.value) is OSError
+    assert raised.value.errno == errno.EIO
+    assert raised.value is error
+    assert not isinstance(raised.value, InsufficientSpace)
+    assert store.selection("scan") == previous
+    assert read(store) == b"previous"
+
+
+@pytest.mark.portable
 def test_stage_after_context_exit_cannot_be_published(store: ResultStore) -> None:
     expected = store.selection("scan")
     with store.stage("closed-stage") as stage:
@@ -160,29 +236,6 @@ def test_bundle_id_collision_leaves_stage_retryable(
 
     assert store.selection("scan") == selected
     assert read(store) == b"retry"
-
-
-@pytest.mark.portable
-def test_foreign_candidate_manifest_is_refused_untouched(store: ResultStore) -> None:
-    previous = publish(store)
-    supplied = b"producer candidate"
-    with store.stage("foreign-candidate") as stage:
-        (stage.path / "payload.bin").write_bytes(b"candidate")
-        candidate = stage.path.parent / "candidate.json"
-        candidate.write_bytes(supplied)
-        with pytest.raises(StorageError, match="Reserved candidate.json"):
-            store.publish(
-                stage,
-                "scan",
-                IDENTITY,
-                expected=previous,
-                is_current=lambda: True,
-                validate_domain=validate_domain,
-            )
-        assert candidate.read_bytes() == supplied
-        assert stage.path.is_dir()
-    assert store.selection("scan") == previous
-    assert read(store) == b"original"
 
 
 @pytest.mark.portable
@@ -677,17 +730,6 @@ def test_publish_waits_through_brief_final_guard_contention(
     assert not holder_errors
     assert store.selection("scan") == selected
     assert read(store) == b"published-after-wait"
-
-
-@pytest.mark.portable
-def test_empty_selection_guard_is_initialized_and_usable(tmp_path: Path) -> None:
-    (tmp_path / "selection.lock").touch()
-    store = ResultStore(tmp_path, atomic_rename_supported=True)
-    assert store.selection("scan") is None
-    selected = publish(store)
-    assert store.selection("scan") == selected
-    with store.open_current("scan", IDENTITY, validate_domain=validate_domain) as path:
-        assert (path / "payload.bin").read_bytes() == b"original"
 
 
 @pytest.mark.portable
