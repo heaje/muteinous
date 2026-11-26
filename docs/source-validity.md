@@ -111,9 +111,9 @@ actual redistribution graph's notice obligations and provide required license
 texts/notices; this PR does not invent notice or installer infrastructure.
 
 The audit found no GitHub-published security advisories as of 2026-11-25.
-Continue ordinary dependency update and security-alert review under the
-repository's existing dependency maintenance policy; this is not a guarantee
-against undisclosed or future vulnerabilities.
+Repository vulnerability alerts and automated security fixes were enabled and
+verified on 2026-11-26; the follow-up advisory recheck is recorded below. This
+is not a guarantee against undisclosed or future vulnerabilities.
 
 Plugins choose logical asset identities and exact content boundaries, and
 provide each scan's complete segment-to-asset mapping. They may fingerprint a
@@ -207,9 +207,10 @@ On 2026-11-26 the public GitHub Global Advisory Database queries
 list. The PyPI JSON metadata at `https://pypi.org/pypi/blake3/json` reported
 1.0.11 as latest (same as the lock), released 2026-10-08, not yanked; its
 top-level vulnerabilities list was empty. No advisory was found for the locked
-version in these sources. Repository Dependabot alerts are disabled and were
-not used as evidence; this check cannot establish absence of undisclosed or
-future vulnerabilities.
+version in these sources. At the time of this advisory query, Dependabot alerts
+were disabled and were not used as evidence; repository alerts and automated
+security fixes were enabled and verified on 2026-11-26. This check cannot
+establish absence of undisclosed or future vulnerabilities.
 
 **Not done:** macOS was not measured; completing it requires a maintainer-
 authorized throwaway `macos-26` runner job, which was not created. Native Linux

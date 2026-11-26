@@ -15,9 +15,10 @@ D20 inform source identity/freshness and targeted invalidation only. D14–D15
 verified-original/backup resolution remains separate implementation work.
 
 D160–D165 support keeping this optional hardware benchmark outside routine
-checks. The [job-capacity finding](../../.agents/findings/job-dispatch-capacity-race.md)
-remains relevant to future shared resource accounting; this benchmark is not a
-queue integration, inference workload, or scheduler validation.
+checks. Future hashing must occupy queue resources for its full physical
+duration, as recorded in [source-validity policy](../../docs/source-validity.md#hashing-and-resource-policy).
+This benchmark is not a queue integration, inference workload, or scheduler
+validation.
 
 ## Windows execution (2026-11-25)
 
