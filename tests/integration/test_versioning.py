@@ -56,13 +56,8 @@ def repository_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     shutil.copy2(source / "pyproject.toml", repo)
     shutil.copy2(source / ".gitignore", repo)
     shutil.copy2(source / "uv.lock", repo)
-    (repo / "scripts").mkdir()
-    shutil.copy2(source / "scripts/check_package.py", repo / "scripts")
-    shutil.copytree(
-        source / "src",
-        repo / "src",
-        ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"),
-    )
+    # No package source or build script is needed: packaging is validated
+    # by task build and the release workflow, not by this fixture.
     run(repo, "git", "init", "--template=")
     # Relative to the working tree, this empty hooks directory remains
     # private to each copy. Preserve the config created by git init.
@@ -250,17 +245,6 @@ def test_prepare_release_from_own_tag(
     assert set(run(repo, *ref_args).splitlines()) == {
         f"{published} {target}" for published, target in previous.items()
     }
-
-
-@pytest.mark.portable
-def test_tagged_package_smoke(repo: Path) -> None:
-    # Verify our package configuration and the actual isolated sdist-to-wheel
-    # build/install helper at one release tag, without running release
-    # orchestration again.
-    run(repo, "git", "tag", "v0.1.0rc1")
-    run(repo, sys.executable, "scripts/check_package.py")
-    assert (repo / "dist/muteinous-0.1.0rc1.tar.gz").is_file()
-    assert (repo / "dist/muteinous-0.1.0rc1-py3-none-any.whl").is_file()
 
 
 def test_development_artifacts_have_provenance(

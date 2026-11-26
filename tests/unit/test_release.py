@@ -164,7 +164,7 @@ def artifacts(
     channel: str,
     source_tags: dict[str, str] | None = None,
 ) -> None:
-    """Make synthetic transfer files; real builds are tested in test_versioning."""
+    """Make synthetic transfer files; real builds are validated outside pytest."""
     output.mkdir()
     wheel = output / f"muteinous-{tag[1:]}-py3-none-any.whl"
     sdist = output / f"muteinous-{tag[1:]}.tar.gz"
