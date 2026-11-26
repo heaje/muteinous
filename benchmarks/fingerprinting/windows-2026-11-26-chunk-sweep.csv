@@ -1,0 +1,29 @@
+environment,cache_label,workload,method,chunk_kib,median_mb_s,min_mb_s,max_mb_s,repeats
+Windows 11 Pro build 26300,warm,1 GiB file,read,4,2294,2236,2302,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,16,4624,4374,4658,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,64,5213,4985,5244,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,128,5558,5261,5642,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,256,5792,5667,5893,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,512,5518,4006,5737,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,1024,3434,3365,3486,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,4096,3435,3036,3500,7
+Windows 11 Pro build 26300,warm,1 GiB file,read,16384,3343,3258,3373,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,4,1229,1219,1234,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,16,3278,3180,3318,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,64,5166,5131,5268,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,128,5607,5545,5717,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,256,5870,5780,5904,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,512,5917,5779,6005,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,1024,6055,5961,6150,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,4096,6092,5987,6172,7
+Windows 11 Pro build 26300,warm,1 GiB file,readinto,16384,5990,5633,6047,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,read,16,1426,1377,1450,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,read,64,1413,1389,1423,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,read,256,1295,1237,1306,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,read,1024,224,222,226,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,read,4096,70,68,70,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,readinto,16,1352,1323,1407,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,readinto,64,1603,1456,1627,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,readinto,256,1410,1328,1415,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,readinto,1024,360,355,365,7
+Windows 11 Pro build 26300,warm,2000 x 64 KiB files,readinto,4096,116,114,117,7
