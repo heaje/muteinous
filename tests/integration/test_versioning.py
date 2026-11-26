@@ -177,33 +177,62 @@ def test_release_divergent_tag_is_rejected(
 def test_prepare_release_from_own_tag(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Exercise the real release orchestration and providers once, with
-    # previous prerelease tags on the same SHA. The packaging subprocess is
-    # covered separately by the real tagged package smoke test.
+    # Keep real Git ancestry, local tag cleanup, Commitizen notes and SCM
+    # validation. The proposed version is a provider input: channel command
+    # selection and configured version calculation are covered separately.
     use_synthetic_package_build(monkeypatch)
     sha = run(repo, "git", "rev-parse", "HEAD")
     monkeypatch.setattr(release, "BOOTSTRAP", sha)
     tag = "v0.1.0rc1"
+    real_cz = release.cz
+
+    def cz(*args: str) -> str:
+        if args == (
+            "bump",
+            "--get-next",
+            "--yes",
+            "--prerelease",
+            "rc",
+            "--prerelease-offset",
+            "1",
+        ):
+            return tag[1:]
+        return real_cz(*args)
+
+    monkeypatch.setattr(release, "cz", cz)
     previous = dict.fromkeys(("v0.1.0a1", "v0.1.0b1"), sha)
     for old in previous:
         run(repo, "git", "tag", old, sha)
     checkout = tmp_path / "checkout"
     output = tmp_path / "artifacts"
-    run(tmp_path, "git", "clone", str(repo), str(checkout))
-    run(checkout, "git", "config", "tag.gpgsign", "false")
+    run(
+        tmp_path,
+        "git",
+        "clone",
+        "--config",
+        "tag.gpgsign=false",
+        str(repo),
+        str(checkout),
+    )
     monkeypatch.chdir(checkout)
     release.prepare(sha, "rc", output, remote=False)
     assert release.validate_artifacts(output, sha, "rc") == (tag, previous)
-    assert run(checkout, "git", "rev-parse", tag) == sha
-    assert run(checkout, "git", "tag", "--list") == tag
+    # Read the complete local tag-to-object inventory in one Git command.
+    ref_args = (
+        "git",
+        "for-each-ref",
+        "--format=%(refname:short) %(objectname)",
+        "refs/tags",
+    )
+    assert run(checkout, *ref_args) == f"{tag} {sha}"
     notes = (output / "release-notes.md").read_text("utf-8")
     assert tag in notes
     assert "initial package" in notes
     assert not (checkout / "CHANGELOG.md").exists()
     # Our preparation must not publish tags or alter the source repository.
-    assert set(run(repo, "git", "tag", "--list").splitlines()) == set(previous)
-    for published, target in previous.items():
-        assert run(repo, "git", "rev-parse", published) == target
+    assert set(run(repo, *ref_args).splitlines()) == {
+        f"{published} {target}" for published, target in previous.items()
+    }
 
 
 @pytest.mark.portable
