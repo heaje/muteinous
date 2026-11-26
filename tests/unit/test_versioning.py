@@ -1,6 +1,8 @@
 """Project-owned release boundaries, with no external process execution."""
 
 import json
+import platform
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import Mock
@@ -18,7 +20,7 @@ pytestmark = pytest.mark.portable
 @pytest.fixture(autouse=True)
 def prohibit_subprocesses(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        release.subprocess, "run", Mock(side_effect=AssertionError("external process"))
+        subprocess, "run", Mock(side_effect=AssertionError("external process"))
     )
 
 
@@ -65,7 +67,10 @@ def test_release_history_boundary(monkeypatch: pytest.MonkeyPatch, state: str) -
         "valid": f"{SHA}\n{bootstrap}\n{OTHER_SHA}",
         "invalid": f"{SHA}\n{bootstrap}\n{OTHER_SHA}",
     }[state]
-    responses = {("rev-list", "HEAD"): history, ("rev-parse", "HEAD"): head}
+    responses: dict[tuple[str, ...], str] = {
+        ("rev-list", "HEAD"): history,
+        ("rev-parse", "HEAD"): head,
+    }
 
     def git(*args: str) -> str:
         return responses[args]
@@ -129,8 +134,8 @@ def test_build_records_artifact_provenance(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(release, "validate_source", lambda sha: None)
     monkeypatch.setattr(release, "git", lambda *_: SHA)
-    monkeypatch.setattr(release.platform, "platform", lambda: "test-platform")
-    monkeypatch.setattr(release.platform, "machine", lambda: "test-machine")
+    monkeypatch.setattr(platform, "platform", lambda: "test-platform")
+    monkeypatch.setattr(platform, "machine", lambda: "test-machine")
     (tmp_path / "uv.lock").write_bytes(b"synthetic lock")
     version = tag[1:] if tag else "0.2.0.dev1"
     wheel_name = f"muteinous-{version}-py3-none-any.whl"

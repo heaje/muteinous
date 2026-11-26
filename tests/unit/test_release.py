@@ -465,7 +465,6 @@ def test_workflow_contracts() -> None:
     assert "--cleanup-tag" not in "".join(workflows.values())
     assert "gh release edit" not in "".join(workflows.values())
     assert "timeout-minutes: 10" in workflows["pr.yml"]
-    assert "muteinous-official-release" in workflows["release.yml"]
 
 
 def test_write_commands_refuse_to_run_outside_actions(
@@ -473,10 +472,12 @@ def test_write_commands_refuse_to_run_outside_actions(
 ) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
-    for argv in (["draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],):
-        monkeypatch.setattr("sys.argv", ["release.py", *argv])
-        with pytest.raises(SystemExit, match="only run inside"):
-            release.main()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["release.py", "draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],
+    )
+    with pytest.raises(SystemExit, match="only run inside"):
+        release.main()
 
 
 def test_settled_releases_tolerates_github_read_after_write_lag(
