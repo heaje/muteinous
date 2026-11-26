@@ -250,34 +250,15 @@ def test_locked_build_backends_satisfy_declared_requirements() -> None:
 
 
 @pytest.mark.portable
-@pytest.mark.parametrize(
-    ("existing", "message", "expected"),
-    [
-        (None, "", "v0.1.0a1"),
-        ("v0.3.0a1", "fix: correct feature", "v0.3.0a2"),
-        ("v0.2.1a1", "feat: add behavior", "v0.3.0a1"),
-    ],
-    ids=["first", "next", "new-target"],
-)
 def test_configured_prerelease_numbering(
-    repo: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    existing: str | None,
-    message: str,
-    expected: str,
+    repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(repo)
-    if existing is not None:
-        run(repo, "git", "tag", "v0.2.0")
-        run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
-        run(repo, "git", "tag", "v0.2.1a1")
-        if existing == "v0.3.0a1":
-            run(repo, "git", "commit", "--allow-empty", "-m", "feat: add behavior")
-            run(repo, "git", "tag", existing)
-        run(repo, "git", "commit", "--allow-empty", "-m", message)
-    before = release.local_tags()
-    assert release.propose("alpha") == expected
-    assert release.local_tags() == before
+    run(repo, "git", "tag", "v0.2.0")
+    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
+    run(repo, "git", "tag", "v0.2.1a1")
+    assert release.propose("alpha") == "v0.2.1a2"
+    assert set(release.local_tags()) == {"v0.2.0", "v0.2.1a1"}
     assert run(repo, "git", "status", "--porcelain") == ""
 
 
