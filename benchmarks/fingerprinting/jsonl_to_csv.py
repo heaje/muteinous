@@ -11,10 +11,24 @@ def convert(source, destination):
         json.loads(line) for line in source.read_text(encoding="utf-8").splitlines()
     ]
     run = 0
+    run_storage = {}
     for row in records:
         if row.get("record") == "environment":
             run += 1
+            if row.get("storage"):
+                run_storage[f"run-{run:02d}"] = row["storage"]
         row["run_id"] = f"run-{run:02d}"
+    for row in records:
+        recorded = run_storage.get(row["run_id"], "")
+        row["storage_label_recorded"] = recorded
+        row["storage_label_correction"] = (
+            "The recorded WD_BLACK SN770 label was incorrect for D:. "
+            "Get-Partition -DriveLetter D | Get-Disk and Get-PhysicalDisk "
+            "map D: to SAMSUNG MZVLB1T0HBLR-000L2 NVMe (disk 1, serial "
+            "0025_388C_11C3_A5FF.). The raw JSONL label is preserved."
+            if recorded == "WD_BLACK SN770 1TB NVMe; NTFS"
+            else ""
+        )
     trials = {
         (
             row["run_id"],
