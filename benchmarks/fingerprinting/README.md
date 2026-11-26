@@ -285,8 +285,8 @@ selected or any production dependency is added.**
   — passed.
 - Run-05 used only the three small-asset profiles, five repeats and all three
   algorithms. Its environment record is `run-05`; each profile contains 80
-  trials (240 total). The original 586,203-byte raw JSONL prefix was verified
-  byte-for-byte by SHA-256 before/after append; no earlier record was rewritten.
+  trials (240 total). The pre-run 586,203-byte raw JSONL prefix SHA-256 matched
+  after append; no earlier record was rewritten.
 - Full capture parses as 1,137 JSONL records: 5 environment, 1,038 trial, 75
   order and 19 workload-baseline records. Digest-list equality passed across
   all 21 workload/algorithm pairs and configurations. The CSV has 1,137 rows
@@ -296,7 +296,10 @@ selected or any production dependency is added.**
   convert to the canonical CSV `rss_baseline_bytes` column.
 - `task setup` and `task check` passed at `1c6d1e5` (coordinator-run); setup
   created the ignored project `.venv`, and the worktree stayed clean. After the
-  final correction commit, `task check` was rerun locally and passed (exit 0).
+  correction commit `9ed993b`, `task check` was rerun locally and passed
+  (exit 0): lint and format passed, mypy reported no issues in 60 source files,
+  decision-ID check passed, 521 tests passed in 26.34 seconds, sdist/wheel
+  builds and isolated wheel import passed, and version preview succeeded.
 - `uvx ruff check benchmarks/fingerprinting/benchmark.py benchmarks/fingerprinting/jsonl_to_csv.py`
   — passed after the final correction.
 - `uvx ruff format --check benchmarks/fingerprinting/benchmark.py benchmarks/fingerprinting/jsonl_to_csv.py`
