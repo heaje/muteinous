@@ -82,7 +82,9 @@ def test_session_time_is_reported(
     summary = tmp_path / "summary.md"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
     ticks = iter([10.0, 12.5])
-    monkeypatch.setattr("tests.conftest.time.perf_counter", lambda: next(ticks))
+    monkeypatch.setattr(
+        "tests.conftest.time", SimpleNamespace(perf_counter=lambda: next(ticks))
+    )
     controller_config = config()
     policy = _RequiredTestPolicy(controller_config)
     current = session(pytest.ExitCode.OK)
