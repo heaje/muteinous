@@ -1,8 +1,9 @@
 # Vorbis lossy round-trip evidence
 Status: active for the synthetic stereo/44.1-kHz experiment only
 Last verified: 2026-11-24
-Related: [#20](https://github.com/heaje/muteinous/issues/20), [Ogg Vorbis experiment](../../experiments/native_ogg/README.md)
-Retire/promote when: the isolated experiment is removed or replaced with a production native adapter and independent compatibility evidence.
+Related: [#20](https://github.com/heaje/muteinous/issues/20), [Ogg Vorbis experiment](https://github.com/heaje/muteinous/blob/9ee5d772ac97d0e80f5c3802604f2d77de240ec8/experiments/native_ogg/README.md)
+Code location: the experiment is not on `main`; it lives on branch `poc/native-formats-issue-20` (commit `9ee5d772ac97d0e80f5c3802604f2d77de240ec8`). Paths, scripts and tests below refer to that ref.
+Retire/promote when: a production native adapter replaces the experiment with independent compatibility evidence, or the PoC branch is deleted.
 
 ## Finding and limitations
 
@@ -22,7 +23,7 @@ The parser is structural and does not decode setup/audio packets. Earlier focuse
 
 ## Reproduction / evidence
 
-From the repository root on the verified Windows environment:
+From the repository root on the verified Windows environment, after checking out `poc/native-formats-issue-20` (for example in a separate worktree):
 
 ~~~powershell
 $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path

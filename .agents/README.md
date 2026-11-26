@@ -21,7 +21,7 @@ For a focused delegated investigation or correction, follow the [scoped discover
 | Live task ownership, progress and acceptance | GitHub Issue / PR | Per task; retained by GitHub |
 | Incomplete implementation handoff | Issue / PR; optionally a branch-local `handoffs/<task>.md` ([handoff guidance](handoffs/README.md)) | Until work resumes/completes |
 | Reusable, nonobvious technical discovery | `findings/<topic>.md` ([finding guidance](findings/README.md)) | Until incorporated, disproved or irrelevant |
-| Cross-task next steps and blockers | [`current-state.md`](current-state.md) | Reconciled periodically |
+| Cross-task next steps, blockers and deferred verification | [`current-state.md`](current-state.md) | Reconciled periodically |
 | Reusable agent workflow | [`workflows/`](workflows/README.md) | Permanent |
 | Enduring setup, tooling or testing procedure | [`docs/development.md`](../docs/development.md); [`docs/testing.md`](../docs/testing.md) | Permanent |
 
@@ -69,4 +69,4 @@ Before handing off, push a checkpoint commit if safe and possible; uncommitted l
 
 ## Coordination and cleanup
 
-The coordinator updates [`current-state.md`](current-state.md) after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. A PR that fixes a documented workaround should retire/delete its temporary finding, or mark it resolved/superseded with a link to the fix, so stale advice is not left active. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the temporary notes small; permanent workflows are maintained separately; **a discovery is valuable, not its chronological investigation log**.
+The coordinator updates [`current-state.md`](current-state.md) after substantial merges/milestone reviews, not after each agent action; avoid concurrent edit conflicts. At those reviews, verify Issue/PR statuses and the latest branch evidence. Transfer externally blocked verification to the snapshot before closing implementation issues under the [work-unit policy](../docs/development.md#work-unit-and-review-policy); retain exact source links and do not mark unrun checks as passed. A PR that fixes a documented workaround should retire/delete its temporary finding, or mark it resolved/superseded with a link to the fix, so stale advice is not left active. Promote enduring fixes into permanent docs, close the corresponding Issue or PR, and delete obsolete findings/handoffs. Keep the temporary notes small; permanent workflows are maintained separately; **a discovery is valuable, not its chronological investigation log**.
