@@ -1,0 +1,96 @@
+name: Temporary M2.0 ASR dependency probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  dependency-probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'spike/issue-50-asr-dependency-probe'
+    runs-on: windows-2025
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        candidate: [faster-whisper, winml]
+    name: ASR dependency probe (${{ matrix.candidate }})
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          version: '0.13.9'
+          enable-cache: false
+      - name: Resolve and install binary wheels in disposable environment
+        shell: pwsh
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+          HF_HUB_OFFLINE: '1'
+          TRANSFORMERS_OFFLINE: '1'
+          HF_HUB_DISABLE_TELEMETRY: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $envDir = Join-Path $env:RUNNER_TEMP "asr-$env:CANDIDATE"
+          $python = Join-Path $envDir 'Scripts/python.exe'
+          Write-Host "SOURCE SHA: $env:GITHUB_SHA; CANDIDATE: $env:CANDIDATE"
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, BuildNumber, OSArchitecture | Format-List
+          Get-CimInstance Win32_ComputerSystem | Select-Object NumberOfLogicalProcessors, TotalPhysicalMemory | Format-List
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion, PNPDeviceID | Format-List
+          uv --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv python install 3.14.10
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv venv --python 3.14.10 --managed-python $envDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $python -VV
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $baselineBytes = (Get-ChildItem $envDir -Recurse -File | Measure-Object Length -Sum).Sum
+          $options = @('--python', $python, '--only-binary', ':all:')
+          if ($env:CANDIDATE -eq 'faster-whisper') {
+            $requirements = @('faster-whisper>=1.2.1')
+          } else {
+            $requirements = @('onnxruntime-windowsml>=1.30', 'onnxruntime-genai-winml>=0.17.1')
+            # Reproduce the historical experimental substitution, not a production dependency decision.
+            $override = Join-Path $env:RUNNER_TEMP 'asr-winml-override.txt'
+            Set-Content $override "onnxruntime>=1.14; sys_platform != 'win32'"
+            $options += @('--override', $override)
+            Write-Host "EXPERIMENTAL OVERRIDE: $(Get-Content $override)"
+          }
+          Write-Host "REQUIREMENTS: $($requirements -join ', ')"
+          uv pip install @options --dry-run @requirements
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip install @options -v @requirements
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip freeze --python $python
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip check --python $python
+          $checkExit = $LASTEXITCODE
+          Write-Host "UNMODIFIED METADATA CHECK EXIT: $checkExit (historical override may cause a mismatch)"
+          $installedBytes = (Get-ChildItem $envDir -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host "ENVIRONMENT LOGICAL FILE BYTES before=$baselineBytes after=$installedBytes delta=$($installedBytes - $baselineBytes)"
+          @'
+          import importlib.metadata as md
+          from pathlib import Path
+
+          for dist in sorted(md.distributions(), key=lambda d: d.metadata["Name"].lower()):
+              files = [Path(dist.locate_file(f)) for f in (dist.files or ())]
+              size = sum(p.stat().st_size for p in files if p.is_file())
+              native = [p.name for p in files if p.suffix.lower() in {".dll", ".pyd"}]
+              print(f"DIST {dist.metadata['Name']}=={dist.version} record_file_bytes={size} native={native}")
+          '@ | & $python -
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($env:CANDIDATE -eq 'faster-whisper') {
+            & $python -c "import faster_whisper, ctranslate2; print('imports succeeded'); print('CPU compute types:', ctranslate2.get_supported_compute_types('cpu')); print('CUDA device count:', ctranslate2.get_cuda_device_count())"
+          } else {
+            & $python -c "import onnxruntime as ort; import onnxruntime_genai as genai; print('imports succeeded'); print('ORT version:', ort.__version__); print('available providers:', ort.get_available_providers()); print('all known providers:', ort.get_all_providers()); print('GenAI version:', getattr(genai, '__version__', 'not exposed'))"
+          }
+          $probeExit = $LASTEXITCODE
+          Write-Host "IMPORT AND ENUMERATION EXIT: $probeExit"
+          Write-Host 'No model artifacts downloaded or opened; no inference or execution-provider session exercised.'
+          if ($probeExit -ne 0) { exit $probeExit }
+          if ($checkExit -ne 0) { exit $checkExit }
