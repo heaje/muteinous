@@ -89,6 +89,75 @@ def test_propose_rejects_wrong_channel_from_provider(
         release.propose("alpha")
 
 
+@pytest.mark.parametrize(
+    ("channel", "tag"),
+    [
+        ("alpha", "v0.2.0a1"),
+        ("beta", "v0.2.0b1"),
+        ("rc", "v0.2.0rc1"),
+        ("stable", "v0.2.0"),
+    ],
+)
+def test_prepare_passes_tag_and_provenance_to_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    tag: str,
+) -> None:
+    # Verify our channel forwarding, source inventory and local-only tagging
+    # without running Git or version calculation for each channel.
+    previous = {"v0.1.0": OTHER_SHA}
+    output = tmp_path / "artifacts"
+    calls: list[tuple[str, ...]] = []
+
+    def git(*args: str) -> str:
+        calls.append(args)
+        return ""
+
+    def propose(requested: str) -> str:
+        assert requested == channel
+        return tag
+
+    def notes(candidate: str, tags: list[str]) -> str:
+        assert candidate == tag
+        assert tags == list(previous)
+        return "Release notes"
+
+    def build(
+        sha: str,
+        destination: Path,
+        candidate: str,
+        *,
+        source_tags: dict[str, str],
+        release_notes: str,
+        channel: str,
+    ) -> None:
+        assert (sha, destination, candidate) == (SHA, output, tag)
+        assert source_tags == previous
+        assert release_notes == "Release notes"
+        assert channel == requested_channel
+        assert ("tag", tag, SHA) in calls
+        assert ("checkout", "--detach", tag) in calls
+        calls.append(("build",))
+
+    requested_channel = channel
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "check_history", lambda: None)
+    monkeypatch.setattr(release, "local_tags", lambda: dict(previous))
+    monkeypatch.setattr(release, "remote_tags", lambda: dict(previous))
+    monkeypatch.setattr(release, "propose", propose)
+    monkeypatch.setattr(release, "notes", notes)
+    monkeypatch.setattr(release, "git", git)
+    monkeypatch.setattr(release, "build", build)
+    release.prepare(SHA, channel, output)
+    assert calls == [
+        ("tag", "--points-at", SHA),
+        ("tag", tag, SHA),
+        ("checkout", "--detach", tag),
+        ("build",),
+    ]
+
+
 def artifacts(
     output: Path,
     tag: str,

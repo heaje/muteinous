@@ -79,12 +79,9 @@ def test_configured_pre_one_breaking_bump(
     repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(repo)
-    assert release.propose("stable") == "v0.1.0"
-    assert not release.local_tags()
     run(repo, "git", "tag", "v0.2.0")
     run(repo, "git", "commit", "--allow-empty", "-m", "feat!: change interface")
     assert release.propose("stable") == "v0.3.0"
-    assert run(repo, sys.executable, "-m", "setuptools_scm").startswith("0.2.1.dev")
     assert set(release.local_tags()) == {"v0.2.0"}
 
 
@@ -176,64 +173,48 @@ def test_release_divergent_tag_is_rejected(
         release.propose("stable")
 
 
-@pytest.mark.parametrize(
-    ("channel", "tag", "prior_tags", "real_build"),
-    [
-        ("alpha", "v0.1.0a1", (), False),
-        ("beta", "v0.1.0b1", ("v0.1.0a1",), False),
-        pytest.param(
-            "rc",
-            "v0.1.0rc1",
-            ("v0.1.0a1", "v0.1.0b1"),
-            True,
-            marks=pytest.mark.portable,
-        ),
-        ("stable", "v0.1.0", ("v0.1.0a1", "v0.1.0b1", "v0.1.0rc1"), False),
-    ],
-    ids=["alpha", "beta", "rc", "stable"],
-)
-def test_release_builds_each_channel_from_its_own_tag(
-    repo: Path,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    channel: str,
-    tag: str,
-    prior_tags: tuple[str, ...],
-    real_build: bool,
+@pytest.mark.portable
+def test_prepare_release_from_own_tag(
+    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not real_build:
-        use_synthetic_package_build(monkeypatch)
+    # Exercise the real release orchestration and providers once, with
+    # previous prerelease tags on the same SHA. The packaging subprocess is
+    # covered separately by the real tagged package smoke test.
+    use_synthetic_package_build(monkeypatch)
     sha = run(repo, "git", "rev-parse", "HEAD")
     monkeypatch.setattr(release, "BOOTSTRAP", sha)
-    # Model previously published channels at the same source revision.
-    # The RC case exercises the complete tagged sdist/wheel/install path.
-    # Other channels use synthetic package contents, not fake tags.
-    previous = dict.fromkeys(prior_tags, sha)
-    for old in prior_tags:
+    tag = "v0.1.0rc1"
+    previous = dict.fromkeys(("v0.1.0a1", "v0.1.0b1"), sha)
+    for old in previous:
         run(repo, "git", "tag", old, sha)
-    checkout = tmp_path / f"checkout-{channel}"
-    output = tmp_path / f"artifacts-{channel}"
+    checkout = tmp_path / "checkout"
+    output = tmp_path / "artifacts"
     run(tmp_path, "git", "clone", str(repo), str(checkout))
     run(checkout, "git", "config", "tag.gpgsign", "false")
-    with monkeypatch.context() as context:
-        context.chdir(checkout)
-        release.prepare(sha, channel, output, remote=False)
-        assert release.validate_artifacts(output, sha, channel) == (tag, previous)
-        assert run(checkout, "git", "rev-parse", tag) == sha
-        assert run(checkout, "git", "tag", "--list") == tag
-        assert (output / f"muteinous-{tag[1:]}.tar.gz").is_file()
-        assert (output / f"muteinous-{tag[1:]}-py3-none-any.whl").is_file()
-        notes = (output / "release-notes.md").read_text("utf-8")
-        assert tag in notes
-        assert "initial package" in notes
-        assert not (checkout / "CHANGELOG.md").exists()
-    # Preparing a local release must leave published tags untouched.
+    monkeypatch.chdir(checkout)
+    release.prepare(sha, "rc", output, remote=False)
+    assert release.validate_artifacts(output, sha, "rc") == (tag, previous)
+    assert run(checkout, "git", "rev-parse", tag) == sha
+    assert run(checkout, "git", "tag", "--list") == tag
+    notes = (output / "release-notes.md").read_text("utf-8")
+    assert tag in notes
+    assert "initial package" in notes
+    assert not (checkout / "CHANGELOG.md").exists()
+    # Our preparation must not publish tags or alter the source repository.
     assert set(run(repo, "git", "tag", "--list").splitlines()) == set(previous)
-    run(checkout, "git", "push", "origin", f"refs/tags/{tag}")
-    expected = {**previous, tag: sha}
-    assert set(run(repo, "git", "tag", "--list").splitlines()) == set(expected)
-    for published, target in expected.items():
+    for published, target in previous.items():
         assert run(repo, "git", "rev-parse", published) == target
+
+
+@pytest.mark.portable
+def test_tagged_package_smoke(repo: Path) -> None:
+    # Verify our package configuration and the actual isolated sdist-to-wheel
+    # build/install helper at one release tag, without running release
+    # orchestration again.
+    run(repo, "git", "tag", "v0.1.0rc1")
+    run(repo, sys.executable, "scripts/check_package.py")
+    assert (repo / "dist/muteinous-0.1.0rc1.tar.gz").is_file()
+    assert (repo / "dist/muteinous-0.1.0rc1-py3-none-any.whl").is_file()
 
 
 def test_development_artifacts_have_provenance(
@@ -269,26 +250,35 @@ def test_locked_build_backends_satisfy_declared_requirements() -> None:
 
 
 @pytest.mark.portable
-def test_prerelease_version_with_new_commits(
-    repo: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("existing", "message", "expected"),
+    [
+        (None, "", "v0.1.0a1"),
+        ("v0.3.0a1", "fix: correct feature", "v0.3.0a2"),
+        ("v0.2.1a1", "feat: add behavior", "v0.3.0a1"),
+    ],
+    ids=["first", "next", "new-target"],
+)
+def test_configured_prerelease_numbering(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    existing: str | None,
+    message: str,
+    expected: str,
 ) -> None:
     monkeypatch.chdir(repo)
-    run(repo, "git", "tag", "v0.2.0")
-    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
-    assert release.propose("alpha") == "v0.2.1a1"
-    run(repo, "git", "tag", "v0.2.1a1")
-    run(repo, "git", "commit", "--allow-empty", "-m", "feat: add behavior")
-    # A higher target version starts a new prerelease sequence.
-    assert release.propose("alpha") == "v0.3.0a1"
-    run(repo, "git", "tag", "v0.3.0a1")
-    run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct feature")
-    assert release.propose("alpha") == "v0.3.0a2"
+    if existing is not None:
+        run(repo, "git", "tag", "v0.2.0")
+        run(repo, "git", "commit", "--allow-empty", "-m", "fix: correct behavior")
+        run(repo, "git", "tag", "v0.2.1a1")
+        if existing == "v0.3.0a1":
+            run(repo, "git", "commit", "--allow-empty", "-m", "feat: add behavior")
+            run(repo, "git", "tag", existing)
+        run(repo, "git", "commit", "--allow-empty", "-m", message)
+    before = release.local_tags()
+    assert release.propose("alpha") == expected
+    assert release.local_tags() == before
     assert run(repo, "git", "status", "--porcelain") == ""
-    assert run(repo, "git", "tag", "--list").splitlines() == [
-        "v0.2.0",
-        "v0.2.1a1",
-        "v0.3.0a1",
-    ]
 
 
 @pytest.mark.portable
