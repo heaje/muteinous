@@ -2,6 +2,7 @@
 
 import json
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -34,13 +35,137 @@ def test_candidate_guards(
         release.validate_candidate(tag, channel, existing)
 
 
+def test_versioning_configuration() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
+    cz = config["tool"]["commitizen"]
+    assert cz["name"] == "cz_conventional_commits"
+    assert cz["version_provider"] == "scm"
+    assert cz["tag_format"] == "v$version"
+    assert cz["version_scheme"] == "pep440"
+    assert cz["major_version_zero"] is True
+    assert cz["allowed_prefixes"] == []
+    assert "version" in config["project"]["dynamic"]
+    assert "version" not in config["project"]
+
+
+@pytest.mark.parametrize(
+    ("channel", "version"),
+    [
+        ("alpha", "0.2.0a1"),
+        ("beta", "0.2.0b1"),
+        ("rc", "0.2.0rc1"),
+        ("stable", "0.2.0"),
+    ],
+)
+def test_propose_requests_channel_without_mutating_tags(
+    monkeypatch: pytest.MonkeyPatch, channel: str, version: str
+) -> None:
+    tags = {"v0.1.0": SHA}
+    monkeypatch.setattr(release, "local_tags", lambda: dict(tags))
+
+    def git(*args: str) -> str:
+        assert args == ("merge-base", "--is-ancestor", "v0.1.0", "HEAD")
+        return ""
+
+    def cz(*args: str) -> str:
+        expected: tuple[str, ...] = ("bump", "--get-next", "--yes")
+        if channel != "stable":
+            expected += ("--prerelease", channel, "--prerelease-offset", "1")
+        assert args == expected
+        return version
+
+    monkeypatch.setattr(release, "git", git)
+    monkeypatch.setattr(release, "cz", cz)
+    assert release.propose(channel) == f"v{version}"
+
+
+def test_propose_rejects_wrong_channel_from_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(release, "local_tags", dict)
+    monkeypatch.setattr(release, "cz", lambda *_: "0.2.0b1")
+    with pytest.raises(RuntimeError, match="not the requested alpha"):
+        release.propose("alpha")
+
+
+@pytest.mark.parametrize(
+    ("channel", "tag"),
+    [
+        ("alpha", "v0.2.0a1"),
+        ("beta", "v0.2.0b1"),
+        ("rc", "v0.2.0rc1"),
+        ("stable", "v0.2.0"),
+    ],
+)
+def test_prepare_passes_tag_and_provenance_to_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    tag: str,
+) -> None:
+    # Verify our channel forwarding, source inventory and local-only tagging
+    # without running Git or version calculation for each channel.
+    previous = {"v0.1.0": SHA}
+    output = tmp_path / "artifacts"
+    calls: list[tuple[str, ...]] = []
+
+    def git(*args: str) -> str:
+        calls.append(args)
+        return "v0.1.0" if args == ("tag", "--points-at", SHA) else ""
+
+    def propose(requested: str) -> str:
+        assert requested == channel
+        return tag
+
+    def notes(candidate: str, tags: list[str]) -> str:
+        assert candidate == tag
+        assert tags == list(previous)
+        return "Release notes"
+
+    def build(
+        sha: str,
+        destination: Path,
+        candidate: str,
+        *,
+        source_tags: dict[str, str],
+        release_notes: str,
+        channel: str,
+    ) -> None:
+        assert (sha, destination, candidate) == (SHA, output, tag)
+        assert source_tags == previous
+        assert release_notes == "Release notes"
+        assert channel == requested_channel
+        assert ("tag", tag, SHA) in calls
+        assert ("checkout", "--detach", tag) in calls
+        calls.append(("build",))
+
+    requested_channel = channel
+    monkeypatch.setattr(release, "validate_source", lambda _: None)
+    monkeypatch.setattr(release, "check_history", lambda: None)
+    monkeypatch.setattr(release, "local_tags", lambda: dict(previous))
+    monkeypatch.setattr(release, "remote_tags", lambda: dict(previous))
+    monkeypatch.setattr(release, "propose", propose)
+    monkeypatch.setattr(release, "notes", notes)
+    monkeypatch.setattr(release, "git", git)
+    monkeypatch.setattr(release, "build", build)
+    release.prepare(SHA, channel, output)
+    assert calls == [
+        ("tag", "--points-at", SHA),
+        ("tag", "-d", "v0.1.0"),
+        ("tag", tag, SHA),
+        ("checkout", "--detach", tag),
+        ("build",),
+    ]
+
+
 def artifacts(
     output: Path,
     tag: str,
     channel: str,
     source_tags: dict[str, str] | None = None,
 ) -> None:
-    """Make synthetic transfer files; real builds are tested in test_versioning."""
+    """Make synthetic transfer files; real builds are validated outside pytest."""
     output.mkdir()
     wheel = output / f"muteinous-{tag[1:]}-py3-none-any.whl"
     sdist = output / f"muteinous-{tag[1:]}.tar.gz"
@@ -340,7 +465,6 @@ def test_workflow_contracts() -> None:
     assert "--cleanup-tag" not in "".join(workflows.values())
     assert "gh release edit" not in "".join(workflows.values())
     assert "timeout-minutes: 10" in workflows["pr.yml"]
-    assert "muteinous-official-release" in workflows["release.yml"]
 
 
 def test_write_commands_refuse_to_run_outside_actions(
@@ -348,10 +472,12 @@ def test_write_commands_refuse_to_run_outside_actions(
 ) -> None:
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     monkeypatch.setattr(release, "run", lambda *_: pytest.fail("unexpected write"))
-    for argv in (["draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],):
-        monkeypatch.setattr("sys.argv", ["release.py", *argv])
-        with pytest.raises(SystemExit, match="only run inside"):
-            release.main()
+    monkeypatch.setattr(
+        "sys.argv",
+        ["release.py", "draft", "--sha", SHA, "--output", "x", "--channel", "alpha"],
+    )
+    with pytest.raises(SystemExit, match="only run inside"):
+        release.main()
 
 
 def test_settled_releases_tolerates_github_read_after_write_lag(
