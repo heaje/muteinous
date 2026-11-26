@@ -26,12 +26,28 @@ def run(args: list[str]) -> bytes:
 
 
 def decode(sox: str, path: Path) -> bytes:
-    for flag, expected in (("-r", INFO.rate), ("-c", INFO.channels), ("-s", INFO.frames)):
+    for flag, expected in (
+        ("-r", INFO.rate),
+        ("-c", INFO.channels),
+        ("-s", INFO.frames),
+    ):
         if int(run([sox, "--i", flag, str(path)])) != expected:
             raise AssertionError(f"SoX {flag} mismatch for {path.name}")
-    result = run([
-        sox, "-D", str(path), "-t", "raw", "-e", "floating-point", "-b", "32", "-L", "-",
-    ])
+    result = run(
+        [
+            sox,
+            "-D",
+            str(path),
+            "-t",
+            "raw",
+            "-e",
+            "floating-point",
+            "-b",
+            "32",
+            "-L",
+            "-",
+        ]
+    )
     if len(result) != INFO.frames * INFO.frame_bytes:
         raise AssertionError("independent decoded frame count mismatch")
     return result
@@ -47,15 +63,43 @@ def max_difference(first: bytes, second: bytes) -> float:
         if not math.isfinite(a) or not math.isfinite(b):
             raise AssertionError("nonfinite decoded sample")
         differences.append(abs(a - b))
-    return max(differences)
+    return float(max(differences))
+
+
+def quantized_zero_count(sox_pcm: bytes, ffmpeg_pcm: bytes) -> int:
+    if len(sox_pcm) != len(ffmpeg_pcm):
+        raise AssertionError("cross-decoder frame count mismatch")
+    return sum(
+        sox_sample == 0.0 and ffmpeg_sample != 0.0
+        for (sox_sample,), (ffmpeg_sample,) in zip(
+            struct.iter_unpack("<f", sox_pcm),
+            struct.iter_unpack("<f", ffmpeg_pcm),
+            strict=True,
+        )
+    )
 
 
 def ffmpeg_native(ffmpeg: str, path: Path) -> bytes:
     # Explicitly choose the native decoder, not the libvorbis wrapper.
-    return run([
-        ffmpeg, "-v", "error", "-xerror", "-c:a", "vorbis", "-i", str(path),
-        "-map", "0:a:0", "-c:a", "pcm_f32le", "-f", "f32le", "-",
-    ])
+    return run(
+        [
+            ffmpeg,
+            "-v",
+            "error",
+            "-xerror",
+            "-c:a",
+            "vorbis",
+            "-i",
+            str(path),
+            "-map",
+            "0:a:0",
+            "-c:a",
+            "pcm_f32le",
+            "-f",
+            "f32le",
+            "-",
+        ]
+    )
 
 
 def main() -> None:
@@ -78,13 +122,24 @@ def main() -> None:
         def encoder(asset: str, pcm: Path, native: Path, info: PCMFormat) -> None:
             source = metadata[asset]
             tools.encode_vorbis(
-                asset, pcm, native, info,
-                nominal_bitrate=source.nominal_bitrate, comments=source.comments,
+                asset,
+                pcm,
+                native,
+                info,
+                nominal_bitrate=source.nominal_bitrate,
+                comments=source.comments,
             )
 
         staged = prepare_ogg(
-            stage, assets, originals, _edits(), decoder=tools.decode, encoder=encoder,
-            info=INFO, storage=WaveStorage(), quality=QUALITY,
+            stage,
+            assets,
+            originals,
+            _edits(),
+            decoder=tools.decode,
+            encoder=encoder,
+            info=INFO,
+            storage=WaveStorage(),
+            quality=QUALITY,
         )
         if set(staged) != set(_ranges()) or snapshot(root) != before:
             raise AssertionError("grouping or scratch/source integrity mismatch")
@@ -97,15 +152,29 @@ def main() -> None:
             padded = _padded_ranges()[asset]
             requested = _ranges()[asset]
             verify_lossy_reconstruction(
-                asset, original, _expected(original, padded), rebuilt, padded, INFO,
-                policy=QUALITY, requested_ranges=requested,
+                asset,
+                original,
+                _expected(original, padded),
+                rebuilt,
+                padded,
+                INFO,
+                policy=QUALITY,
+                requested_ranges=requested,
             )
             metrics = measure_lossy_effects(
-                original, rebuilt, padded, INFO, policy=QUALITY, requested_ranges=requested
+                original,
+                rebuilt,
+                padded,
+                INFO,
+                policy=QUALITY,
+                requested_ranges=requested,
             )
             ff_source = ffmpeg_native(ffmpeg, source_path)
             if ff_source != originals[asset]:
-                raise AssertionError("FFmpeg source decode differs from explicit native decoder")
+                raise AssertionError(
+                    "FFmpeg source decode differs from explicit native decoder"
+                )
+            source_zero_mismatches = quantized_zero_count(original, ff_source)
             ff_rebuilt = ffmpeg_native(ffmpeg, rebuilt_path)
             outside = metrics.outside_regions
             guard = metrics.guard_regions
@@ -116,7 +185,8 @@ def main() -> None:
                 f"guard SNR min={min(r.snr_db for r in guard):.6f}, "
                 f"max error={max(r.maximum_absolute_error for r in guard):.9g}; "
                 f"cross-decoder max source={max_difference(original, ff_source):.9g}, "
-                f"rebuilt={max_difference(rebuilt, ff_rebuilt):.9g}"
+                f"rebuilt={max_difference(rebuilt, ff_rebuilt):.9g}; "
+                f"SoX-zero/FFmpeg-nonzero source samples={source_zero_mismatches}"
             )
             rebuilt_path.unlink()
         if snapshot(root) != before:

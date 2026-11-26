@@ -32,6 +32,20 @@ The required deterministic checks cover only the safety-critical shared-editor b
 & .venv/Scripts/python.exe -m pytest tests/unit/test_native_ast.py tests/integration/test_native_ast_prepare.py -q
 ~~~
 
+## Independent AST decoder verification
+
+The closure-gate experiment [`independent_decode.py`](independent_decode.py) sends both original synthetic AST files and their edited reconstructions through the separate `vgmstream-cli` AST decoder. It checks vgmstream-reported sample rate, channel count, total samples and loop points, then decodes with looping disabled and requires WAV PCM16 bytes to match the known original/edited PCM exactly. The controlled edit includes two touching/overlapping ranges in asset `a` and a separate range in `b`; the untouched source is also decoded and checked. The normal FFmpeg/shared-editor path still prepares the edited AST, but FFmpeg does not validate the output samples in this independent check.
+
+On Windows 11 build `10.0.26300`, CPython `3.14.10`, FFmpeg `n7.1.5-12-g1fdbca85aa-20260731`, and official vgmstream release `r2168` (`vgmstream-cli`, 2026-10-25), the independent decoder passed for both original and edited `a` and `b`: 32,000 Hz, stereo, 8,192 samples, loop frames 1,024–6,144, exact PCM16 sample bytes. The official `vgmstream-win64.zip` had SHA-256 `692d45070852a35c1fa42726aa3c9de528e44eec925d37d99b1074256b99a229`; the release did not publish a checksum asset. vgmstream is ISC-licensed; the release archive includes third-party components, whose licenses need separate review before redistribution. This validates only the stated AST profile, not arbitrary AST variants or game-loader behavior.
+
+Download/extract the official release to its own new empty temporary directory, then pass the CLI path as an argument (do not place it in the repository):
+
+~~~powershell
+$env:PYTHONPATH = "src;."
+& .venv/Scripts/python.exe -m experiments.native_ast.independent_decode `
+  --vgmstream-cli C:/path/to/private-vgmstream-dir/vgmstream-cli.exe
+~~~
+
 Parser/header/padding/partition matrices and FFmpeg-wrapper timeout/output-bound tests are not routine required coverage. The manual probe retains malformed, unsupported, noncanonical, and zero-frame AST negative controls; the manual shared-edit script exercises native-stage refusals and real `-n` encoder failures. The manual probe's wrapper negative controls use Python child processes rather than FFmpeg and exercise bounded tail reads/diagnostics and best-effort Windows timeout termination.
 
 Observed manual-script output on this Windows environment (including the retained malformed, unsupported, noncanonical, and zero-frame refusal controls):

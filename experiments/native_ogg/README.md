@@ -163,6 +163,26 @@ Routine required tests cover only safety-critical shared-editor integration beha
 & .venv/Scripts/python.exe -m pytest tests/integration/test_native_ogg_prepare.py -q
 ~~~
 
+## Fresh independent-decoder and Linux linkage evidence
+
+On Windows 11 build `10.0.26300`, CPython `3.14.10`, FFmpeg `n7.1.5-12-g1fdbca85aa-20260731` and SoX `14.4.2`, the current `independent_decode` probe completed all four edited synthetic assets. FFmpeg explicitly selects its native Vorbis decoder using `-c:a vorbis`; the `vorbis` and `libvorbis` entries are distinct in FFmpeg's decoder list. SoX/Xiph decoded the source and rebuilt Ogg files independently. The lowest measured outside-region SNR was 30.948910 dB and the largest outside-region error was 0.0354919434; guard minimum SNR was 25.690633 dB and maximum error 0.0233154297. Every requested interval met the `0.0005` peak gate (largest was the start-edge `0.00001420`). These remain synthetic/build-specific results against the existing 24 dB/0.08 outside, 18 dB/0.05 guard and 0.0005 requested-peak limits.
+
+SoX identifies its Vorbis reader as **16-bit precision**. Compared with FFmpeg native float decoding, the maximum observed source/rebuilt cross-decoder sample difference was `1.53183937e-5` (close to, but slightly above, the nominal 16-bit half-step `1/65536 ≈ 1.52587891e-5`; this is a cross-decoder difference, not a pure quantizer bound). Across the four source fixtures, SoX returned zero for 10, 8, 6 and 6 samples respectively where FFmpeg's float decoder returned a nonzero value. Thus SoX's `0` does not prove exact zero in the float decoder. Its observed error remained below the fidelity thresholds by a wide margin, but the margin/thresholds do not establish perceptual transparency or universal decoder agreement.
+
+The WSL check used Ubuntu `26.04.1 LTS`, FFmpeg `8.0.1-3ubuntu2`, SoX_ng `14.7.0.9+ds1-1`, libvorbis/libvorbisfile `1.3.7-3build2`, and libogg `1.3.6-2` (`libsox-fmt-all` installed). Ubuntu's SoX_ng plugin is named `libsox_ng_fmt_vorbis.so`, rather than the classic SoX `libsox_fmt_vorbis.so`. `ldd /usr/lib/x86_64-linux-gnu/sox_ng/libsox_ng_fmt_vorbis.so` showed `libvorbisfile.so.3`, `libvorbis.so.0` and `libogg.so.0`; it did **not** show `libavcodec`. The FFmpeg native Vorbis decoder was separately present. This establishes decoder-library independence for this Linux SoX_ng plugin; it does not establish compatibility across arbitrary builds.
+
+Exact reproduction commands from the repository root:
+
+~~~powershell
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+  [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path
+$env:PYTHONPATH = "src;."
+& .venv/Scripts/python.exe -m experiments.native_ogg.independent_decode
+wsl.exe -d Ubuntu -- ldd /usr/lib/x86_64-linux-gnu/sox_ng/libsox_ng_fmt_vorbis.so
+~~~
+
+Windows FFmpeg was the BtbN GPL static WinGet build (`BtbN.FFmpeg.GPL.7.1`); do not redistribute it with the application. SoX's licensing is GPL-2+ or LGPL-2.1+ across files/builds; Xiph Vorbis is BSD-3-Clause. The Ubuntu package copyright files govern that installation. These external tools are opt-in experiment dependencies, not Python/runtime dependencies or a packaging recommendation.
+
 Required pytest coverage is deliberately limited to the safety-critical shared-editor boundary: grouped float scratch editing with fake codecs, segment-bounded padding with neighboring frames unchanged, one rebuild per affected asset and no untouched-asset rebuild, two representative pre-encode edit-completeness refusals, requested-edge leakage refusal plus a correctly padded passing outcome, and stage-typed all-or-nothing refusal/cleanup in both asset orders (including corrupt/unsupported sources and rebuilt-native validation).
 
 The Ogg parser accept/reject matrix, fixture-writer/CRC tests, packet-placement and metadata unit tests, wrapper timeout/output-bound tests, and outside/guard SNR or maximum-error refusal matrices are not part of required tests. Parser, native-validator, wrapper and decoded-tolerance behavior is evidenced by the manual real-FFmpeg scripts and their negative controls/measurements, not routine pytest coverage. The scripts demonstrate real capability preflight, actual libvorbis round trips, source CRC and unsupported-profile refusals, `-n` encode failure, requested-range measurements, and untouched-source/scratch safety. The AST manual probe also runs Python-backed wrapper controls for bounded tail reads/diagnostics and best-effort Windows timeout termination. Prior focused negative-control runs are author-reported historical evidence, not reproducible from artifacts in this branch; they are not ongoing required regression tests.

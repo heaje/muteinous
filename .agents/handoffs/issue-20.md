@@ -48,3 +48,76 @@ All four passed independent decoder fidelity, 66150 frames, stereo, original rat
 ## Coordinator review
 
 Reproduce in clean pinned checkout, run full repository checks including tests and identity probes; independent review/fix/validation cycle remains open. Verify probe code style/type checking in locked environment and decoder independence/precision. Reconcile main findings only after acceptance; preserve distinction between exact AST byte preservation and bounded lossy Ogg feasibility; no external AST decoder run. Approved priority is highest-fidelity compatible reconstruction preserving unaffected encoded bytes and avoiding additional loss wherever possible. No production recommendation for lossy re-encoding, no game compatibility or loader claim. Issue remains open.
+
+## Resumed verification checkpoint (2026-11-25)
+
+Fresh evidence below supersedes earlier handoff statements that vgmstream had not been executed and that locked Windows checks were unavailable. The earlier Debian 13/Python 3.13 report above remains historical and is not merged into these measurements. This checkpoint was executed on the requested worktree at starting SHA `8de700a3ee7234a03e0b3bfbb1fcfe6e2e72f7ea`; no push, main merge, game write, proprietary asset or loader test occurred.
+
+### Environment and tools
+
+- Windows 11 Pro build `10.0.26300`; `task setup` succeeded. CPython `3.14.10` in `.venv`; Task `3.54.0`; uv `0.13.9`; Ruff `0.17.6`; mypy `2.4.1`; pytest `9.2.0`; pytest-xdist `3.8.0`.
+- FFmpeg `n7.1.5-12-g1fdbca85aa-20260731`, WinGet `BtbN.FFmpeg.GPL.7.1`, GPL static build (`--enable-gpl --enable-version3`). FFmpeg project license is LGPL by default with GPL-licensed components/build options; this tested build is GPL-configured and is not recommended for redistribution with the application.
+- Windows SoX `14.4.2`, WinGet `ChrisBagwell.SoX`; the Xiph Vorbis read path was exercised by the SoX probe.
+- Official vgmstream GitHub numbered release `r2168` (CLI reports `Oct 25 2026`), downloaded `vgmstream-win64.zip` into a unique empty directory. Official release API exposed no checksum asset; local archive SHA-256: `692d45070852a35c1fa42726aa3c9de528e44eec925d37d99b1074256b99a229`. Version queried with `vgmstream-cli.exe -V`. Upstream vgmstream is ISC-licensed; the archive contains bundled third-party libraries, requiring separate license review before redistribution. No third-party binary is in the repository.
+- The two old compatibility patches for CPython 3.13 were not needed: all six probes, the independent AST experiment, tests, Ruff and mypy ran under locked CPython 3.14.10. The Windows timeout-control `except` syntax also executed directly without modification.
+- WSL Ubuntu `26.04.1 LTS`; `ffmpeg 7:8.0.1-3ubuntu2`; `sox 14.7.0.9+ds1-1` (SoX_ng), `libsox-fmt-all 14.7.0.9+ds1-1`, `libvorbis0a/libvorbisfile3 1.3.7-3build2`, `libogg0 1.3.6-2`. This Ubuntu variant names the dynamic plugin `libsox_ng_fmt_vorbis.so`; `ldd` showed `libvorbisfile.so.3`, `libvorbis.so.0`, `libogg.so.0`, and **no `libavcodec`**. FFmpeg decoder listing showed separate `vorbis` (native) and `libvorbis` decoder entries; the Ogg wrapper explicitly invokes `-c:a vorbis`. Linux tools are evidence for decoder linkage only, not a Linux shared-edit run.
+- Licensing recorded for tooling: FFmpeg tested GPL build; SoX is GPL-2+ or LGPL-2.1+ depending on files/build; Xiph Vorbis BSD-3-Clause; vgmstream ISC plus third-party components. Debian/Ubuntu package copyright files apply to those WSL packages. No redistribution or production dependency recommendation.
+
+### Fresh commands and results
+
+From repository root, Windows PowerShell:
+
+```powershell
+task setup
+winget install --id BtbN.FFmpeg.GPL.7.1 --exact --accept-source-agreements --accept-package-agreements
+winget install --id ChrisBagwell.SoX --exact --accept-source-agreements --accept-package-agreements
+task check
+$env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path
+$env:PYTHONPATH = "src;."
+& .venv/Scripts/python.exe -m experiments.native_ast.probe
+& .venv/Scripts/python.exe -m experiments.native_ast.shared_edit
+& .venv/Scripts/python.exe -m experiments.native_ast.encoded_fidelity
+& .venv/Scripts/python.exe -m experiments.native_ogg.probe
+& .venv/Scripts/python.exe -m experiments.native_ogg.shared_edit
+& .venv/Scripts/python.exe -m experiments.native_ogg.independent_decode
+& .venv/Scripts/python.exe -m experiments.native_ast.independent_decode --vgmstream-cli C:/path/to/private-vgmstream-dir/vgmstream-cli.exe
+& .venv/Scripts/python.exe -m pytest tests/integration/test_native_ast_prepare.py tests/integration/test_native_ogg_prepare.py tests/unit/test_native_ast.py -q
+& .venv/Scripts/python.exe -m ruff check experiments
+& .venv/Scripts/python.exe -m ruff format --check experiments
+& .venv/Scripts/python.exe -m mypy experiments
+```
+
+The vgmstream archive was fetched from `https://github.com/vgmstream/vgmstream/releases/download/r2168/vgmstream-win64.zip` into a new empty temporary directory. WSL installation and linkage commands:
+
+```powershell
+wsl.exe -d Ubuntu -u root -- apt-get update
+wsl.exe -d Ubuntu -u root -- apt-get install -y ffmpeg sox libsox-fmt-all
+wsl.exe -d Ubuntu -- ldd /usr/lib/x86_64-linux-gnu/sox_ng/libsox_ng_fmt_vorbis.so
+wsl.exe -d Ubuntu -- ffmpeg -hide_banner -decoders
+```
+
+The new `experiments/native_ast/independent_decode.py` takes the downloaded CLI path as an argument; it does not import or parse the downloaded executable. It verifies vgmstream JSON metadata and decoded PCM16 WAVs for original and edited `a`/`b` AST outputs. Original and edited files were independently reported as 32 kHz stereo, 8,192 samples, loop frames 1,024–6,144, and vgmstream's WAV samples matched the expected PCM byte-for-byte. Grouped/touching edits were checked; unaffected frames were exact; source files and disposable staging were unchanged/cleaned. This is an independent AST decode and native metadata validation success for the canonical fixture; vgmstream uses its own AST parser/PCM decoder rather than FFmpeg or this repository's parser.
+
+All six requested probes exited 0 on the pinned Windows environment. AST source extraction/rebuild, refusal paths and all-or-nothing behavior passed. Fresh encoded-fidelity measurements: asset `a`, 306 edited frames, 31,736 bytes outside edited sample positions identical; `b`, 128 edited frames, 32,448 bytes outside edited positions identical (both assets 32,960 bytes). Ogg shared editing passed structure/comments/bitrate/frame count, grouping, requested silence, untouched source, corruption/unsupported-profile refusal and first/later asset encoder failure/cleanup. Fresh FFmpeg metrics remain consistent with earlier Windows figures: identity no-edit SNR `33.020 dB`, max error `0.01706610`; edited outside-region minimum SNR `30.949 dB`, maximum error `0.03549913`; guard minimum SNR `25.690 dB`, maximum error `0.02692842`; largest requested-range peak `0.00001420`. This remains lossy feasibility only; do not prefer Ogg re-encoding over preserving encoded bytes/direct PCM when compatible.
+
+Fresh SoX/Xiph Ogg results all met the existing limits. SoX reported 16-bit precision. Max SoX-vs-FFmpeg-native-float sample difference observed was `1.53183937e-5`, near but slightly above a nominal PCM16 half-step `1/65536 ≈ 1.52587891e-5` (the cross-decoder difference includes implementation differences). SoX produced zero for source samples where FFmpeg native float output was nonzero: `a=10`, `b=8`, `start=6`, `end=6`. Thus SoX zero is not proof of exact float silence. SoX outside SNR minimum `30.948910 dB`, outside max error `0.0354919434`; guard SNR minimum `25.690633 dB`, guard max error `0.0233154297`; requested-region peaks were all zero at SoX precision. These measurements remain well within the existing 24 dB/0.08, 18 dB/0.05 and 0.0005 gates, not a universal transparency claim.
+
+The required tests passed explicitly: `30 passed in 1.74s`. Experiment lint/type checks passed: Ruff check clean; Ruff format clean (18 experiment files); mypy `Success: no issues found in 16 source files`. The final `task check` passed: Ruff, format, mypy on 79 configured sources, decision-ID check, **551 tests passed** (31.506 sec pytest session), package sdist/wheel build and isolated wheel import, version preview. This Windows run used 24 xdist workers and is not evidence of the D161 two-vCPU target. The build emitted existing manifest warnings that `experiments/` and three native tests are intentionally excluded from source distribution; it completed successfully. An earlier full pass in the same session reported 27.369 sec.
+
+Initially, separate experiment linting found `experiments/native_ogg/independent_decode.py` needed Ruff formatting and one `float` return annotation path failed mypy (`no-any-return`). Both were minimally corrected; final experiment lint/type checks and all six probes passed. No compatibility-only Python patches were made.
+
+### D-number/acceptance evidence and remaining limits
+
+- **D05–D08 (including approved 2026-11-25 fidelity amendment):** canonical PCM16 AST remains sample-exact and preserves every unaffected native byte; Ogg's extra lossy generation is measured, documented and not recommended as a production default. No production technique/codec choice is made.
+- **D16/D24:** shared `PCMFormat`/`WaveStorage`/`Scratch.edit`, grouped required edits, affected-only rebuilding, exact unaffected AST audio, and corrupt/unsupported/reconstruction refusal with source/scratch cleanup were exercised. Ogg fidelity is thresholded and requested intervals are checked.
+- **D132–D135:** generated fixtures only; no title-specific assumptions, installation writes, loader experiment or game-compatibility claim.
+- **D160/D161:** full local required check and targeted tests passed; no remote CI or two-vCPU performance claim. CI timeout negative-control remains unrun.
+- Issue #20 criteria 1–2 now have actual shared-editor native reconstruction and independent lossless AST decode evidence. Criteria 3–4 remain constrained as written: no game writes/proprietary fixtures/compatibility claims; tooling, platform, license, limitations and next steps are documented. External independent review/acceptance is still pending.
+
+Not run: remote GitHub CI, independent code review, macOS checks, Linux native shared-edit probes, game/loader compatibility or real installations. SoX Linux linkage was checked under Ubuntu 26.04, not the earlier historical Debian 13.3. Arbitrary AST profiles, other vgmstream/FFmpeg builds and broader native compatibility remain unsupported/unverified. No second independent Ogg decoder was added beyond the SoX/Xiph cross-decoder evidence already present.
+
+### Findings-update draft for coordinator review (not yet applied to shared findings)
+
+> On the retained `poc/native-formats-issue-20` branch, locked Windows 11/Python 3.14.10 checks now pass at the recorded local SHA. Both canonical synthetic AST source and edited outputs decode sample-exactly with official vgmstream `r2168`, including 32 kHz stereo, 8,192 frames, loop frames 1,024–6,144. AST edits preserve all native bytes outside edited PCM positions. Ogg remains a separate lossy-only feasibility result; SoX/Xiph independently decodes the four outputs, with bounded synthetic fidelity measurements and a demonstrated 16-bit precision caveat. No production codec strategy, game compatibility or loader acceptance is implied. Keep this evidence branch-local pending independent review; reconcile main findings only after coordinator acceptance.
+
+Independent review and any confirmed-finding correction cycle remain open. Do not push this checkpoint until the coordinator's requested review gate.
