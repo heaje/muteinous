@@ -1,0 +1,88 @@
+name: Temporary M2.0 whisper.cpp backend probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  whisper-backends:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'spike/issue-50-asr-dependency-probe'
+    runs-on: windows-2025
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cpu-dl
+            options: '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF'
+          - name: vulkan-dl
+            options: '-DGGML_BACKEND_DL=ON -DGGML_CPU_ALL_VARIANTS=ON -DGGML_NATIVE=OFF -DGGML_VULKAN=ON'
+    name: ASR whisper.cpp backend probe (${{ matrix.name }})
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: 96ec4d9823e9d0211944172da35f9f29134af990
+          path: upstream-whisper
+          persist-credentials: false
+      - name: Install Vulkan SDK (build-time only, runner VM)
+        if: matrix.name == 'vulkan-dl'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = (Invoke-RestMethod 'https://vulkan.lunarg.com/sdk/latest/windows.txt').Trim()
+          Write-Host "VULKAN SDK VERSION: $ver"
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkansdk.exe'
+          Invoke-WebRequest "https://sdk.lunarg.com/sdk/download/$ver/windows/vulkansdk-windows-X64-$ver.exe" -OutFile $installer
+          Write-Host "VULKAN SDK INSTALLER SHA256: $((Get-FileHash $installer -Algorithm SHA256).Hash)"
+          Start-Process $installer -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install' -Wait -NoNewWindow
+          $sdk = "C:\VulkanSDK\$ver"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "glslc.exe missing under $sdk" }
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "$sdk\Bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Configure and build whisper-cli and ggml-diag
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git -C upstream-whisper rev-parse HEAD
+          cmake --version
+          $src = (Resolve-Path upstream-whisper).Path
+          $opts = '${{ matrix.options }}' -split ' '
+          cmake -S spike/asr50/ggml-diag -B build -A x64 "-DWHISPER_SRC=$src" -DBUILD_SHARED_LIBS=ON @opts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build --config Release --target whisper-cli ggml-diag --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Collect flat distribution tree and measure
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dist = Join-Path $env:RUNNER_TEMP 'dist'
+          New-Item -ItemType Directory $dist | Out-Null
+          Get-ChildItem build -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' -and $_.FullName -notmatch 'CMakeFiles' } | ForEach-Object { Copy-Item $_.FullName (Join-Path $dist $_.Name) -Force }
+          Get-ChildItem $dist | Sort-Object Name | Select-Object Name, Length | Format-Table -AutoSize
+          Write-Host "DIST EXE+DLL BYTES: $((Get-ChildItem $dist -File | Measure-Object Length -Sum).Sum)"
+          "DIST_DIR=$dist" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Hosted-runner device listing and CPU synthetic matmul (no GPU expected)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & "$env:DIST_DIR\ggml-diag.exe" list
+          Write-Host "LIST EXIT: $LASTEXITCODE"
+          & "$env:DIST_DIR\ggml-diag.exe" matmul 0 512 5
+          Write-Host "CPU MATMUL EXIT: $LASTEXITCODE"
+          & "$env:DIST_DIR\ggml-diag.exe" matmul 99 512 5
+          Write-Host "INVALID DEVICE EXIT (expected non-zero): $LASTEXITCODE"
+          & "$env:DIST_DIR\whisper-cli.exe" --help | Select-Object -First 3
+          Write-Host 'No ASR inference performed; no model weights fetched.'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whisper-${{ matrix.name }}-windows-x64
+          path: ${{ env.DIST_DIR }}
+          if-no-files-found: error
+          retention-days: 7
