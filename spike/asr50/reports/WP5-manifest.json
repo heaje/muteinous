@@ -1,0 +1,750 @@
+﻿{
+    "schema_version":  1,
+    "retrieved_utc":  "2026-11-26T22:38:43.5551492Z",
+    "source":  "Hugging Face public model and recursive tree APIs; metadata only; no model payload downloads",
+    "minimum_approval_set":  [
+                                 "Whisper Small.en / faster-whisper CT2"
+                             ],
+    "full_set":  [
+                     {
+                         "name":  "Whisper Large-v3 Turbo / whisper.cpp q5_0",
+                         "repo":  "ggerganov/whisper.cpp",
+                         "revision":  "5359861c739e955e79d9a303bcbc70fb988958b1",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "ggml-large-v3-turbo-q5_0.bin",
+                                           "size_bytes":  574041195,
+                                           "sha256":  "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "0e2474d5ec0361bb1726829aa83317ed4cbc3f18"
+                                       }
+                                   ],
+                         "download_size_bytes":  574041195,
+                         "expected_installed_size_bytes":  574041195,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Large-v3 Turbo / whisper.cpp q8_0",
+                         "repo":  "ggerganov/whisper.cpp",
+                         "revision":  "5359861c739e955e79d9a303bcbc70fb988958b1",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "ggml-large-v3-turbo-q8_0.bin",
+                                           "size_bytes":  874188075,
+                                           "sha256":  "317eb69c11673c9de1e1f0d459b253999804ec71ac4c23c17ecf5fbe24e259a1",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "dd827281ffb9642e91f152f2a90de53907d4603a"
+                                       }
+                                   ],
+                         "download_size_bytes":  874188075,
+                         "expected_installed_size_bytes":  874188075,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Large-v3 Turbo / whisper.cpp f16",
+                         "repo":  "ggerganov/whisper.cpp",
+                         "revision":  "5359861c739e955e79d9a303bcbc70fb988958b1",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "ggml-large-v3-turbo.bin",
+                                           "size_bytes":  1624555275,
+                                           "sha256":  "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "819841c70bdf4488c4ff778f8becdcb37df43969"
+                                       }
+                                   ],
+                         "download_size_bytes":  1624555275,
+                         "expected_installed_size_bytes":  1624555275,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Large-v3 Turbo / faster-whisper CT2",
+                         "repo":  "deepdml/faster-whisper-large-v3-turbo-ct2",
+                         "revision":  "4df90f75321148c3a29a9e2351b7ddf8f5b115a8",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  2263,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "0351d1d6870005e865747b781b5d7c23ea0459cd"
+                                       },
+                                       {
+                                           "filename":  "model.bin",
+                                           "size_bytes":  1617884929,
+                                           "sha256":  "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "c849f26401bf079fdea48ac9f7461fdff2e743ea"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  340,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "931c77a740890c46365c7ae0c9d350ba3cca908f"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  2710337,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "17456db595adc78a973f97d69d8cb50bc87c0b1c"
+                                       },
+                                       {
+                                           "filename":  "vocabulary.json",
+                                           "size_bytes":  1068114,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "0adcd01e7c237205d593b707e66dd5d7bc785d2d"
+                                       }
+                                   ],
+                         "download_size_bytes":  1621665983,
+                         "expected_installed_size_bytes":  1621665983,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Large-v3 Turbo / ONNX merged q4",
+                         "repo":  "onnx-community/whisper-large-v3-turbo",
+                         "revision":  "360ebcde2559d60bb474678be3c1de9ef347d01a",
+                         "license":  null,
+                         "license_status":  "Unknown; no license field in API metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "added_tokens.json",
+                                           "size_bytes":  34648,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "1b33526d33aaa60d79f78ae8651dae50b730185a"
+                                       },
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  1332,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "075c98fd4c7f1fe14efa6004a965b3b06103fb3a"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  3897,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "570eaecb3faa7055f6c8365a7193c2e8704bc2f3"
+                                       },
+                                       {
+                                           "filename":  "merges.txt",
+                                           "size_bytes":  493869,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "6038932a2a1f09a66991b1c2adae0d14066fa29e"
+                                       },
+                                       {
+                                           "filename":  "normalizer.json",
+                                           "size_bytes":  52666,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "dd6ae819ad738ac1a546e9f9282ef325c33b9ea0"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_model_merged_q4.onnx",
+                                           "size_bytes":  334147222,
+                                           "sha256":  "8b933ac24074a24a1635084d06a4ed37e387ef22d980f184a5fc27418e9ceeb8",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "0d6d2a0542f4a81396907d58b0b440a2ec9fd93d"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_with_past_model_q4.onnx",
+                                           "size_bytes":  325709338,
+                                           "sha256":  "c50b734e19853249a69bcb9d1c4c7462d7dee637be0418948716c69865e8af70",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "ff115d15fe0f49b82c9929a6602f3af46f68084b"
+                                       },
+                                       {
+                                           "filename":  "onnx/encoder_model_q4.onnx",
+                                           "size_bytes":  424942775,
+                                           "sha256":  "7e64b20dd7b556cb7a2c1c65d9fbf31af985323c006f993d2a9dd10083547d78",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "ef09d67afc8e383d2c43b884af826b835d2f2e8b"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  340,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "931c77a740890c46365c7ae0c9d350ba3cca908f"
+                                       },
+                                       {
+                                           "filename":  "special_tokens_map.json",
+                                           "size_bytes":  2186,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "312bc106291bb51bf2cc1648df070bef963a0639"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  2480617,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "3a5e2ba63acdcac9a19ba56cf9bd27f185bfff61"
+                                       },
+                                       {
+                                           "filename":  "tokenizer_config.json",
+                                           "size_bytes":  282843,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "06ffdc8308eae6bb7bd1fdd81e94b0a881a539ab"
+                                       },
+                                       {
+                                           "filename":  "vocab.json",
+                                           "size_bytes":  1036558,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "0f3456460629e21d559c6daa23ab6ce3644e8271"
+                                       }
+                                   ],
+                         "download_size_bytes":  1089188291,
+                         "expected_installed_size_bytes":  1089188291,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Large-v3 Turbo / ONNX fp16",
+                         "repo":  "onnx-community/whisper-large-v3-turbo",
+                         "revision":  "360ebcde2559d60bb474678be3c1de9ef347d01a",
+                         "license":  null,
+                         "license_status":  "Unknown; no license field in API metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "added_tokens.json",
+                                           "size_bytes":  34648,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "1b33526d33aaa60d79f78ae8651dae50b730185a"
+                                       },
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  1332,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "075c98fd4c7f1fe14efa6004a965b3b06103fb3a"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  3897,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "570eaecb3faa7055f6c8365a7193c2e8704bc2f3"
+                                       },
+                                       {
+                                           "filename":  "merges.txt",
+                                           "size_bytes":  493869,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "6038932a2a1f09a66991b1c2adae0d14066fa29e"
+                                       },
+                                       {
+                                           "filename":  "normalizer.json",
+                                           "size_bytes":  52666,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "dd6ae819ad738ac1a546e9f9282ef325c33b9ea0"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_model_merged_fp16.onnx",
+                                           "size_bytes":  344227339,
+                                           "sha256":  "fdf10afca73a0c7bf87286cfb96cf7028a9edbc9bb02512509a526f95b126c9d",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "6026a0b0e577f23cf2f84a5948cc4387d7fdf548"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_with_past_model_fp16.onnx",
+                                           "size_bytes":  317771757,
+                                           "sha256":  "e971827af2f12c152491e21594e9eecf5415ad568d6dc0d6fe794713dfbae815",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "39e0132389c63b7eb49e0ea08f75497498dc963e"
+                                       },
+                                       {
+                                           "filename":  "onnx/encoder_model_fp16.onnx",
+                                           "size_bytes":  1274342603,
+                                           "sha256":  "fdadc70836e6b028fd5e580417c312208dad073d2d01e509e2d127c1373399d8",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "daec8a333baf76e2a36b91ba4a4e122a64bba46d"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  340,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "931c77a740890c46365c7ae0c9d350ba3cca908f"
+                                       },
+                                       {
+                                           "filename":  "special_tokens_map.json",
+                                           "size_bytes":  2186,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "312bc106291bb51bf2cc1648df070bef963a0639"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  2480617,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "3a5e2ba63acdcac9a19ba56cf9bd27f185bfff61"
+                                       },
+                                       {
+                                           "filename":  "tokenizer_config.json",
+                                           "size_bytes":  282843,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "06ffdc8308eae6bb7bd1fdd81e94b0a881a539ab"
+                                       },
+                                       {
+                                           "filename":  "vocab.json",
+                                           "size_bytes":  1036558,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "0f3456460629e21d559c6daa23ab6ce3644e8271"
+                                       }
+                                   ],
+                         "download_size_bytes":  1940730655,
+                         "expected_installed_size_bytes":  1940730655,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Small.en / whisper.cpp q5_1",
+                         "repo":  "ggerganov/whisper.cpp",
+                         "revision":  "5359861c739e955e79d9a303bcbc70fb988958b1",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "ggml-small.en-q5_1.bin",
+                                           "size_bytes":  190098681,
+                                           "sha256":  "bfdff4894dcb76bbf647d56263ea2a96645423f1669176f4844a1bf8e478ad30",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "bf61baaf463626fe45fc9157b8e9c69de8943c87"
+                                       }
+                                   ],
+                         "download_size_bytes":  190098681,
+                         "expected_installed_size_bytes":  190098681,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Small.en / whisper.cpp q8_0",
+                         "repo":  "ggerganov/whisper.cpp",
+                         "revision":  "5359861c739e955e79d9a303bcbc70fb988958b1",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "ggml-small.en-q8_0.bin",
+                                           "size_bytes":  264477561,
+                                           "sha256":  "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "9c826215654cf46674a38d02f19e123e17c5b2d3"
+                                       }
+                                   ],
+                         "download_size_bytes":  264477561,
+                         "expected_installed_size_bytes":  264477561,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Whisper Small.en / faster-whisper CT2",
+                         "repo":  "Systran/faster-whisper-small.en",
+                         "revision":  "d1d751a5f8271d482d14ca55d9e2deeebbae577f",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  2657,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "ced3fd5bbb3e9f7664658065d2d36164712cf1d5"
+                                       },
+                                       {
+                                           "filename":  "model.bin",
+                                           "size_bytes":  483545366,
+                                           "sha256":  "62b2a45b05ee59acb4a5341b33ee35e041395d378d418a18acfe4c9e768ee37a",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "8ebf0973579cfb13f4536b674d0ba3c6aecbc169"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  2128466,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "15d7bdf9ba25718ca2504eec6a8f02bc55af0a6a"
+                                       },
+                                       {
+                                           "filename":  "vocabulary.txt",
+                                           "size_bytes":  422309,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "ee695b8d3e3c10d488304e04468efec4ca27554a"
+                                       }
+                                   ],
+                         "download_size_bytes":  486098798,
+                         "expected_installed_size_bytes":  486098798,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Parakeet TDT 0.6B v2 / sherpa-onnx int8",
+                         "repo":  "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
+                         "revision":  "84b478d541cdbf0c296a7ab5f1e20a6f8f998114",
+                         "license":  "cc-by-4.0",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "decoder.int8.onnx",
+                                           "size_bytes":  7257753,
+                                           "sha256":  "4d097bae3bac5c96018d5293ba39f1b657296102b142affda40378f38b020f41",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "5aed85034c9a1d47d766ca26c1facabf63429d04"
+                                       },
+                                       {
+                                           "filename":  "encoder.int8.onnx",
+                                           "size_bytes":  652282309,
+                                           "sha256":  "92a10bd9c23936ea0566c29f963bc57c2a5df4261b6a8921c39abea66557ca8b",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "5cab57a1718777817a72c7cc1d03f12f08804e07"
+                                       },
+                                       {
+                                           "filename":  "joiner.int8.onnx",
+                                           "size_bytes":  1739080,
+                                           "sha256":  "77a29f3e5ac7d37074e0af465391b80f314015d5b97f0f90c6c7767f1d56f428",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "651c4303b3e7800b9d7679124a73e93b7162bd48"
+                                       },
+                                       {
+                                           "filename":  "tokens.txt",
+                                           "size_bytes":  9384,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "f0742785f6073e80b911964c455b05f3609bf23b"
+                                       }
+                                   ],
+                         "download_size_bytes":  661288526,
+                         "expected_installed_size_bytes":  661288526,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Parakeet TDT 0.6B v2 / sherpa-onnx fp16",
+                         "repo":  "csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-fp16",
+                         "revision":  "a6cc4e24ed264a93a17575dad416dacc4238497a",
+                         "license":  "cc-by-4.0",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "decoder.fp16.onnx",
+                                           "size_bytes":  14446596,
+                                           "sha256":  "45b04b71eb29dddeeb560e13a515291615bc541f8f5e9e336004956c0ce1a538",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "0d513ed8126ce92e519f10ba01f365384ace64a9"
+                                       },
+                                       {
+                                           "filename":  "encoder.fp16.onnx",
+                                           "size_bytes":  1239245548,
+                                           "sha256":  "bb1cc16e8223472b36bd637e2f77725d62b9895eaf609fec6cc91183e2753e38",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "d3be85af9ebad812919c2b39c424715896474c75"
+                                       },
+                                       {
+                                           "filename":  "joiner.fp16.onnx",
+                                           "size_bytes":  3456459,
+                                           "sha256":  "5d9d840eff9a3f3724ebce6d84c52038ee4664a08955c5a69d277f2d9733f9b1",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "e0b3da50b981d6bbbfe0fb3b402aca1bc01104d7"
+                                       },
+                                       {
+                                           "filename":  "tokens.txt",
+                                           "size_bytes":  9384,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "f0742785f6073e80b911964c455b05f3609bf23b"
+                                       }
+                                   ],
+                         "download_size_bytes":  1257157987,
+                         "expected_installed_size_bytes":  1257157987,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Parakeet TDT 0.6B v2 / NeMo",
+                         "repo":  "nvidia/parakeet-tdt-0.6b-v2",
+                         "revision":  "c00e38779b028d48624b08ab3d9909952db43901",
+                         "license":  "cc-by-4.0",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "parakeet-tdt-0.6b-v2.nemo",
+                                           "size_bytes":  2472222720,
+                                           "sha256":  "d99e39955c9d3d0350d8fb7c75e40c64a2b2eaeb003883d7c941fd2e8747b28c",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "75eb358e52804fae8d1ab9a1ce0abb5fbe80f0e5"
+                                       }
+                                   ],
+                         "download_size_bytes":  2472222720,
+                         "expected_installed_size_bytes":  2472222720,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Moonshine tiny / HF safetensors",
+                         "repo":  "moonshine-ai/moonshine-tiny",
+                         "revision":  "390624ed33d594443aa4aa221f5b9f283b545b5a",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  897,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "fd54338afb909fd6e6779d264debc0c739a1228b"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  189,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "715863a990c1bc16a34f5443b9f001d9b26df815"
+                                       },
+                                       {
+                                           "filename":  "model.safetensors",
+                                           "size_bytes":  108389192,
+                                           "sha256":  "867cd2215804859c55aa972d740bd5002be149b4e7526328c895d2408848c736",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "16c73efe99394668d0d7d35bb14655ecd4b6b5cd"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  215,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "10f6def8c83d70a2b087a567dcf523b75152a80b"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  1985530,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "62eefa35d34fc93b41abdd355b6ed96823fed265"
+                                       }
+                                   ],
+                         "download_size_bytes":  110376023,
+                         "expected_installed_size_bytes":  110376023,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Moonshine base / HF safetensors",
+                         "repo":  "moonshine-ai/moonshine-base",
+                         "revision":  "7a73d8d55ac0ba2ef3ae761593f6784b51f96dcf",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  976,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "0c2b3be463991651dcaca38e54af9027b16d3844"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  189,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "89bced1395c3079ad607372a09dd2e854b7165b8"
+                                       },
+                                       {
+                                           "filename":  "model.safetensors",
+                                           "size_bytes":  246079928,
+                                           "sha256":  "e020c79d0a979a7ec099f718ff1cd2f19e92aead230d69654bca5975a8e1b862",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "68c25e53cae4a2ec250f705ed5eaab8e4cc0fcfa"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  215,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "10f6def8c83d70a2b087a567dcf523b75152a80b"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  1985530,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "62eefa35d34fc93b41abdd355b6ed96823fed265"
+                                       }
+                                   ],
+                         "download_size_bytes":  248066838,
+                         "expected_installed_size_bytes":  248066838,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Moonshine tiny / ONNX fp16",
+                         "repo":  "onnx-community/moonshine-tiny-ONNX",
+                         "revision":  "a6da1241cd305dcd64eab1edbd615f2bb9aabb95",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  921,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "3b8918edc926194c698c6d3255adac22b50251f6"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  147,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "b45f5d83177964a069f943e80225213bd724200f"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_model_merged_fp16.onnx",
+                                           "size_bytes":  76250574,
+                                           "sha256":  "235addb963ef3997766bc126c3f16561a72370c7c797238e96940c4f76f2c69a",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "23fa1f91af935d06e72dd96ed4e8d14cd93b320e"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_with_past_model_fp16.onnx",
+                                           "size_bytes":  37040445,
+                                           "sha256":  "a469561696e9e706919e2c1547442f92c65acf29351c684eb3ad6d6aa1410466",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "402690799bac92ca24e8bbb985d581dbde8f4219"
+                                       },
+                                       {
+                                           "filename":  "onnx/encoder_model_fp16.onnx",
+                                           "size_bytes":  15520007,
+                                           "sha256":  "ccbec5181641f717611fc641ff7e261b4ee7b538e307c39e57e38f617a294d6e",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "8bbc957a48f849974f9db29003e0c92904fb441a"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  128,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "e519add8190c4ef53802d1d593b7973c12ae68c9"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  3761754,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "3e2e6918436f479b267467608eccc4ade30c251c"
+                                       },
+                                       {
+                                           "filename":  "tokenizer_config.json",
+                                           "size_bytes":  135735,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "a712a75cf20ba1c6e6f1761f2b612c7ecc44ffa0"
+                                       }
+                                   ],
+                         "download_size_bytes":  132709711,
+                         "expected_installed_size_bytes":  132709711,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     },
+                     {
+                         "name":  "Moonshine base / ONNX int8",
+                         "repo":  "onnx-community/moonshine-base-ONNX",
+                         "revision":  "b1e9b6aae3c3c7298f10c3798393fdf38e8fbbad",
+                         "license":  "mit",
+                         "license_status":  "HF model-card metadata",
+                         "gated":  false,
+                         "files":  [
+                                       {
+                                           "filename":  "config.json",
+                                           "size_bytes":  922,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "1967bf9b1c79c1fa70166a300e3882136593e921"
+                                       },
+                                       {
+                                           "filename":  "generation_config.json",
+                                           "size_bytes":  147,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "b45f5d83177964a069f943e80225213bd724200f"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_model_merged_int8.onnx",
+                                           "size_bytes":  42427261,
+                                           "sha256":  "45febab0347ffbe1326459e092ae20a2cfda10ca33ab018b3c299247284de61b",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "711b0ddb67a2347d0039f0009e2165dfc8393d58"
+                                       },
+                                       {
+                                           "filename":  "onnx/decoder_with_past_model_int8.onnx",
+                                           "size_bytes":  39061669,
+                                           "sha256":  "0512d16f83067279e9adbb3185a6bf0469f266945bc28aeb4ed190c619fe4fdf",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "5b8a815e506c46276b72b21f9c3ff83079777218"
+                                       },
+                                       {
+                                           "filename":  "onnx/encoder_model_int8.onnx",
+                                           "size_bytes":  20488801,
+                                           "sha256":  "4edb38db96b52ddee5a3b25d2211bb6394f9a9a2d95f67bce0e8c861da018a4d",
+                                           "sha256_reason":  null,
+                                           "git_blob_sha1":  "f097ed8c04aa45ecf53e2d0db4502a105a404258"
+                                       },
+                                       {
+                                           "filename":  "preprocessor_config.json",
+                                           "size_bytes":  128,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "e519add8190c4ef53802d1d593b7973c12ae68c9"
+                                       },
+                                       {
+                                           "filename":  "tokenizer.json",
+                                           "size_bytes":  3761754,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "3e2e6918436f479b267467608eccc4ade30c251c"
+                                       },
+                                       {
+                                           "filename":  "tokenizer_config.json",
+                                           "size_bytes":  135735,
+                                           "sha256":  null,
+                                           "sha256_reason":  "UNVERIFIED - requires approved download of a small file",
+                                           "git_blob_sha1":  "a712a75cf20ba1c6e6f1761f2b612c7ecc44ffa0"
+                                       }
+                                   ],
+                         "download_size_bytes":  105876417,
+                         "expected_installed_size_bytes":  105876417,
+                         "redistribution":  "Upstream license governs; do not mirror in GitHub Releases per issue #50"
+                     }
+                 ],
+    "notes":  [
+                  "Minimum approval set is a proposed one-model initial English-only runtime candidate, not a final architecture decision.",
+                  "Download totals are sums of listed files; installed size expected equal absent runtime-specific conversion/cache overhead.",
+                  "ONNX configs are chosen explicit fp16/int8/q4 variants; variant manifests are alternatives, not assets to download together.",
+                  "All absent small-file SHA-256 values deliberately null; API exposes git blob SHA-1 only.",
+                  "Repo refs and LFS digests are observations at retrieval time; pinning is required before approval."
+              ]
+}
