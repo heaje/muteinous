@@ -1,9 +1,9 @@
 # Vorbis lossy round-trip evidence
 Status: active for the synthetic stereo/44.1-kHz experiment only
-Last verified: 2026-11-24
-Related: [#20](https://github.com/heaje/muteinous/issues/20), [Ogg Vorbis experiment](https://github.com/heaje/muteinous/blob/9ee5d772ac97d0e80f5c3802604f2d77de240ec8/experiments/native_ogg/README.md)
-Code location: the experiment is not on `main`; it lives on branch `poc/native-formats-issue-20` (commit `9ee5d772ac97d0e80f5c3802604f2d77de240ec8`). Paths, scripts and tests below refer to that ref.
-Retire/promote when: a production native adapter replaces the experiment with independent compatibility evidence, or the PoC branch is deleted.
+Last verified: 2026-11-25 (reported locked Windows run and independent reviewer reruns)
+Related: [#20](https://github.com/heaje/muteinous/issues/20), [Ogg Vorbis experiment](https://github.com/heaje/muteinous/blob/ccaf315096509037e3784f1d73dca0d25841fdda/experiments/native_ogg/README.md)
+Code location: `poc/native-formats-issue-20`, [retained branch checkpoint `ccaf315`](https://github.com/heaje/muteinous/tree/ccaf315096509037e3784f1d73dca0d25841fdda). Evidence: [reviewed implementation `8b3b3ba`](https://github.com/heaje/muteinous/tree/8b3b3baa2ab9ca0312abc314f1b69b56c6fb6d3d) (Windows locked run and two independent reviewer reruns, as reported in the [verification handoff](https://github.com/heaje/muteinous/blob/ccaf315096509037e3784f1d73dca0d25841fdda/.agents/handoffs/issue-20.md)); reported evidence checkpoint [`f3e99f4`](https://github.com/heaje/muteinous/tree/f3e99f445c28d6ec5b60d60c09099471cd415365) and subsequent [retained branch checkpoint `ccaf315`](https://github.com/heaje/muteinous/tree/ccaf315096509037e3784f1d73dca0d25841fdda) change documentation only. No fresh coordinator execution or independently retrieved reviewer transcript is claimed. The retained branch contains the original baseline and main through PR #32; subsequent main #33/#35 changed speech models/tests and coordination documentation only, not shared PCM or other common production source blobs. No further implementation merge needed for this pinned experiment. Keep the experiment outside main and out of distribution.
+Retire/promote when: a production native adapter replaces the experiment with independent compatibility evidence.
 
 ## Finding and limitations
 
@@ -19,20 +19,43 @@ The parser is intentionally whole-file, not streaming: caller input is capped at
 
 Nominal bitrate preservation allows at most 10% relative header rounding. The measured real fixture was exactly 128,000 bit/s before and after; 32,000→48,000 bit/s is refused.
 
-The parser is structural and does not decode setup/audio packets. Earlier focused unit tests checked the CRC implementation against a known vector and slow reference; that evidence is historical and is not reproducible from this branch's required tests. The manual scripts still validate CRCs on real FFmpeg pages and reject one corrupted page. FFmpeg is the only decoder in this evidence; no engine bank, game loader, independent decoder, or production compatibility is established. The vendor string was unchanged in this same-build run (`Lavf61.7.103`), but it is intentionally not a preservation invariant.
+The parser is structural and does not decode setup/audio packets. Earlier focused unit tests checked the CRC implementation against a known vector and slow reference; that evidence is historical and is not reproducible from this branch's required tests. The manual scripts still validate CRCs on real FFmpeg pages and reject one corrupted page. FFmpeg remains the full-precision decoded-domain reference in the experiment; independent SoX/Xiph evidence is described below. No engine bank, game loader or production compatibility is established. The vendor string was unchanged in this same-build run (`Lavf61.7.103`), but it is intentionally not a preservation invariant.
 
 ## Reproduction / evidence
 
-From the repository root on the verified Windows environment, after checking out `poc/native-formats-issue-20` (for example in a separate worktree):
+From the repository root on the reported locked Windows 11 build 10.0.26300 / CPython 3.14.10 environment, after checking out the pinned branch checkpoint in a separate worktree, with FFmpeg BtbN GPL static `n7.1.5-12-g1fdbca85aa-20260731` and WinGet SoX `ChrisBagwell.SoX` 14.4.2:
 
 ~~~powershell
+task setup
 $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' + [Environment]::GetEnvironmentVariable('Path','User') + ';' + $env:Path
+$env:PYTHONPATH = "src;."
 & .venv/Scripts/python.exe -m experiments.native_ogg.probe
 & .venv/Scripts/python.exe -m experiments.native_ogg.shared_edit
+& .venv/Scripts/python.exe -m experiments.native_ogg.independent_decode
+& .venv/Scripts/python.exe -m pytest tests/integration/test_native_ast_prepare.py tests/integration/test_native_ogg_prepare.py tests/unit/test_native_ast.py -q
+task check
 ~~~
 
 The probe measured the identity control at 33.020 dB SNR, max error 0.01706610, and 27,390 → 26,507 bytes (−883). Shared edits measured minimum outside-region SNR 30.949 dB, maximum outside error 0.03549913, minimum guard-region SNR 25.690 dB, maximum guard error 0.02692842, and requested-range peaks up to 0.00001420. The scripts report per-region measurements, include clip-start/end edits, and exercise corrupt, unsupported, and real FFmpeg `-n` encode refusals with atomic snapshots.
 
+## Independent decoding (2026-11-25)
+
+SoX 14.4.2 reads the original and rebuilt four edited Ogg assets through Xiph libvorbisfile. The probe checks rate, channels, decoded frame count, requested-region peak and each outside/guard fidelity region. SoX reads via `--i -r/-c/-s` and `sox -D INPUT -t raw -e floating-point -b 32 -L -` (no dither, remix or resample). The independent comparison probe explicitly chooses FFmpeg's native `vorbis` decoder (`-c:a vorbis` before `-i`); the shared-edit wrapper uses automatic selection and the probe checks equality of the source decode to the explicit native decoder. Xiph is also used for encoding; the independence is between the FFmpeg native and Xiph decoding implementations, not between Xiph encoder and decoder. The coordinator checked SoX 14.4.2 source's libvorbisfile path (https://github.com/chirlu/sox/blob/sox-14.4.2/src/vorbis.c) and FFmpeg's separate native decoder (https://github.com/FFmpeg/FFmpeg/blob/n7.1.5/libavcodec/vorbisdec.c).
+
+| Metric (all four edited assets) | Existing limit | FFmpeg decoded PCM | SoX/Xiph |
+| --- | --- | --- | --- |
+| Requested-range maximum absolute peak | <= 0.0005 | 0.00001420 | 0 at SoX precision |
+| Outside minimum SNR (dB) | >= 24 | 30.949 | 30.948910 |
+| Outside maximum absolute error | <= 0.08 | 0.03549913 | 0.0354919434 |
+| Guard minimum SNR (dB) | >= 18 | 25.690 | 25.690633 |
+| Guard maximum absolute error | <= 0.05 | 0.02692842 | 0.0233154297 |
+
+Both measured paths passed the specimen limits; SoX reported 16-bit decode precision despite float output. Maximum observed cross-decoder sample difference was 1.53183937e-5; SoX source samples rounded to zero where FFmpeg float was nonzero (counts 10, 8, 6, 6). SoX zero is not proof of exact float silence, and the measured difference is not a quantizer bound or universal decoder tolerance. The full-precision FFmpeg result is separately required; the existing thresholds do not establish perceptual transparency. Ogg structure/comments/nominal bitrate and sample count were validated; untouched originals and staging snapshots preserved. No exact unaffected encoded bytes claim for rebuilt Ogg.
+
+The reported WSL Ubuntu 26.04.1 linkage check (`ldd /usr/lib/x86_64-linux-gnu/sox_ng/libsox_ng_fmt_vorbis.so`) identified libvorbisfile.so.3, libvorbis.so.0 and libogg.so.0, not libavcodec. WSL SoX_ng 14.7.0.9+ds1-1, FFmpeg 8.0.1-3ubuntu2, libvorbis 1.3.7-3build2, libogg 1.3.6-2. This is Linux plugin linkage evidence, not direct Windows binary linkage proof or a locked Linux edit run. The earlier Debian partial-source execution also used Xiph-linked SoX, but was supplemental with Python 3.13 adaptations. The exact Windows libvorbis DLL version/linkage was not separately recorded. The tagged SoX reader source and independent decoded results support the Windows path; AST independently satisfies the required minimum gate even without this Windows linkage limitation.
+
+Tooling licenses: FFmpeg tested GPL-enabled build; SoX GPL-2+ or LGPL-2.1+ depending on files/build; Xiph Vorbis BSD-3-Clause. See the pinned handoff for package notices and exact versions. No redistribution or production dependency selected. Targeted and full Windows check results and reported independent review are recorded in the [AST finding](ast-pcm-roundtrip.md) and linked handoff. Remote and locked Linux/macOS checks are outstanding.
+
 ## Recommendation
 
-Keep the lossless AST and lossy Ogg specimens clearly separate in Issue #20 claims. Any future lossy adapter should calibrate decoded-domain thresholds and guard intervals on its actual codec/profile and independently verify loader compatibility before installation claims.
+This is loose Vorbis feasibility, not an engine-bank demonstration or a preferred reconstruction strategy. Under the [fidelity amendment](../../docs/architecture/decisions.md#amendment-2026-11-25-native-reconstruction-fidelity), investigate preservation of unaffected original encoded bytes, selective packet/block reconstruction or verified compatible lossless alternatives before choosing extra lossy encoding. If lossy re-encoding is necessary for a future supported profile, minimize scope and calibrate decoded-domain thresholds and guard intervals on that profile; refuse when required edits/fidelity/compatibility cannot be established. Loader acceptance and installation safety remain independent, not proven by either decoder. No game writes were performed.
