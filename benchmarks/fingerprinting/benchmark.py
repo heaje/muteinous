@@ -202,7 +202,11 @@ def run_workload(paths, label, size, algorithms, repeats, ram, shared50):
     configs = [(name, 1, 1, False) for name in algorithms]
     configs += [(name, 1, 1, True) for name in algorithms]
     if len(paths) > 1:
-        configs += [(name, 2, 1, False) for name in algorithms]
+        configs += [
+            (name, 2, 1, contention)
+            for contention in (False, True)
+            for name in algorithms
+        ]
     if "blake3" in algorithms:
         configs += [("blake3", 1, 2, contention) for contention in (False, True)]
         configs += [("blake3", 1, 0, contention) for contention in (False, True)]
