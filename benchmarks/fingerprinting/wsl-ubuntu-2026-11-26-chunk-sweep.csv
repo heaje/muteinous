@@ -1,0 +1,29 @@
+environment,cache_label,workload,method,chunk_kib,median_mb_s,min_mb_s,max_mb_s,repeats
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,4,2909,2750,2917,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,16,7482,7363,7498,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,64,8693,8580,8728,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,128,9569,9480,9692,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,256,9848,9834,9873,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,512,9989,9944,10091,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,1024,10092,10026,10164,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,4096,10097,9653,10159,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,read,16384,8156,7229,8285,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,4,2580,2577,2587,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,16,7404,7338,7445,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,64,9266,9202,9293,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,128,9663,9634,9682,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,256,10059,10019,10094,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,512,10088,10053,10121,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,1024,10109,10077,10135,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,4096,10109,10057,10146,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,1 GiB file,readinto,16384,9902,9758,9953,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,read,16,5709,5082,5757,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,read,64,6429,6374,6439,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,read,256,6616,6588,6649,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,read,1024,6631,6424,6658,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,read,4096,6640,6377,6666,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,readinto,16,5902,5790,5965,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,readinto,64,6850,6505,6869,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,readinto,256,6527,6510,6564,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,readinto,1024,4121,4081,4154,7
+WSL2 Ubuntu 26.04.1; Linux 6.6.87.2-microsoft-standard-WSL2,warm,2000 x 64 KiB files,readinto,4096,1753,1744,1770,7

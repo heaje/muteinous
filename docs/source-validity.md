@@ -75,9 +75,18 @@ verify actual import and runtime use. Separate scratch research verified the
 1.0.11 wheel install, API/vector behavior, single-thread option and bounded
 64 MiB streaming on Windows and WSL2 Linux. A minimal Windows PyInstaller
 one-file smoke build worked without hidden imports; this is a packaging
-assessment, not an application installer or release test. macOS runtime
-verification is pending the required `macos-26` CI portability job; no
-application installer infrastructure is introduced.
+assessment, not an application installer or release test. The Linux
+portability and macOS portability jobs each passed 530 portable tests on
+[PR #43 run 45863237303](https://github.com/heaje/muteinous/actions/runs/45863237303)
+and [PR #46 run 45871392966](https://github.com/heaje/muteinous/actions/runs/45871392966).
+The portable set includes
+`test_fingerprint_is_deterministic_and_algorithm_distinguishable`, exercising
+the locked BLAKE3 import and fingerprint runtime, and
+`test_changed_dependency_identity_invalidates_only_dependent_result`, covering
+portable validity comparison. This is selected Linux/macOS runtime evidence,
+not throughput benchmark evidence: macOS and native-Linux fingerprint
+benchmarks remain not done. No application installer infrastructure is
+introduced.
 
 The upstream 1.0.11 source distribution's locked Rust graph contains 30 crates
 with permissive declared license expressions (MIT/Apache, CC0/MIT-0, or the
@@ -143,3 +152,68 @@ This is a foundation only. Automatic rescanning, cache persistence, scan/preview
 workflow integration, native-format discovery/decoding, verified-original
 resolution, installation-state management, and installation authorization are
 out of scope.
+
+## Follow-up benchmark and advisory recheck (2026-11-26)
+
+The existing `chunk_size_sweep.py` was rerun unchanged at the recorded main
+baseline `a46bada876461bd60446ff5599159fbf017c57a4`, with its default 1,024 MiB
+file size and seven interleaved repeats. Both runs are **warm-cache**, not cold:
+the script hashes the large file once to establish its reference digest before
+timing and pre-reads all 2,000 small files. The 1 GiB working set is also below
+available RAM on both machines. On Windows no cache-flush method was used; in
+WSL2, unprivileged `echo 3 > /proc/sys/vm/drop_caches` failed with permission
+denied. Neither run justifies a cold-cache label.
+
+Windows reported an AMD Ryzen 9 9900X (12 cores/24 logical CPUs), 32 GiB RAM,
+Windows 11 Pro build 26300, CPython 3.14.10 and `blake3` 1.0.11. `Get-ComputerInfo`
+identified the product as Windows 10 Pro, version 2009, while the OS API and
+Python platform report Windows 11; the build number agrees at 26300. The
+script's temporary data was on C: (NTFS, WD_BLACK SN770 1 TB NVMe). The read-only
+measurement command was
+`.\.venv\Scripts\python.exe -I benchmarks/fingerprinting/chunk_size_sweep.py 1024`.
+The script has no cold-mode option: its reference-digest pass warms the fixture
+before timing. A fixture larger than RAM would leave uncontrolled partial
+residency and repeated mixed-cache reads, not a defensible cold measurement, so
+no such run was labeled or reported as cold.
+In WSL2 Ubuntu 26.04.1, the same host CPU exposed 24 logical CPUs and about
+15.4 GiB guest RAM; the kernel was
+`6.6.87.2-microsoft-standard-WSL2`. The temporary data was on the distro's
+ext4 virtual disk (`/dev/sdd`), not `/mnt/c`; hardware storage beneath that
+virtual disk was not established. CPython 3.14.10, `blake3` 1.0.11 and
+`psutil` 7.2.2 were installed in a throwaway home-directory venv. Because the
+distro lacked `python3-venv`/ensurepip, a user-local uv bootstrap was used; no
+system package or setting was changed (uv 0.13.10). The benchmark command was
+`$HOME/muteinous-bench-17-venv/bin/python -I $HOME/muteinous-bench-17/benchmarks/fingerprinting/chunk_size_sweep.py 1024`
+with `TMPDIR` set to a directory under the distro home.
+
+The captured console output and complete 28-row median/min/max tables are
+retained as [Windows raw output](../benchmarks/fingerprinting/windows-2026-11-26-chunk-sweep.txt),
+[Windows CSV](../benchmarks/fingerprinting/windows-2026-11-26-chunk-sweep.csv),
+[WSL raw output](../benchmarks/fingerprinting/wsl-ubuntu-2026-11-26-chunk-sweep.txt)
+and [WSL CSV](../benchmarks/fingerprinting/wsl-ubuntu-2026-11-26-chunk-sweep.csv).
+For the 1 GiB file, 256 KiB `readinto` measured 5,870 MB/s (5,780–5,904) on
+Windows and 10,059 MB/s (10,019–10,094) in WSL2; current 1 MiB `read` measured
+3,434 (3,365–3,486) and 10,092 (10,026–10,164) MB/s, respectively. For
+2,000 × 64 KiB files, 64 KiB `readinto` measured 1,603 (1,456–1,627) MB/s on
+Windows and 6,850 (6,505–6,869) MB/s in WSL2; current 1 MiB `read` measured
+224 (222–226) and 6,631 (6,424–6,658) MB/s. All values are warm-cache
+medians with seven repeats; the WSL2 result is virtualized and is not a native
+Linux comparison. These single-machine synthetic results do not overturn the
+existing Windows-only read-size conclusion.
+
+On 2026-11-26 the public GitHub Global Advisory Database queries
+`gh api '/advisories?ecosystem=pip&affects=blake3'` and
+`gh api '/advisories?ecosystem=rust&affects=blake3'` each returned an empty
+list. The PyPI JSON metadata at `https://pypi.org/pypi/blake3/json` reported
+1.0.11 as latest (same as the lock), released 2026-10-08, not yanked; its
+top-level vulnerabilities list was empty. No advisory was found for the locked
+version in these sources. Repository Dependabot alerts are disabled and were
+not used as evidence; this check cannot establish absence of undisclosed or
+future vulnerabilities.
+
+**Not done:** macOS was not measured; completing it requires a maintainer-
+authorized throwaway `macos-26` runner job, which was not created. Native Linux
+was not measured; WSL2 is not a substitute. A genuinely cold-cache rerun also
+remains outstanding because this script warms its own fixtures and this
+environment did not permit an unprivileged cache drop. The results do not
+change production code or algorithm selection.
