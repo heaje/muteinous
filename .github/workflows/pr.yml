@@ -24,13 +24,13 @@ jobs:
           version: '0.13.9'
       - uses: go-task/setup-task@v2
 
-      - name: Confirm two-vCPU baseline
+      - name: Report Windows runner CPU count
         shell: pwsh
         run: |
           $logical = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
           Write-Host "Windows runner logical CPUs: $logical"
           if ($logical -ne 2) {
-            throw 'Benchmark baseline changed; expected two-vCPU Windows runner.'
+            Write-Host "::warning::Runner differs from the two-vCPU performance baseline; test timing is not directly comparable."
           }
 
       - name: Set up locked environment
