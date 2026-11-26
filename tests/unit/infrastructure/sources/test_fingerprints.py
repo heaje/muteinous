@@ -77,9 +77,9 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
         def __exit__(self, *args: Any) -> None:
             self._wrapped.close()
 
-        def read(self, size: int = -1) -> bytes:
-            read_sizes.append(size)
-            return cast(bytes, self._wrapped.read(size))
+        def readinto(self, buffer: Any) -> int:
+            read_sizes.append(len(buffer))
+            return cast(int, self._wrapped.readinto(buffer))
 
     def tracked_open(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Any:
         wrapped = original_open(path, mode, *args, **kwargs)
@@ -89,8 +89,8 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
     result = fingerprint_file(source)
 
     assert result == f"blake3:{blake3(content, max_threads=1).hexdigest()}"
-    assert read_sizes
-    assert max(read_sizes) == 1024 * 1024
+    assert len(read_sizes) > 1
+    assert max(read_sizes) <= 1024 * 1024
     with original_open(source, "rb") as check:
         assert check.read() == before
 

@@ -8,8 +8,9 @@ code.
 
 ## Hashing and resource policy
 
-`fingerprint_file` streams a plugin-selected file boundary in fixed 1 MiB reads
-using BLAKE3 1.0.11 with `max_threads=1`. The returned opaque string is prefixed
+`fingerprint_file` streams a plugin-selected file boundary through one reused
+256 KiB buffer (unbuffered `readinto`) using BLAKE3 1.0.11 with `max_threads=1`.
+Memory per call is therefore fixed at the buffer size. The returned opaque string is prefixed
 `blake3:` so it cannot compare equal to evidence from a different algorithm.
 `fingerprint_assets` visits supplied assets synchronously and sequentially.
 The implementation creates no worker pool, does not retain file contents,
@@ -31,6 +32,33 @@ work. Hashing is not a dispatch-time validator; validators remain quick and
 read-only, and queue resource occupancy lasts until the worker's physical
 operation stops. No future scan/job integration or speculative global
 semaphore is introduced here.
+
+### Read size and buffer reuse
+
+The buffer size and reuse strategy were chosen from a read-size sweep
+([`benchmarks/fingerprinting/chunk_size_sweep.py`](../benchmarks/fingerprinting/chunk_size_sweep.py)),
+not from the algorithm benchmark, which fixed 1 MiB reads without comparing
+other sizes. Measured on one Windows machine (CPython 3.14, warm page cache,
+synthetic random data, median of 7 interleaved runs): a `read(n)` loop with
+`n` = 1 MiB hashed a 1 GiB file at about 3,460 MB/s versus about 5,650–5,840
+MB/s at 256–512 KiB, and hashed 2,000 × 64 KiB files at about 225 MB/s versus
+about 1,360 MB/s at 64 KiB. Each `read(n)` allocates a new `n`-byte object;
+the cost appears allocation-related, though the mechanism was not isolated.
+Reusing one buffer with `readinto` removed the penalty (about 6,000 MB/s on the
+large file at 1 MiB) but still pays to allocate and zero the buffer per call,
+so a 1 MiB buffer reached only about 324 MB/s on the small files. A 256 KiB
+reused buffer measured about 5,755 MB/s (large) and about 1,341 MB/s (small),
+within about 5% of the best large-file result without the small-file cliff.
+
+The production function was then compared with the previous 1 MiB `read(n)`
+implementation on the same data: about 6,010 versus 3,400 MB/s (1 GiB file) and
+about 1,190 versus 220 MB/s (2,000 × 64 KiB files). Digests were identical.
+
+Limits: warm cache only (no cold-storage run), one machine, synthetic data, no
+Linux/macOS measurement; the allocator-related cliff may sit elsewhere on other
+platforms or Python builds. Throughput is not a tested contract; tests assert
+only bounded reads and unchanged digests. Revisit if real asset mixes are
+dominated by very large or very small files, or if cold-storage runs disagree.
 
 ## Dependency, license and packaging evidence
 

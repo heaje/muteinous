@@ -7,7 +7,10 @@ from blake3 import blake3
 
 from muteinous.models.source import SourceAssetId, SourceFingerprint
 
-_HASH_CHUNK_SIZE = 1024 * 1024
+# One reused buffer per call. A fresh ``read(n)`` allocation per chunk was ~40%
+# slower on large files at 1 MiB and ~6x slower on small files; see
+# docs/source-validity.md.
+_HASH_CHUNK_SIZE = 256 * 1024
 
 
 def fingerprint_file(path: Path) -> SourceFingerprint:
@@ -18,9 +21,11 @@ def fingerprint_file(path: Path) -> SourceFingerprint:
     nor grants installation authority.
     """
     hasher = blake3(max_threads=1)
-    with path.open("rb") as source:
-        while chunk := source.read(_HASH_CHUNK_SIZE):
-            hasher.update(chunk)
+    buffer = bytearray(_HASH_CHUNK_SIZE)
+    view = memoryview(buffer)
+    with path.open("rb", buffering=0) as source:
+        while count := source.readinto(buffer):
+            hasher.update(view[:count])
     return SourceFingerprint(f"blake3:{hasher.hexdigest()}")
 
 
