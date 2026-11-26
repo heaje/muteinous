@@ -20,8 +20,8 @@ class WordTiming:
     alignment_score: float | None = None
 
     def __post_init__(self) -> None:
-        if not self.text:
-            raise ValueError("recognized word text must be nonempty")
+        if not isinstance(self.text, str) or not self.text:
+            raise ValueError("recognized word text must be a nonempty string")
         if self.start is not None or self.end is not None:
             if not (
                 isinstance(self.start, float)

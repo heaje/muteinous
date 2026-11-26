@@ -84,6 +84,12 @@ def test_empty_word_is_rejected() -> None:
         WordTiming("")
 
 
+@pytest.mark.parametrize("text", [123, b"word", ["word"]])
+def test_non_string_word_is_rejected(text: object) -> None:
+    with pytest.raises(ValueError):
+        WordTiming(text)  # type: ignore[arg-type]
+
+
 @pytest.mark.parametrize(
     ("start", "end"),
     [
