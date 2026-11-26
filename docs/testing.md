@@ -8,7 +8,7 @@ Avoid asserting private algorithms, data structures, identity where equivalent v
 
 Mutation testing is optional diagnostic evidence. A surviving mutation alone is neither a defect nor a reason to expand behavior or coverage. Do not set arbitrary mutation scores, test-count or coverage targets. When an assertion imposes an unsupported guarantee, correct the test rather than add unnecessary production behavior.
 
-Simplify tests without losing meaningful coverage, including D160–D165 requirements and the safety-critical, CI and release checks below. For cleanup, use the [test cleanup workflow](../.agents/workflows/cleanup-tests.md); map retained coverage to applicable requirements and report unavailable checks.
+Test project-owned code, configuration, and integration contracts, not the correctness of third-party tools themselves. Use representative real-tool checks where they establish that our configuration and boundary calls work; use controlled results for project-owned handling of external outcomes. Do not reproduce a dependency's own test suite or assert its incidental behavior. Simplify tests without losing meaningful coverage, including D160–D165 requirements and the safety-critical, CI and release checks below. For cleanup, use the [test cleanup workflow](../.agents/workflows/cleanup-tests.md); map retained coverage to applicable requirements and report unavailable checks.
 
 ## Required pull-request validation
 

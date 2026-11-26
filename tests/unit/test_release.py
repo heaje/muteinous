@@ -2,6 +2,7 @@
 
 import json
 import time
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +33,60 @@ def test_candidate_guards(
 ) -> None:
     with pytest.raises(RuntimeError, match=message):
         release.validate_candidate(tag, channel, existing)
+
+
+def test_versioning_configuration() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))
+    cz = config["tool"]["commitizen"]
+    assert cz["name"] == "cz_conventional_commits"
+    assert cz["version_provider"] == "scm"
+    assert cz["tag_format"] == "v$version"
+    assert cz["version_scheme"] == "pep440"
+    assert cz["major_version_zero"] is True
+    assert cz["allowed_prefixes"] == []
+    assert config["project"]["dynamic"] == ["version"]
+    assert "version" not in config["project"]
+
+
+@pytest.mark.parametrize(
+    ("channel", "version"),
+    [
+        ("alpha", "0.2.0a1"),
+        ("beta", "0.2.0b1"),
+        ("rc", "0.2.0rc1"),
+        ("stable", "0.2.0"),
+    ],
+)
+def test_propose_requests_channel_without_mutating_tags(
+    monkeypatch: pytest.MonkeyPatch, channel: str, version: str
+) -> None:
+    tags = {"v0.1.0": SHA}
+    monkeypatch.setattr(release, "local_tags", lambda: dict(tags))
+
+    def git(*args: str) -> str:
+        assert args == ("merge-base", "--is-ancestor", "v0.1.0", "HEAD")
+        return ""
+
+    def cz(*args: str) -> str:
+        expected = ("bump", "--get-next", "--yes")
+        if channel != "stable":
+            expected += ("--prerelease", channel, "--prerelease-offset", "1")
+        assert args == expected
+        return version
+
+    monkeypatch.setattr(release, "git", git)
+    monkeypatch.setattr(release, "cz", cz)
+    assert release.propose(channel) == f"v{version}"
+
+
+def test_propose_rejects_wrong_channel_from_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(release, "local_tags", dict)
+    monkeypatch.setattr(release, "cz", lambda *_: "0.2.0b1")
+    with pytest.raises(RuntimeError, match="not the requested alpha"):
+        release.propose("alpha")
 
 
 def artifacts(
