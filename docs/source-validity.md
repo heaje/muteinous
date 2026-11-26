@@ -75,9 +75,18 @@ verify actual import and runtime use. Separate scratch research verified the
 1.0.11 wheel install, API/vector behavior, single-thread option and bounded
 64 MiB streaming on Windows and WSL2 Linux. A minimal Windows PyInstaller
 one-file smoke build worked without hidden imports; this is a packaging
-assessment, not an application installer or release test. macOS runtime
-verification is pending the required `macos-26` CI portability job; no
-application installer infrastructure is introduced.
+assessment, not an application installer or release test. The Linux
+portability and macOS portability jobs each passed 530 portable tests on
+[PR #43 run 45863237303](https://github.com/heaje/muteinous/actions/runs/45863237303)
+and [PR #46 run 45871392966](https://github.com/heaje/muteinous/actions/runs/45871392966).
+The portable set includes
+`test_fingerprint_is_deterministic_and_algorithm_distinguishable`, exercising
+the locked BLAKE3 import and fingerprint runtime, and
+`test_changed_dependency_identity_invalidates_only_dependent_result`, covering
+portable validity comparison. This is selected Linux/macOS runtime evidence,
+not throughput benchmark evidence: macOS and native-Linux fingerprint
+benchmarks remain not done. No application installer infrastructure is
+introduced.
 
 The upstream 1.0.11 source distribution's locked Rust graph contains 30 crates
 with permissive declared license expressions (MIT/Apache, CC0/MIT-0, or the
