@@ -106,13 +106,13 @@ def test_prepare_passes_tag_and_provenance_to_build(
 ) -> None:
     # Verify our channel forwarding, source inventory and local-only tagging
     # without running Git or version calculation for each channel.
-    previous = {"v0.1.0": OTHER_SHA}
+    previous = {"v0.1.0": SHA}
     output = tmp_path / "artifacts"
     calls: list[tuple[str, ...]] = []
 
     def git(*args: str) -> str:
         calls.append(args)
-        return ""
+        return "v0.1.0" if args == ("tag", "--points-at", SHA) else ""
 
     def propose(requested: str) -> str:
         assert requested == channel
@@ -152,6 +152,7 @@ def test_prepare_passes_tag_and_provenance_to_build(
     release.prepare(SHA, channel, output)
     assert calls == [
         ("tag", "--points-at", SHA),
+        ("tag", "-d", "v0.1.0"),
         ("tag", tag, SHA),
         ("checkout", "--detach", tag),
         ("build",),
