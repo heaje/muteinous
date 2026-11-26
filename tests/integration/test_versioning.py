@@ -46,9 +46,11 @@ def use_synthetic_package_build(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(release, "run", run_with_synthetic_build)
 
 
-@pytest.fixture
-def repo(tmp_path: Path) -> Path:
-    repo = tmp_path / "repo with spaces"
+@pytest.fixture(scope="session")
+def repository_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    # Each worker prepares its own baseline. Tests receive independent copies
+    # of the working tree and .git directory, never this mutable repository.
+    repo = tmp_path_factory.mktemp("versioning-template") / "repo with spaces"
     repo.mkdir()
     source = Path(__file__).resolve().parents[2]
     shutil.copy2(source / "pyproject.toml", repo)
@@ -62,16 +64,31 @@ def repo(tmp_path: Path) -> Path:
         ignore=shutil.ignore_patterns("__pycache__", "*.egg-info"),
     )
     run(repo, "git", "init", "--template=")
-    hooks = tmp_path / "empty-hooks"
-    hooks.mkdir()
-    run(repo, "git", "config", "core.hooksPath", str(hooks))
-    run(repo, "git", "config", "tag.gpgsign", "false")
-    run(repo, "git", "config", "user.name", "Version Test")
-    run(repo, "git", "config", "user.email", "test@example.invalid")
-    run(repo, "git", "config", "commit.gpgsign", "false")
+    # Relative to the working tree, this empty hooks directory remains
+    # private to each copy. Preserve the config created by git init.
+    (repo / ".git/empty-hooks").mkdir()
+    with (repo / ".git/config").open("a", encoding="utf-8", newline="\n") as config:
+        config.write(
+            "\n[core]\n"
+            "\thooksPath = .git/empty-hooks\n"
+            "[tag]\n"
+            "\tgpgsign = false\n"
+            "[user]\n"
+            "\tname = Version Test\n"
+            "\temail = test@example.invalid\n"
+            "[commit]\n"
+            "\tgpgsign = false\n"
+        )
     run(repo, "git", "add", ".")
     run(repo, "git", "commit", "-m", "feat: initial package")
     return repo
+
+
+@pytest.fixture
+def repo(repository_template: Path, tmp_path: Path) -> Path:
+    # copytree copies file contents, including the Git object database and
+    # refs; it does not share hard links, a worktree, or an origin remote.
+    return shutil.copytree(repository_template, tmp_path / "repo with spaces")
 
 
 @pytest.mark.portable
