@@ -56,9 +56,7 @@ def test_validate_source(
 
 
 @pytest.mark.parametrize("state", ["missing", "bootstrap", "valid", "invalid"])
-def test_release_history_boundary(
-    monkeypatch: pytest.MonkeyPatch, state: str
-) -> None:
+def test_release_history_boundary(monkeypatch: pytest.MonkeyPatch, state: str) -> None:
     bootstrap = release.BOOTSTRAP
     head = bootstrap if state == "bootstrap" else SHA
     history = {
@@ -171,7 +169,9 @@ def test_build_records_artifact_provenance(
     assert metadata["sha"] == SHA
     assert metadata["tag"] == tag
     assert metadata["version"] == version
-    assert metadata["environment"]["lock_sha256"] == release.digest(tmp_path / "uv.lock")
+    assert metadata["environment"]["lock_sha256"] == release.digest(
+        tmp_path / "uv.lock"
+    )
     assert metadata["artifacts"] == {
         name: release.digest(output / name) for name in (wheel_name, sdist_name)
     }
@@ -185,7 +185,11 @@ def test_build_records_artifact_provenance(
     [(OTHER_SHA, TAG[1:], "does not resolve"), (SHA, "0.2.0a1", "does not match")],
 )
 def test_build_rejects_wrong_tag_or_scm_version(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, version: str, error: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    version: str,
+    error: str,
 ) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(release, "validate_source", lambda _: None)
