@@ -102,6 +102,9 @@ def test_content_change_with_preserved_filesystem_metadata_is_detected(
     before: AssetFingerprints = {asset: fingerprint_file(source)}
     source.write_bytes(b"afters")
     os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+    changed_stat = source.stat()
+    assert changed_stat.st_size == original_stat.st_size
+    assert changed_stat.st_mtime_ns == original_stat.st_mtime_ns
     after: AssetFingerprints = {asset: fingerprint_file(source)}
 
     result = compare_source_evidence(

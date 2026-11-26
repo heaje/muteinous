@@ -7,6 +7,7 @@ from typing import Any, cast
 import pytest
 from blake3 import blake3
 
+from muteinous.infrastructure.sources import fingerprints
 from muteinous.infrastructure.sources.fingerprints import (
     fingerprint_assets,
     fingerprint_file,
@@ -30,6 +31,29 @@ def test_fingerprint_is_deterministic_and_algorithm_distinguishable(
         == "blake3:6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
     )
     assert first != f"sha256:{hashlib.sha256(b'abc').hexdigest()}"
+
+
+def test_fingerprinting_constructs_single_threaded_hashers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "asset.bin"
+    source.write_bytes(b"asset")
+    max_threads_values: list[int] = []
+
+    def record_constructor(*, max_threads: int) -> blake3:
+        max_threads_values.append(max_threads)
+        return blake3(max_threads=max_threads)
+
+    monkeypatch.setattr(fingerprints, "blake3", record_constructor)
+
+    file_fingerprint = fingerprints.fingerprint_file(source)
+    asset_fingerprint = fingerprints.fingerprint_assets(
+        {SourceAssetId("asset"): source}
+    )[SourceAssetId("asset")]
+
+    assert file_fingerprint == asset_fingerprint
+    assert max_threads_values == [1, 1]
 
 
 def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
