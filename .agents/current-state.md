@@ -24,7 +24,7 @@ PR #41 and #43 merged without pre-merge recorded independent review; post-merge 
 
 ### Next
 
-M2 sequencing is governed by the decision log and the maintainer-approved M2 amendment. Check prerequisites before starting dependent work.
+M2 sequencing is governed by the decision log and the maintainer-approved M2 planning decisions (decisions.md, 2026-11-26). Check prerequisites before starting dependent work.
 
 ### Cross-task risks
 
