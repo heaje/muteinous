@@ -7,7 +7,7 @@ name = "muteinous"
 dynamic = ["version"]
 description = "Muteinous"
 requires-python = ">=3.14,<3.15"
-dependencies = ["blake3>=1.0.11,<2"]
+dependencies = ["blake3"]
 
 [dependency-groups]
 dev = [

@@ -35,10 +35,14 @@ semaphore is introduced here.
 
 ### Read size and buffer reuse
 
-The buffer size and reuse strategy were chosen from a read-size sweep
+The buffer is a bounded-memory choice: one 256 KiB buffer is reused for each
+fingerprinting call. The storage integrity helper in
+`infrastructure/storage/_filesystem.py` uses a 1 MiB read block as a precedent
+for bounded streaming, but the source fingerprinter uses a different size based
+on its separate read-size sweep
 ([`benchmarks/fingerprinting/chunk_size_sweep.py`](../benchmarks/fingerprinting/chunk_size_sweep.py)),
-not from the algorithm benchmark, which fixed 1 MiB reads without comparing
-other sizes. Measured on one Windows machine (CPython 3.14, warm page cache,
+not from the algorithm-selection benchmark. Measured on one Windows machine
+(CPython 3.14, warm page cache,
 synthetic random data, median of 7 interleaved runs): a `read(n)` loop with
 `n` = 1 MiB hashed a 1 GiB file at about 3,460 MB/s versus about 5,650–5,840
 MB/s at 256–512 KiB, and hashed 2,000 × 64 KiB files at about 225 MB/s versus
@@ -62,7 +66,8 @@ dominated by very large or very small files, or if cold-storage runs disagree.
 
 ## Dependency, license and packaging evidence
 
-The manifest constraint and generated lock select BLAKE3 1.0.11. The locked
+The project manifest declares `blake3` without a version constraint, following
+repository convention; `uv.lock` selects BLAKE3 1.0.11. The locked
 release provides CPython 3.14 wheels for Windows, Linux manylinux and macOS;
 wheel availability alone is not proof of successful runtime behavior. This
 implementation's Windows locked-environment tests and isolated-wheel probe

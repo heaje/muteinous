@@ -7,9 +7,7 @@ from blake3 import blake3
 
 from muteinous.models.source import SourceAssetId, SourceFingerprint
 
-# One reused buffer per call. A fresh ``read(n)`` allocation per chunk was ~40%
-# slower on large files at 1 MiB and ~6x slower on small files; see
-# docs/source-validity.md.
+# A reused 256 KiB buffer bounds memory per call; see the read-size sweep.
 _HASH_CHUNK_SIZE = 256 * 1024
 
 
