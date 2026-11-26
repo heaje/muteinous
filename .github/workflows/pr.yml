@@ -29,8 +29,8 @@ jobs:
         run: |
           $logical = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
           Write-Host "Windows runner logical CPUs: $logical"
-          if ($logical -ne 2) {
-            Write-Host "::warning::Runner differs from the two-vCPU performance baseline; test timing is not directly comparable."
+          if ($logical -ne 4) {
+            Write-Host "::warning::Runner differs from the four-vCPU performance baseline; test timing is not directly comparable."
           }
 
       - name: Set up locked environment
