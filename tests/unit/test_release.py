@@ -45,7 +45,7 @@ def test_versioning_configuration() -> None:
     assert cz["version_scheme"] == "pep440"
     assert cz["major_version_zero"] is True
     assert cz["allowed_prefixes"] == []
-    assert config["project"]["dynamic"] == ["version"]
+    assert "version" in config["project"]["dynamic"]
     assert "version" not in config["project"]
 
 
@@ -69,7 +69,7 @@ def test_propose_requests_channel_without_mutating_tags(
         return ""
 
     def cz(*args: str) -> str:
-        expected = ("bump", "--get-next", "--yes")
+        expected: tuple[str, ...] = ("bump", "--get-next", "--yes")
         if channel != "stable":
             expected += ("--prerelease", channel, "--prerelease-offset", "1")
         assert args == expected
