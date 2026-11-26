@@ -29,6 +29,9 @@ def convert(source, destination):
             if recorded == "WD_BLACK SN770 1TB NVMe; NTFS"
             else ""
         )
+        legacy_rss = row.pop("working_set_baseline_bytes", None)
+        if "rss_baseline_bytes" not in row and legacy_rss is not None:
+            row["rss_baseline_bytes"] = legacy_rss
     trials = {
         (
             row["run_id"],

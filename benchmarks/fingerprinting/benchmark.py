@@ -110,12 +110,13 @@ def competitor_baseline(seconds=2.0):
 
 def trial(paths, size, name, workers, threads, contention, solo_competitor):
     process = psutil.Process()
-    peak_wset, baseline = sample_memory(process)
-    peak_rss = baseline
+    peak_wset, rss_baseline = sample_memory(process)
+    peak_rss = rss_baseline
     peak_threads = process.num_threads()
     stop = threading.Event()
     work = [0]
     payload = bytes(BLOCK)
+    pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
 
     def sample():
         nonlocal peak_wset, peak_rss, peak_threads
@@ -135,29 +136,34 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor):
 
     sampler = threading.Thread(target=sample)
     competitor = threading.Thread(target=competing_job) if contention else None
-    sampler.start()
-    cpu = time.process_time()
-    start = time.perf_counter()
     try:
+        sampler.start()
         if competitor:
             competitor.start()
+        cpu_start = time.process_time()
+        start = time.perf_counter()
         passes = 0
-        while passes == 0 or time.perf_counter() - start < 0.5:
-            if workers == 1:
+        while True:
+            passes += 1
+            if pool is None:
                 values = batch(range(len(paths)))
             else:
-                with ThreadPoolExecutor(max_workers=workers) as pool:
-                    parts = (range(i, len(paths), workers) for i in range(workers))
-                    values = [v for group in pool.map(batch, parts) for v in group]
-            passes += 1
+                parts = (range(i, len(paths), workers) for i in range(workers))
+                values = [v for group in pool.map(batch, parts) for v in group]
+            elapsed = time.perf_counter() - start
+            if elapsed >= 0.5:
+                break
+        cpu = time.process_time() - cpu_start
+        stop.set()
         values.sort()
     finally:
         stop.set()
-        if competitor:
+        if competitor and competitor.ident is not None:
             competitor.join()
-        sampler.join()
-        elapsed = time.perf_counter() - start
-    cpu = time.process_time() - cpu
+        if pool:
+            pool.shutdown(wait=True)
+        if sampler.ident is not None:
+            sampler.join()
     return dict(
         record="trial",
         algorithm=name,
@@ -171,7 +177,7 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor):
         MB_s=size * passes / elapsed / 1e6,
         cpu_seconds=cpu,
         cpu_util_percent=cpu / elapsed * 100,
-        working_set_baseline_bytes=baseline,
+        rss_baseline_bytes=rss_baseline,
         process_peak_working_set_bytes=peak_wset,
         rss_sampled_peak_bytes=peak_rss,
         threads_sampled_peak=peak_threads,
