@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        candidate: [faster-whisper, winml]
+        candidate: [faster-whisper, winml, winml-standard, sherpa-onnx, moonshine]
     name: ASR dependency probe (${{ matrix.candidate }})
     steps:
       - uses: actions/checkout@v7
@@ -53,6 +53,12 @@ jobs:
           $options = @('--python', $python, '--only-binary', ':all:')
           if ($env:CANDIDATE -eq 'faster-whisper') {
             $requirements = @('faster-whisper>=1.2.1')
+          } elseif ($env:CANDIDATE -eq 'sherpa-onnx') {
+            $requirements = @('sherpa-onnx==2.0.3')
+          } elseif ($env:CANDIDATE -eq 'moonshine') {
+            $requirements = @('moonshine-voice==0.1.6')
+          } elseif ($env:CANDIDATE -eq 'winml-standard') {
+            $requirements = @('onnxruntime-genai-winml==0.20.0')
           } else {
             $requirements = @('onnxruntime-windowsml>=1.30', 'onnxruntime-genai-winml>=0.17.1')
             # Reproduce the historical experimental substitution, not a production dependency decision.
@@ -81,16 +87,56 @@ jobs:
               files = [Path(dist.locate_file(f)) for f in (dist.files or ())]
               size = sum(p.stat().st_size for p in files if p.is_file())
               native = [p.name for p in files if p.suffix.lower() in {".dll", ".pyd"}]
-              print(f"DIST {dist.metadata['Name']}=={dist.version} record_file_bytes={size} native={native}")
+              bundled_assets = [p.name for p in files if p.suffix.lower() in {'.onnx', '.safetensors', '.gguf', '.tflite'}]
+              print(f"DIST {dist.metadata['Name']}=={dist.version} record_file_bytes={size} native={native} bundled_model_like_files={bundled_assets}")
           '@ | & $python -
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($env:CANDIDATE -eq 'faster-whisper') {
             & $python -c "import faster_whisper, ctranslate2; print('imports succeeded'); print('CPU compute types:', ctranslate2.get_supported_compute_types('cpu')); print('CUDA device count:', ctranslate2.get_cuda_device_count())"
+          } elseif ($env:CANDIDATE -eq 'sherpa-onnx') {
+            & $python -c "import sherpa_onnx; print('imports succeeded'); print('OfflineRecognizer available:', hasattr(sherpa_onnx, 'OfflineRecognizer'))"
+          } elseif ($env:CANDIDATE -eq 'moonshine') {
+            & $python -c "import moonshine_voice; print('imports succeeded'); print('module:', moonshine_voice.__file__)"
           } else {
             & $python -c "import onnxruntime as ort; import onnxruntime_genai as genai; print('imports succeeded'); print('ORT version:', ort.__version__); print('available providers:', ort.get_available_providers()); print('all known providers:', ort.get_all_providers()); print('GenAI version:', getattr(genai, '__version__', 'not exposed'))"
           }
           $probeExit = $LASTEXITCODE
           Write-Host "IMPORT AND ENUMERATION EXIT: $probeExit"
-          Write-Host 'No model artifacts downloaded or opened; no inference or execution-provider session exercised.'
+          Write-Host 'No separate ASR weights requested or opened; package-bundled assets may be present. No inference or execution-provider session exercised.'
           if ($probeExit -ne 0) { exit $probeExit }
           if ($checkExit -ne 0) { exit $checkExit }
+
+  whisper-cpp-probe:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'spike/issue-50-asr-dependency-probe'
+    runs-on: windows-2025
+    timeout-minutes: 25
+    name: ASR native build probe (whisper.cpp)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ggml-org/whisper.cpp
+          ref: 96ec4d9823e9d0211944172da35f9f29134af990
+          path: upstream-whisper
+          persist-credentials: false
+      - name: Build CPU-only CLI without fetching model weights
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git -C upstream-whisper rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S upstream-whisper -B build-whisper -A x64 -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_NATIVE=OFF -DWHISPER_CURL=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build-whisper --config Release --target whisper-cli --parallel 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cli = Get-ChildItem build-whisper -Recurse -File -Filter whisper-cli.exe | Select-Object -First 1
+          if (-not $cli) { throw 'whisper-cli.exe missing' }
+          $files = Get-ChildItem build-whisper -Recurse -File | Where-Object { $_.Extension -in '.exe', '.dll' }
+          $files | Select-Object Name, Length | Format-Table
+          Write-Host "BUILD TREE EXECUTABLE AND DLL BYTES: $(($files | Measure-Object Length -Sum).Sum)"
+          & $cli.FullName --help
+          $helpExit = $LASTEXITCODE
+          Write-Host "CLI HELP EXIT: $helpExit"
+          if ($helpExit -ne 0) { exit $helpExit }
+          Write-Host 'No ASR inference performed; build-tree bytes are not a validated frozen distribution.'
