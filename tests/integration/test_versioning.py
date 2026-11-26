@@ -258,39 +258,55 @@ def test_release_divergent_tag_is_rejected(
         release.propose("stable")
 
 
+@pytest.mark.parametrize(
+    ("channel", "tag", "prior_tags"),
+    [
+        ("alpha", "v0.1.0a1", ()),
+        ("beta", "v0.1.0b1", ("v0.1.0a1",)),
+        ("rc", "v0.1.0rc1", ("v0.1.0a1", "v0.1.0b1")),
+        ("stable", "v0.1.0", ("v0.1.0a1", "v0.1.0b1", "v0.1.0rc1")),
+    ],
+    ids=["alpha", "beta", "rc", "stable"],
+)
 def test_release_builds_each_channel_from_its_own_tag(
-    repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    repo: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    channel: str,
+    tag: str,
+    prior_tags: tuple[str, ...],
 ) -> None:
     sha = run(repo, "git", "rev-parse", "HEAD")
     monkeypatch.setattr(release, "BOOTSTRAP", sha)
-    # A separate checkout per channel models the actual workflow. All four
-    # versions deliberately use the same commit, not synthetic version overrides.
-    previous: dict[str, str] = {}
-    for channel, tag in (
-        ("alpha", "v0.1.0a1"),
-        ("beta", "v0.1.0b1"),
-        ("rc", "v0.1.0rc1"),
-        ("stable", "v0.1.0"),
-    ):
-        checkout = tmp_path / f"checkout-{channel}"
-        output = tmp_path / f"artifacts-{channel}"
-        run(tmp_path, "git", "clone", str(repo), str(checkout))
-        run(checkout, "git", "config", "tag.gpgsign", "false")
-        with monkeypatch.context() as context:
-            context.chdir(checkout)
-            release.prepare(sha, channel, output, remote=False)
-            assert release.validate_artifacts(output, sha, channel) == (tag, previous)
-            assert run(checkout, "git", "rev-parse", tag) == sha
-            assert run(checkout, sys.executable, "-m", "setuptools_scm") == tag[1:]
-            assert (output / f"muteinous-{tag[1:]}.tar.gz").is_file()
-            assert (output / f"muteinous-{tag[1:]}-py3-none-any.whl").is_file()
-            notes = (output / "release-notes.md").read_text("utf-8")
-            assert tag in notes
-            assert "initial package" in notes
-            assert not (checkout / "CHANGELOG.md").exists()
-        run(checkout, "git", "push", "origin", f"refs/tags/{tag}")
-        previous[tag] = sha
+    # Model previously published channels at the same source revision.
+    # The separate real-provider progression test checks the transition
+    # sequence; each fresh build now has independent, reproducible history.
+    previous = dict.fromkeys(prior_tags, sha)
+    for old in prior_tags:
+        run(repo, "git", "tag", old, sha)
+    checkout = tmp_path / f"checkout-{channel}"
+    output = tmp_path / f"artifacts-{channel}"
+    run(tmp_path, "git", "clone", str(repo), str(checkout))
+    run(checkout, "git", "config", "tag.gpgsign", "false")
+    with monkeypatch.context() as context:
+        context.chdir(checkout)
+        release.prepare(sha, channel, output, remote=False)
+        assert release.validate_artifacts(output, sha, channel) == (tag, previous)
+        assert run(checkout, "git", "rev-parse", tag) == sha
+        assert run(checkout, sys.executable, "-m", "setuptools_scm") == tag[1:]
+        assert (output / f"muteinous-{tag[1:]}.tar.gz").is_file()
+        assert (output / f"muteinous-{tag[1:]}-py3-none-any.whl").is_file()
+        notes = (output / "release-notes.md").read_text("utf-8")
+        assert tag in notes
+        assert "initial package" in notes
+        assert not (checkout / "CHANGELOG.md").exists()
+    # Preparing a local release must leave published tags untouched.
     assert set(run(repo, "git", "tag", "--list").splitlines()) == set(previous)
+    run(checkout, "git", "push", "origin", f"refs/tags/{tag}")
+    expected = {**previous, tag: sha}
+    assert set(run(repo, "git", "tag", "--list").splitlines()) == set(expected)
+    for published, target in expected.items():
+        assert run(repo, "git", "rev-parse", published) == target
 
 
 def test_development_artifacts_have_provenance(
