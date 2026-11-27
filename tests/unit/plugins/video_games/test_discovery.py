@@ -162,7 +162,10 @@ def test_registry_adapter_accounts_for_failures_and_remaining_budget(
         (
             SimpleNamespace(bytes_read=4, text="x", error=None, truncated=False),
             SimpleNamespace(
-                bytes_read=0, text="", error=FileNotFoundError("missing"), truncated=False
+                bytes_read=0,
+                text="",
+                error=FileNotFoundError("missing"),
+                truncated=False,
             ),
             SimpleNamespace(
                 bytes_read=2, text="", error=ValueError("type"), truncated=False
