@@ -27,7 +27,9 @@ def _steam_manifest(library: Path, folder: str, app: int = 1) -> Path:
     return manifest
 
 
-def _epic_manifest(directory: Path, installation: Path, name: str = "Synthetic") -> Path:
+def _epic_manifest(
+    directory: Path, installation: Path, name: str = "Synthetic"
+) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     manifest = directory / "synthetic.item"
     manifest.write_text(

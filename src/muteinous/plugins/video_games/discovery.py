@@ -149,9 +149,9 @@ def _candidate(path: Path, name: str, source: Source) -> tuple[Candidate, Path |
         identity = path.resolve(strict=True)
         if not stat.S_ISDIR(identity.stat().st_mode):
             return Candidate(path, name, (source,), "missing"), None
-    except (FileNotFoundError, NotADirectoryError):
+    except FileNotFoundError, NotADirectoryError:
         return Candidate(path, name, (source,), "missing"), None
-    except (OSError, RuntimeError, ValueError):
+    except OSError, RuntimeError, ValueError:
         return Candidate(path, name, (source,), "inaccessible"), None
     return Candidate(path, name, (source,), "available"), identity
 
@@ -177,7 +177,7 @@ def _string(token: str) -> str:
     if token in ("{", "}"):
         raise ValueError("expected KeyValues string")
     if token.startswith('"'):
-        return re.sub(r'\\(["\\])', r'\1', token[1:-1])
+        return re.sub(r'\\(["\\])', r"\1", token[1:-1])
     return token
 
 
@@ -221,7 +221,7 @@ def _steam_library(state: _Discovery, library: Path) -> None:
                 not isinstance(folder, str)
                 or not folder.strip()
                 or folder in (".", "..")
-                or any(char in folder for char in '/\\:\x00')
+                or any(char in folder for char in "/\\:\x00")
                 or ntpath.isreserved(folder)
             ):
                 raise ValueError("invalid Steam installation folder")
