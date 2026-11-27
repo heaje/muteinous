@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -59,7 +62,9 @@ def test_launcher_candidates_and_deduplication(tmp_path: Path) -> None:
     primary.mkdir(parents=True)
     _steam_manifest(steam, "Primary")
     _steam_manifest(other, "Synthetic")
-    (steam / "steamapps/libraryfolders.vdf").write_text(
+    config = steam / "config"
+    config.mkdir()
+    (config / "libraryfolders.vdf").write_text(
         f'"libraryfolders" {{ "0" {{ "path" "{_vdf_path(steam)}" }} '
         f'"1" {{ "path" "{_vdf_path(other)}" "apps" {{ "1" "123" }} }} }}',
         encoding="utf-8",
@@ -198,7 +203,10 @@ def test_traversal_and_invalid_encoding(tmp_path: Path) -> None:
     (manifests / "invalid.item").write_bytes(b"\xff")
     result = _discover(
         epic=manifests,
-        gog=((str(game / ".." / "game"), "Traversal"), (str(game) + "\ud800", "Invalid")),
+        gog=(
+            (str(game / ".." / "game"), "Traversal"),
+            (str(game) + "\ud800", "Invalid"),
+        ),
     )
     assert not result.candidates
     assert len(result.issues) == 3
@@ -297,10 +305,42 @@ def test_probe_reports_unreadable_and_disappeared_entries(
     assert result.truncated
     assert result.issues
     asset.unlink()
-    tmp_path.rmdir()
+    moved = tmp_path / "moved"
+    moved.mkdir()
+    candidate = discovery.select_folder(moved).candidates[0]
+    moved.rmdir()
     result = discovery.probe_installation(candidate)
     assert result.truncated
     assert result.issues
+
+
+@pytest.mark.portable
+def test_probe_skips_reparse_points_and_special_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    game = tmp_path / "game"
+    game.mkdir()
+    linked = game / "linked"
+    linked.mkdir()
+    (linked / "hidden.ast").write_bytes(b"STRM")
+    special = game / "special"
+    special.touch()
+    candidate = discovery.select_folder(game).candidates[0]
+    original_lstat = Path.lstat
+
+    def observed_lstat(path: Path) -> os.stat_result:
+        info = original_lstat(path)
+        if path == linked:
+            return os.stat_result((stat.S_IFLNK, *tuple(info)[1:]))
+        if path == special:
+            return os.stat_result((stat.S_IFIFO, *tuple(info)[1:]))
+        return info
+
+    monkeypatch.setattr(Path, "lstat", observed_lstat)
+    result = discovery.probe_installation(candidate)
+    assert result.truncated
+    assert not result.ast_signature
+    assert result.entries_examined == 2
 
 
 @pytest.mark.portable
@@ -386,16 +426,16 @@ def test_windows_discovery_registry_and_environment(
             return Key("game")
         raise FileNotFoundError(name)
 
-    def query_value(key: Key, name: str) -> tuple[str, int]:
+    def query_value(state: discovery._Discovery, key: Key, name: str) -> str:
         values = {
             ("steam", "SteamPath"): str(steam),
             ("game", "path"): str(gog_game),
             ("game", "gameName"): "Synthetic GOG",
         }
-        return values[key.kind, name], winreg.REG_SZ
+        return values[key.kind, name]
 
     monkeypatch.setattr(winreg, "OpenKey", open_key)
-    monkeypatch.setattr(winreg, "QueryValueEx", query_value)
+    monkeypatch.setattr(discovery, "_registry_text", query_value)
     monkeypatch.setattr(winreg, "QueryInfoKey", lambda key: (1, 0, 0))
     monkeypatch.setattr(winreg, "EnumKey", lambda key, index: "1")
     monkeypatch.setenv("ProgramData", str(tmp_path))
@@ -410,3 +450,32 @@ def test_windows_discovery_registry_and_environment(
         gog_game: ("gog",),
     }
     assert not result.issues
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry boundary")
+def test_registry_reader_bounds_real_synthetic_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import winreg
+
+    key_path = rf"Software\MuteinousTests-{uuid4().hex}"
+    monkeypatch.setattr(discovery, "_MAX_REGISTRY_VALUE", 64)
+    state = discovery._Discovery(lambda: False)
+    try:
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE
+        ) as key:
+            winreg.SetValueEx(key, "valid", 0, winreg.REG_SZ, "Synthetic \u03b1")
+            winreg.SetValueEx(key, "oversize", 0, winreg.REG_SZ, "x" * 64)
+            winreg.SetValueEx(key, "wrong", 0, winreg.REG_BINARY, b"data")
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+            assert discovery._registry_text(state, key, "valid") == "Synthetic \u03b1"
+            with pytest.raises(ValueError, match="read limit"):
+                discovery._registry_text(state, key, "oversize")
+            assert state.truncated
+            with pytest.raises(ValueError, match="type"):
+                discovery._registry_text(state, key, "wrong")
+            with pytest.raises(FileNotFoundError):
+                discovery._registry_text(state, key, "missing")
+    finally:
+        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)

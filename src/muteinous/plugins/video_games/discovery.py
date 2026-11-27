@@ -12,7 +12,7 @@ from collections import deque
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, SupportsInt
 
 Source = Literal["steam", "epic", "gog", "manual"]
 Availability = Literal["available", "missing", "inaccessible"]
@@ -21,6 +21,7 @@ Cancel = Callable[[], bool]
 _MAX_ENTRIES = 4096
 _MAX_METADATA = 1024 * 1024
 _MAX_TOTAL_METADATA = 16 * _MAX_METADATA
+_MAX_REGISTRY_VALUE = 64 * 1024
 _MAX_PROBE_ENTRIES = 128
 _MAX_PROBE_DEPTH = 2
 
@@ -94,7 +95,12 @@ class _Discovery:
         if not _valid_path(path):
             self.issue(source, "invalid installation path")
             return
-        label = name if isinstance(name, str) and name.strip() else path.name
+        label = path.name
+        if isinstance(name, str) and name.strip():
+            if _valid_text(name):
+                label = name
+            else:
+                self.issue(source, "invalid installation display name")
         candidate, identity = _candidate(path, label, source)
         if identity is not None and identity in self.identities:
             index = self.identities[identity]
@@ -150,13 +156,14 @@ def _ordinary(info: os.stat_result) -> bool:
     )
 
 
+def _valid_text(value: str) -> bool:
+    return "\x00" not in value and not any(
+        0xD800 <= ord(char) <= 0xDFFF for char in value
+    )
+
+
 def _valid_path(path: Path) -> bool:
-    if (
-        not path.is_absolute()
-        or "\x00" in str(path)
-        or ".." in path.parts
-        or any(0xD800 <= ord(char) <= 0xDFFF for char in str(path))
-    ):
+    if not path.is_absolute() or ".." in path.parts or not _valid_text(str(path)):
         return False
     if os.name == "nt":
         if path.anchor.startswith(("\\\\?\\", "\\\\.\\")):
@@ -179,7 +186,7 @@ def _candidate(path: Path, name: str, source: Source) -> tuple[Candidate, str | 
 
 
 # Text KeyValues (Steam VDF/ACF), not a general Valve configuration interpreter.
-_TOKEN = re.compile(r'\s+|//[^\r\n]*|"(?:\\.|[^"\\])*"|[{}]|[^\s{}"]+')
+_TOKEN = re.compile(r'\s+|//[^\r\n]*|"(?:\\.|[^"\\]++)*+"|[{}]|[^\s{}"]+')
 
 
 def _tokens(text: str, cancelled: Cancel) -> Iterator[str]:
@@ -254,29 +261,32 @@ def _steam_library(state: _Discovery, library: Path) -> None:
 
 def _steam(state: _Discovery, roots: Iterable[Path]) -> None:
     libraries: dict[str, Path] = {}
+    seen_roots: set[str] = set()
     for root in roots:
         state.step()
         if not _valid_path(root):
             state.issue("Steam root", "invalid library path")
             continue
-        if str(root) in libraries:
+        if str(root) in seen_roots:
             continue
+        seen_roots.add(str(root))
         libraries[str(root)] = root
-        manifest = root / "steamapps" / "libraryfolders.vdf"
+        manifest = root / "config" / "libraryfolders.vdf"
         try:
-            values = _object(
-                _keyvalues(state.read(manifest), state.cancelled)["libraryfolders"]
-            )
+            try:
+                content = state.read(manifest)
+            except FileNotFoundError:
+                manifest = root / "steamapps" / "libraryfolders.vdf"
+                content = state.read(manifest)
+            values = _object(_keyvalues(content, state.cancelled)["libraryfolders"])
             for key, value in values.items():
                 state.step()
                 if not key.isdecimal():
                     continue
                 location = value.get("path") if isinstance(value, dict) else value
-                if (
-                    isinstance(location, str)
-                    and _valid_path(Path(location))
-                ):
-                    libraries[location] = Path(location)
+                if isinstance(location, str) and _valid_path(Path(location)):
+                    library = Path(location)
+                    libraries[str(library)] = library
                 else:
                     state.issue(manifest, "invalid Steam library path")
         except (OSError, ValueError, KeyError) as error:
@@ -313,6 +323,55 @@ def _gog(state: _Discovery, records: Iterable[tuple[object, object]]) -> None:
         state.add(location, name, "gog")
 
 
+def _registry_text(state: _Discovery, key: SupportsInt, name: str) -> str:
+    """Read a single REG_SZ with a fixed buffer, never an unbounded value query."""
+    import ctypes
+    import winreg
+    from ctypes import wintypes
+
+    _check(state.cancelled)
+    remaining = _MAX_TOTAL_METADATA - state.bytes_read
+    if remaining <= 0:
+        raise _LimitReached
+    limit = min(remaining, _MAX_REGISTRY_VALUE)
+    buffer = ctypes.create_string_buffer(limit)
+    size = wintypes.DWORD(limit)
+    kind = wintypes.DWORD()
+    query = ctypes.WinDLL("advapi32.dll").RegQueryValueExW
+    query.argtypes = [
+        wintypes.HKEY,
+        wintypes.LPCWSTR,
+        wintypes.LPDWORD,
+        wintypes.LPDWORD,
+        wintypes.LPVOID,
+        wintypes.LPDWORD,
+    ]
+    query.restype = wintypes.LONG
+    status: int = query(
+        wintypes.HKEY(int(key)),
+        name,
+        None,
+        ctypes.byref(kind),
+        buffer,
+        ctypes.byref(size),
+    )
+    _check(state.cancelled)
+    if status == 234:  # ERROR_MORE_DATA; do not allocate a larger buffer.
+        state.truncated = True
+        raise ValueError("registry metadata exceeds read limit")
+    if status == 2:  # ERROR_FILE_NOT_FOUND
+        raise FileNotFoundError(name)
+    if status:
+        raise ctypes.WinError(status)
+    state.bytes_read += size.value
+    if kind.value != winreg.REG_SZ:
+        raise ValueError("unsupported registry metadata type")
+    value = buffer.raw[: size.value].decode("utf-16-le").removesuffix("\x00")
+    if not _valid_text(value):
+        raise ValueError("invalid registry metadata string")
+    return value
+
+
 def _windows_steam_roots(state: _Discovery) -> Iterator[Path]:
     import winreg
 
@@ -326,14 +385,14 @@ def _windows_steam_roots(state: _Discovery) -> Iterator[Path]:
                 with winreg.OpenKey(
                     hive, r"Software\Valve\Steam", 0, winreg.KEY_READ | view
                 ) as key:
-                    location, _ = winreg.QueryValueEx(key, value)
-                    if isinstance(location, str) and _valid_path(Path(location)):
+                    location = _registry_text(state, key, value)
+                    if _valid_path(Path(location)):
                         yield Path(location)
                     else:
                         state.issue("Steam registry", "invalid Steam root")
             except FileNotFoundError:
                 pass
-            except OSError as error:
+            except (OSError, ValueError) as error:
                 state.issue("Steam registry", str(error))
     for variable in ("ProgramFiles(x86)", "ProgramFiles"):
         if location := os.environ.get(variable):
@@ -360,13 +419,17 @@ def _windows_gog_records(state: _Discovery) -> Iterator[tuple[object, object]]:
                             with winreg.OpenKey(
                                 games, identifier, 0, winreg.KEY_READ | view
                             ) as game:
-                                location, _ = winreg.QueryValueEx(game, "path")
+                                location = _registry_text(state, game, "path")
+                                name: str | None
                                 try:
-                                    name, _ = winreg.QueryValueEx(game, "gameName")
+                                    name = _registry_text(state, game, "gameName")
                                 except FileNotFoundError:
                                     name = None
+                                except (OSError, ValueError) as error:
+                                    state.issue("GOG registry name", str(error))
+                                    name = None
                                 yield location, name
-                        except OSError as error:
+                        except (OSError, ValueError) as error:
                             state.issue("GOG registry record", str(error))
             except FileNotFoundError:
                 pass
