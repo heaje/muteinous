@@ -13,7 +13,6 @@ from uuid import uuid4
 
 import pytest
 
-from muteinous.infrastructure.platform import registry
 from muteinous.infrastructure.platform.environment import OperatingSystem
 from muteinous.plugins.video_games import discovery
 from muteinous.plugins.video_games.discovery import (
@@ -161,21 +160,30 @@ def test_registry_adapter_accounts_for_failures_and_remaining_budget(
     monkeypatch.setattr(_registry, "_MAX_REGISTRY_VALUE", 8)
     outcomes = iter(
         (
-            registry.RegistryReadResult(4, text="x"),
-            registry.RegistryReadResult(0, error=FileNotFoundError("missing")),
-            registry.RegistryReadResult(2, error=ValueError("type")),
-            registry.RegistryReadResult(
-                4, error=ValueError("read limit"), truncated=True
+            SimpleNamespace(bytes_read=4, text="x", error=None, truncated=False),
+            SimpleNamespace(
+                bytes_read=0, text="", error=FileNotFoundError("missing"), truncated=False
+            ),
+            SimpleNamespace(
+                bytes_read=2, text="", error=ValueError("type"), truncated=False
+            ),
+            SimpleNamespace(
+                bytes_read=4, text="", error=ValueError("read limit"), truncated=True
             ),
         )
     )
     limits: list[int] = []
 
-    def read(key: object, name: str, max_bytes: int) -> registry.RegistryReadResult:
+    def read(key: object, name: str, max_bytes: int) -> SimpleNamespace:
         limits.append(max_bytes)
         return next(outcomes)
 
-    monkeypatch.setattr(registry, "read_registry_text", read)
+    monkeypatch.setattr(
+        _registry,
+        "windows_registry",
+        SimpleNamespace(read_registry_text=read),
+        raising=False,
+    )
     assert _registry._registry_text(state, 0, "valid") == "x"
     with pytest.raises(FileNotFoundError):
         _registry._registry_text(state, 0, "missing")
@@ -624,6 +632,8 @@ def test_registry_reader_bounds_real_synthetic_values(
 ) -> None:
     import winreg
 
+    from muteinous.infrastructure.platform import windows_registry
+
     key_path = rf"Software\MuteinousTests-{uuid4().hex}"
     monkeypatch.setattr(_registry, "_MAX_REGISTRY_VALUE", 64)
     state = context.DiscoveryContext(lambda: False)
@@ -637,7 +647,7 @@ def test_registry_reader_bounds_real_synthetic_values(
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
         ) as key:
-            direct = registry.read_registry_text(key, "valid", 64)
+            direct = windows_registry.read_registry_text(key, "valid", 64)
             assert direct.error is None
             assert direct.text == "Synthetic \u03b1"
             assert direct.bytes_read == len("Synthetic \u03b1\x00".encode("utf-16-le"))

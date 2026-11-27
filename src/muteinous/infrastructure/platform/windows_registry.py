@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import ctypes
+import winreg
+from ctypes import wintypes
 from dataclasses import dataclass
 from typing import SupportsInt
 
@@ -20,10 +23,6 @@ def read_registry_text(
     key: SupportsInt, name: str, max_bytes: int
 ) -> RegistryReadResult:
     """Read one REG_SZ, without reallocating on an oversized value."""
-    import ctypes
-    import winreg
-    from ctypes import wintypes
-
     if not 0 < max_bytes <= 0xFFFFFFFF:
         raise ValueError("registry read limit must fit a positive DWORD")
     limit = max_bytes
