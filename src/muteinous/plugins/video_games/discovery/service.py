@@ -6,12 +6,9 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import context
+from . import context, platforms
 from .models import Cancel, DiscoveryResult
 from .providers.base import InstallationProvider
-from .providers.epic import EpicProvider
-from .providers.gog import GOGProvider
-from .providers.steam import SteamProvider
 
 
 def _discover(
@@ -31,14 +28,26 @@ def _discover(
     )
 
 
-def discover_windows(*, cancelled: Cancel = context._never_cancel) -> DiscoveryResult:
-    """Discover local Windows launcher candidates; no game content is scanned."""
+def discover_installations(
+    *, cancelled: Cancel = context._never_cancel
+) -> DiscoveryResult:
+    """Discover candidates using supported sources for the current platform."""
     state = context.DiscoveryContext(cancelled)
     context._check(cancelled)
-    if sys.platform != "win32":
-        return DiscoveryResult((), ("Windows launcher discovery unavailable",), False)
-    providers = (SteamProvider(), EpicProvider.from_windows(state), GOGProvider())
+    providers = platforms.current_providers(state)
+    if providers is None:
+        return DiscoveryResult(
+            (), ("Automatic launcher discovery unavailable on this platform",), False
+        )
     return _discover(state, providers)
+
+
+def discover_windows(*, cancelled: Cancel = context._never_cancel) -> DiscoveryResult:
+    """Compatibility entry point restricted to Windows launcher discovery."""
+    if sys.platform != "win32":
+        context._check(cancelled)
+        return DiscoveryResult((), ("Windows launcher discovery unavailable",), False)
+    return discover_installations(cancelled=cancelled)
 
 
 def select_folder(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import override
 
@@ -25,19 +24,6 @@ class EpicProvider(InstallationProvider):
 
     def __init__(self, directory: Path | None) -> None:
         self._directory = directory
-
-    @classmethod
-    def from_windows(cls, state: context.DiscoveryContext) -> EpicProvider:
-        program_data = os.environ.get("ProgramData")
-        epic = (
-            Path(program_data) / "Epic/EpicGamesLauncher/Data/Manifests"
-            if program_data
-            else None
-        )
-        if epic is None or not context._valid_path(epic):
-            state.issue("Epic", "missing or invalid ProgramData location")
-            epic = None
-        return cls(epic)
 
     @override
     def discover(self, state: context.DiscoveryContext) -> None:

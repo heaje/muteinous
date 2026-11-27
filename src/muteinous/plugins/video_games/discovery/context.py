@@ -127,6 +127,20 @@ def _valid_text(value: str) -> bool:
     )
 
 
+def _valid_component(value: str) -> bool:
+    """Accept one ordinary host-filesystem path component, not a path."""
+    if (
+        not value.strip()
+        or value in (".", "..")
+        or "/" in value
+        or not _valid_text(value)
+    ):
+        return False
+    if os.name == "nt":
+        return "\\" not in value and ":" not in value and not ntpath.isreserved(value)
+    return True
+
+
 def _valid_path(path: Path) -> bool:
     if not path.is_absolute() or ".." in path.parts or not _valid_text(str(path)):
         return False

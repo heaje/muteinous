@@ -14,8 +14,8 @@ from uuid import uuid4
 import pytest
 
 from muteinous.plugins.video_games import discovery
-from muteinous.plugins.video_games.discovery import context, probe, service
-from muteinous.plugins.video_games.discovery.providers import _registry
+from muteinous.plugins.video_games.discovery import context, platforms, probe, service
+from muteinous.plugins.video_games.discovery.platforms import _registry
 from muteinous.plugins.video_games.discovery.providers.base import InstallationProvider
 from muteinous.plugins.video_games.discovery.providers.epic import EpicProvider
 from muteinous.plugins.video_games.discovery.providers.gog import GOGProvider
@@ -64,7 +64,11 @@ def _providers(
     epic: Path | None = None,
     gog: tuple[tuple[object, object], ...] = (),
 ) -> tuple[InstallationProvider, ...]:
-    return SteamProvider(steam_roots), EpicProvider(epic), GOGProvider(gog)
+    return (
+        SteamProvider(lambda state: steam_roots),
+        EpicProvider(epic),
+        GOGProvider(lambda state: gog),
+    )
 
 
 @pytest.mark.portable
@@ -100,6 +104,63 @@ def test_launcher_candidates_and_deduplication(tmp_path: Path) -> None:
     assert not result.issues
     assert not result.truncated
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+@pytest.mark.portable
+def test_platform_neutral_discovery_uses_selected_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifests = tmp_path / "manifests"
+    _epic_manifest(manifests, tmp_path)
+
+    def selected(state: context.DiscoveryContext) -> tuple[InstallationProvider, ...]:
+        return (EpicProvider(manifests),)
+
+    monkeypatch.setattr(platforms, "current_providers", selected)
+    result = discovery.discover_installations()
+    assert result.candidates == (
+        discovery.Candidate(tmp_path, "Synthetic", ("epic",), "available"),
+    )
+    assert not result.issues
+    assert not result.truncated
+
+
+@pytest.mark.portable
+def test_unsupported_platform_reports_discovery_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", "unsupported")
+        result = discovery.discover_installations()
+        assert not result.candidates
+        assert any("unavailable" in issue for issue in result.issues)
+        assert not result.truncated
+        with pytest.raises(discovery.DiscoveryCancelled):
+            discovery.discover_installations(cancelled=lambda: True)
+    assert discovery.select_folder(tmp_path).candidates[0].availability == "available"
+
+
+@pytest.mark.portable
+def test_steam_component_validation_uses_host_path_rules(tmp_path: Path) -> None:
+    steam = tmp_path / "steam"
+    _steam_manifest(steam, "CON")
+    (steam / "steamapps/libraryfolders.vdf").write_text(
+        '"libraryfolders" {}', encoding="utf-8"
+    )
+    if os.name != "nt":
+        (steam / "steamapps/common/CON").mkdir(parents=True)
+
+    result = _discover((steam,))
+    if os.name == "nt":
+        assert not result.candidates
+        assert any(
+            "invalid Steam installation folder" in issue for issue in result.issues
+        )
+    else:
+        assert len(result.candidates) == 1
+        assert result.candidates[0].path == steam / "steamapps/common/CON"
+        assert result.candidates[0].availability == "available"
+        assert not result.issues
 
 
 @pytest.mark.portable
@@ -496,7 +557,8 @@ def test_windows_discovery_registry_and_environment(
     monkeypatch.delenv("ProgramFiles", raising=False)
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
 
-    result = discovery.discover_windows()
+    result = discovery.discover_installations()
+    assert discovery.discover_windows() == result
 
     assert {c.path: c.sources for c in result.candidates} == {
         steam_game: ("steam",),

@@ -10,7 +10,7 @@ from .models import (
     Source,
 )
 from .probe import probe_installation
-from .service import discover_windows, select_folder
+from .service import discover_installations, discover_windows, select_folder
 
 __all__ = [
     "Availability",
@@ -20,6 +20,7 @@ __all__ = [
     "DiscoveryResult",
     "ProbeResult",
     "Source",
+    "discover_installations",
     "discover_windows",
     "probe_installation",
     "select_folder",

@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-import ntpath
-import os
 import re
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import override
 
 from .. import context
 from ..models import Cancel
-from . import _registry
 from .base import InstallationProvider
 
 # Text KeyValues (Steam VDF/ACF), not a general Valve configuration interpreter.
@@ -71,60 +68,26 @@ def _steam_library(state: context.DiscoveryContext, library: Path) -> None:
                 _keyvalues(state.read(path), state.cancelled)["appstate"]
             )
             folder = data.get("installdir")
-            if (
-                not isinstance(folder, str)
-                or not folder.strip()
-                or folder in (".", "..")
-                or any(char in folder for char in "/\\:\x00")
-                or ntpath.isreserved(folder)
-            ):
+            if not isinstance(folder, str) or not context._valid_component(folder):
                 raise ValueError("invalid Steam installation folder")
             state.add(directory / "common" / folder, data.get("name"), "steam")
         except (OSError, ValueError, KeyError) as error:
             state.issue(path, str(error))
 
 
-def _windows_steam_roots(state: context.DiscoveryContext) -> Iterator[Path]:
-    import winreg
-
-    for hive, value in (
-        (winreg.HKEY_CURRENT_USER, "SteamPath"),
-        (winreg.HKEY_LOCAL_MACHINE, "InstallPath"),
-    ):
-        for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
-            state.step()
-            try:
-                with winreg.OpenKey(
-                    hive, r"Software\Valve\Steam", 0, winreg.KEY_READ | view
-                ) as key:
-                    location = _registry._registry_text(state, key, value)
-                    if context._valid_path(Path(location)):
-                        yield Path(location)
-                    else:
-                        state.issue("Steam registry", "invalid Steam root")
-            except FileNotFoundError:
-                pass
-            except (OSError, ValueError) as error:
-                state.issue("Steam registry", str(error))
-    for variable in ("ProgramFiles(x86)", "ProgramFiles"):
-        if program_files := os.environ.get(variable):
-            path = Path(program_files) / "Steam"
-            if context._valid_path(path) and path.is_dir():
-                yield path
-
-
 class SteamProvider(InstallationProvider):
-    """Discover Steam installations from registry and library metadata."""
+    """Discover Steam installations from supplied library roots."""
 
-    def __init__(self, roots: Iterable[Path] | None = None) -> None:
+    def __init__(
+        self, roots: Callable[[context.DiscoveryContext], Iterable[Path]]
+    ) -> None:
         self._roots = roots
 
     @override
     def discover(self, state: context.DiscoveryContext) -> None:
-        roots = self._roots if self._roots is not None else _windows_steam_roots(state)
         libraries: dict[str, Path] = {}
         seen_roots: set[str] = set()
-        for root in roots:
+        for root in self._roots(state):
             state.step()
             if not context._valid_path(root):
                 state.issue("Steam root", "invalid library path")
