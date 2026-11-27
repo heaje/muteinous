@@ -155,6 +155,7 @@ def test_discovery_metadata_budget(
     monkeypatch.setattr(discovery, "_MAX_METADATA", 32)
     result = _discover(epic=epic)
     assert not result.candidates
+    assert result.truncated
     assert any("read limit" in issue for issue in result.issues)
 
     for index in range(5):
@@ -163,6 +164,44 @@ def test_discovery_metadata_budget(
     limited = _discover(epic=epic)
     assert limited.truncated
     assert any("budget exhausted" in issue for issue in limited.issues)
+
+
+@pytest.mark.portable
+def test_aggregate_budget_and_ambiguous_epic_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "duplicate.item").write_text(
+        '{"InstallLocation": "one", "InstallLocation": "two"}', encoding="utf-8"
+    )
+    result = _discover(epic=manifests)
+    assert not result.candidates
+    assert any("ambiguous" in issue for issue in result.issues)
+    (manifests / "duplicate.item").unlink()
+    for index in range(3):
+        (manifests / f"{index}.item").write_text(" " * 8 + "{}", encoding="utf-8")
+    monkeypatch.setattr(discovery, "_MAX_TOTAL_METADATA", 25)
+    state = discovery._Discovery(lambda: False)
+    limited = discovery._discover(state, (), manifests, ())
+    assert limited.truncated
+    assert state.bytes_read <= 25
+    assert any("read limit" in issue for issue in limited.issues)
+
+
+@pytest.mark.portable
+def test_traversal_and_invalid_encoding(tmp_path: Path) -> None:
+    game = tmp_path / "game"
+    game.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    (manifests / "invalid.item").write_bytes(b"\xff")
+    result = _discover(
+        epic=manifests,
+        gog=((str(game / ".." / "game"), "Traversal"), (str(game) + "\ud800", "Invalid")),
+    )
+    assert not result.candidates
+    assert len(result.issues) == 3
 
 
 @pytest.mark.portable
@@ -223,6 +262,7 @@ def test_probe_signature_is_provisional_and_reads_only_prefix(
     def tracked_open(path: Path, mode: str = "r", *args: Any, **kwargs: Any) -> Reader:
         assert path != outside_sample
         assert mode == "rb"
+        assert kwargs.get("buffering") == 0
         return Reader(original_open(path, mode, *args, **kwargs))
 
     with monkeypatch.context() as patch:
@@ -234,6 +274,33 @@ def test_probe_signature_is_provisional_and_reads_only_prefix(
     assert source.read_bytes() == b"STRM" + b"x" * 128
     assert fake.read_bytes() == b"nope"
     assert outside_sample.read_bytes() == b"STRM"
+
+
+@pytest.mark.portable
+def test_probe_reports_unreadable_and_disappeared_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = tmp_path / "asset.bin"
+    asset.write_bytes(b"STRM")
+    candidate = discovery.select_folder(tmp_path).candidates[0]
+    original_open = Path.open
+
+    def guarded_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        if path == asset:
+            raise PermissionError("synthetic denied")
+        return original_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", guarded_open)
+        result = discovery.probe_installation(candidate)
+    assert not result.ast_signature
+    assert result.truncated
+    assert result.issues
+    asset.unlink()
+    tmp_path.rmdir()
+    result = discovery.probe_installation(candidate)
+    assert result.truncated
+    assert result.issues
 
 
 @pytest.mark.portable

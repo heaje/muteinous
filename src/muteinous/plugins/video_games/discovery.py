@@ -71,9 +71,10 @@ class _Discovery:
     cancelled: Cancel
     candidates: list[Candidate] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
-    identities: dict[Path, int] = field(default_factory=dict)
+    identities: dict[str, int] = field(default_factory=dict)
     entries: int = 0
     bytes_read: int = 0
+    truncated: bool = False
 
     def step(self) -> None:
         _check(self.cancelled)
@@ -90,8 +91,8 @@ class _Discovery:
             self.issue(source, "missing or invalid installation path")
             return
         path = Path(location)
-        if not path.is_absolute() or "\x00" in str(path):
-            self.issue(source, "installation path is not an absolute filesystem path")
+        if not _valid_path(path):
+            self.issue(source, "invalid installation path")
             return
         label = name if isinstance(name, str) and name.strip() else path.name
         candidate, identity = _candidate(path, label, source)
@@ -117,18 +118,23 @@ class _Discovery:
         if not _ordinary(info) or not stat.S_ISREG(info.st_mode):
             raise ValueError("metadata is not an ordinary file")
         if info.st_size > limit:
+            self.truncated = True
             raise ValueError("metadata exceeds read limit")
-        with path.open("rb") as stream:
+        with path.open("rb", buffering=0) as stream:
             raw = stream.read(limit + 1)
         self.bytes_read += len(raw)
         _check(self.cancelled)
         if len(raw) > limit:
+            self.truncated = True
             raise ValueError("metadata exceeds read limit")
         return raw.decode("utf-8-sig")
 
     def files(self, directory: Path) -> Iterator[Path]:
         _check(self.cancelled)
         try:
+            info = directory.lstat()
+            if not _ordinary(info) or not stat.S_ISDIR(info.st_mode):
+                raise ValueError("metadata directory is not an ordinary directory")
             with os.scandir(directory) as entries:
                 for entry in entries:
                     self.step()
@@ -144,7 +150,23 @@ def _ordinary(info: os.stat_result) -> bool:
     )
 
 
-def _candidate(path: Path, name: str, source: Source) -> tuple[Candidate, Path | None]:
+def _valid_path(path: Path) -> bool:
+    if (
+        not path.is_absolute()
+        or "\x00" in str(path)
+        or ".." in path.parts
+        or any(0xD800 <= ord(char) <= 0xDFFF for char in str(path))
+    ):
+        return False
+    if os.name == "nt":
+        if path.anchor.startswith(("\\\\?\\", "\\\\.\\")):
+            return False
+        if any(ntpath.isreserved(part) for part in path.parts[1:]):
+            return False
+    return True
+
+
+def _candidate(path: Path, name: str, source: Source) -> tuple[Candidate, str | None]:
     try:
         identity = path.resolve(strict=True)
         if not stat.S_ISDIR(identity.stat().st_mode):
@@ -153,7 +175,7 @@ def _candidate(path: Path, name: str, source: Source) -> tuple[Candidate, Path |
         return Candidate(path, name, (source,), "missing"), None
     except OSError, RuntimeError, ValueError:
         return Candidate(path, name, (source,), "inaccessible"), None
-    return Candidate(path, name, (source,), "available"), identity
+    return Candidate(path, name, (source,), "available"), str(identity)
 
 
 # Text KeyValues (Steam VDF/ACF), not a general Valve configuration interpreter.
@@ -231,15 +253,15 @@ def _steam_library(state: _Discovery, library: Path) -> None:
 
 
 def _steam(state: _Discovery, roots: Iterable[Path]) -> None:
-    libraries: dict[Path, None] = {}
+    libraries: dict[str, Path] = {}
     for root in roots:
         state.step()
-        if not root.is_absolute() or "\x00" in str(root):
+        if not _valid_path(root):
             state.issue("Steam root", "invalid library path")
             continue
-        if root in libraries:
+        if str(root) in libraries:
             continue
-        libraries[root] = None
+        libraries[str(root)] = root
         manifest = root / "steamapps" / "libraryfolders.vdf"
         try:
             values = _object(
@@ -252,16 +274,24 @@ def _steam(state: _Discovery, roots: Iterable[Path]) -> None:
                 location = value.get("path") if isinstance(value, dict) else value
                 if (
                     isinstance(location, str)
-                    and "\x00" not in location
-                    and Path(location).is_absolute()
+                    and _valid_path(Path(location))
                 ):
-                    libraries[Path(location)] = None
+                    libraries[location] = Path(location)
                 else:
                     state.issue(manifest, "invalid Steam library path")
         except (OSError, ValueError, KeyError) as error:
             state.issue(manifest, str(error))
-    for library in libraries:
+    for library in libraries.values():
         _steam_library(state, library)
+
+
+def _json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("ambiguous JSON metadata key")
+        result[key] = value
+    return result
 
 
 def _epic(state: _Discovery, directory: Path) -> None:
@@ -269,7 +299,9 @@ def _epic(state: _Discovery, directory: Path) -> None:
         if path.suffix.lower() != ".item":
             continue
         try:
-            data = _object(json.loads(state.read(path)))
+            data = _object(json.loads(state.read(path), object_pairs_hook=_json_object))
+            if data.get("bIsIncompleteInstall") is True:
+                state.issue(path, "launcher reports incomplete installation")
             state.add(data.get("InstallLocation"), data.get("DisplayName"), "epic")
         except (OSError, ValueError, RecursionError) as error:
             state.issue(path, str(error))
@@ -295,7 +327,7 @@ def _windows_steam_roots(state: _Discovery) -> Iterator[Path]:
                     hive, r"Software\Valve\Steam", 0, winreg.KEY_READ | view
                 ) as key:
                     location, _ = winreg.QueryValueEx(key, value)
-                    if isinstance(location, str) and Path(location).is_absolute():
+                    if isinstance(location, str) and _valid_path(Path(location)):
                         yield Path(location)
                     else:
                         state.issue("Steam registry", "invalid Steam root")
@@ -306,7 +338,7 @@ def _windows_steam_roots(state: _Discovery) -> Iterator[Path]:
     for variable in ("ProgramFiles(x86)", "ProgramFiles"):
         if location := os.environ.get(variable):
             path = Path(location) / "Steam"
-            if path.is_absolute() and path.is_dir():
+            if _valid_path(path) and path.is_dir():
                 yield path
 
 
@@ -348,17 +380,18 @@ def _discover(
     epic_directory: Path | None,
     gog_records: Iterable[tuple[object, object]],
 ) -> DiscoveryResult:
-    truncated = False
     try:
         _steam(state, steam_roots)
         if epic_directory is not None:
             _epic(state, epic_directory)
         _gog(state, gog_records)
     except _LimitReached:
-        truncated = True
+        state.truncated = True
         state.issue("discovery", "metadata or entry budget exhausted")
     _check(state.cancelled)
-    return DiscoveryResult(tuple(state.candidates), tuple(state.issues), truncated)
+    return DiscoveryResult(
+        tuple(state.candidates), tuple(state.issues), state.truncated
+    )
 
 
 def discover_windows(*, cancelled: Cancel = _never_cancel) -> DiscoveryResult:
@@ -373,6 +406,9 @@ def discover_windows(*, cancelled: Cancel = _never_cancel) -> DiscoveryResult:
         if program_data
         else None
     )
+    if epic is None or not _valid_path(epic):
+        state.issue("Epic", "missing or invalid ProgramData location")
+        epic = None
     return _discover(
         state, _windows_steam_roots(state), epic, _windows_gog_records(state)
     )
@@ -392,7 +428,7 @@ def probe_installation(
     """Inspect a shallow bounded sample of ordinary files, never decode or hash."""
     _check(cancelled)
     if candidate.availability != "available":
-        return ProbeResult(False, 0, ("installation unavailable",), False)
+        return ProbeResult(False, 0, ("installation unavailable",), True)
     issues: list[str] = []
     found = False
     examined = 0
@@ -402,6 +438,11 @@ def probe_installation(
         directory, depth = pending.popleft()
         _check(cancelled)
         try:
+            info = directory.lstat()
+            if not _ordinary(info) or not stat.S_ISDIR(info.st_mode):
+                truncated = True
+                issues.append(f"{directory}: not an ordinary directory")
+                continue
             with os.scandir(directory) as entries:
                 for entry in entries:
                     _check(cancelled)
@@ -410,22 +451,26 @@ def probe_installation(
                         break
                     examined += 1
                     try:
-                        info = entry.stat(follow_symlinks=False)
+                        path = Path(entry.path)
+                        info = path.lstat()
                         if not _ordinary(info):
                             truncated = True
                             continue
-                        path = Path(entry.path)
                         if stat.S_ISDIR(info.st_mode):
                             if depth < _MAX_PROBE_DEPTH:
                                 pending.append((path, depth + 1))
                             else:
                                 truncated = True
                         elif stat.S_ISREG(info.st_mode):
-                            with path.open("rb") as stream:
+                            with path.open("rb", buffering=0) as stream:
                                 found |= stream.read(4) == b"STRM"
+                        else:
+                            truncated = True
                     except OSError as error:
+                        truncated = True
                         issues.append(f"{entry.path}: {error}")
         except OSError as error:
+            truncated = True
             issues.append(f"{directory}: {error}")
     _check(cancelled)
     return ProbeResult(found, examined, tuple(issues), truncated or bool(pending))
