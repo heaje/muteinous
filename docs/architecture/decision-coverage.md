@@ -60,7 +60,7 @@ PR #43 [run 45863237303](https://github.com/heaje/muteinous/actions/runs/4586323
 | D44 | Initial / as applicable | No implementation evidence | — | — |
 | D45 | Initial / as applicable | No implementation evidence | — | — |
 | D46 | Initial / as applicable | No implementation evidence | — | — |
-| D47 | Initial / as applicable | No implementation evidence | — | —  Maintainer-approved M2 planning decision (2026-11-26): model/runtime remains unchosen pending the comparison spike and maintainer selection; imports-only compatibility evidence is not inference evidence. [Decision](decisions.md#approved-m2-planning-decisions-2026-11-26). |
+| D47 | Initial / as applicable | No implementation evidence | — | —  Maintainer-approved decision (2026-11-27): engine selected by resolved device and language, application-managed; direction only, no implementation or verification evidence; imports-only compatibility evidence is not inference evidence. [Decision](decisions.md#amendment-2026-11-27-speech-recognition-engine-selection-by-device). |
 | D48 | Initial / as applicable | No implementation evidence | — | — |
 | D49 | Initial / as applicable | No implementation evidence | — | — |
 | D50 | Initial / as applicable | No implementation evidence | — | — |
