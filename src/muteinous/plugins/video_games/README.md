@@ -132,7 +132,7 @@ All three entry points and the probe accept a cancellation callback. Cancellatio
 
 The [discovery tests](../../../../tests/unit/plugins/video_games/test_discovery.py) create small synthetic launcher records and game directories instead of relying on actual games. They cover parsing, path checks, duplicate candidates, cancellation, read-only behavior, limits and probing.
 
-Windows tests also simulate registry views and exercise the actual bounded reader against a temporary test key in the current-user registry. Only that temporary fixture is created and deleted; actual launcher keys are not modified.
+Windows tests simulate registry views and the responses of the native Windows Registry API. The bounded reader is tested with in-memory data, including missing, oversized and malformed values. Tests must never create, modify or delete actual Windows Registry keys or values, even temporarily.
 
 From the repository root, after following the [development setup](../../../../docs/development.md):
 

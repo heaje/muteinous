@@ -2,6 +2,8 @@
 
 ## Contract-based testing
 
+**Windows Registry:** Tests must never create, modify or delete actual Windows Registry keys or values, even temporarily or on CI runners. Use simulated registry records and controlled native API responses instead. Read-only integration verification, when needed, must not require registry changes.
+
 Test approved architecture decisions, acceptance criteria, supported application behavior, meaningful internal contracts/invariants, reachable operational failures and material regressions. Each test should establish a useful guarantee; prefer representative observable outcomes over implementation details. Use the [engineering principles](development.md#engineering-principles) to distinguish trusted caller contracts from external inputs and realistic failures.
 
 Avoid asserting private algorithms, data structures, identity where equivalent values suffice, exact callback counts, exact diagnostic text, or particular thread interleavings unless the contract requires them. Avoid unsupported internal settings, arbitrary trusted-caller misuse and redundant combinations of equivalent cases. Test actual boundary validation and meaningful invariants, including required rejection and cleanup behavior. Synthetic fixtures, controlled workers, fake clocks, synchronization and fault injection are appropriate when they demonstrate a real guarantee; artificial setup alone is not grounds for rejection.

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import uuid4
+from unittest.mock import Mock
 
 import pytest
 
@@ -630,39 +630,67 @@ def test_windows_discovery_registry_and_environment(
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows registry boundary")
-def test_registry_reader_bounds_real_synthetic_values(
+@pytest.mark.parametrize(
+    ("status", "kind", "data", "expected_error", "charged", "truncated"),
+    [
+        (0, 1, "Synthetic \u03b1\x00".encode("utf-16-le"), None, 24, False),
+        (234, 1, b"", ValueError, 64, True),
+        (2, 1, b"", FileNotFoundError, 0, False),
+        (5, 1, b"", OSError, 64, False),
+        (0, 3, b"data", ValueError, 4, False),
+        (0, 1, b"\x00", UnicodeError, 1, False),
+        (0, 1, b"a\x00\x00\x00b\x00", ValueError, 6, False),
+    ],
+)
+def test_registry_reader_bounds_simulated_native_values(
     monkeypatch: pytest.MonkeyPatch,
+    status: int,
+    kind: int,
+    data: bytes,
+    expected_error: type[Exception] | None,
+    charged: int,
+    truncated: bool,
 ) -> None:
-    import winreg
+    import ctypes
+    from ctypes import wintypes
 
     from muteinous.infrastructure.platform import windows_registry
 
-    key_path = rf"Software\MuteinousTests-{uuid4().hex}"
-    monkeypatch.setattr(_registry, "_MAX_REGISTRY_VALUE", 64)
-    state = context.DiscoveryContext(lambda: False)
-    try:
-        with winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE
-        ) as key:
-            winreg.SetValueEx(key, "valid", 0, winreg.REG_SZ, "Synthetic \u03b1")
-            winreg.SetValueEx(key, "oversize", 0, winreg.REG_SZ, "x" * 64)
-            winreg.SetValueEx(key, "wrong", 0, winreg.REG_BINARY, b"data")
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
-        ) as key:
-            direct = windows_registry.read_registry_text(key, "valid", 64)
-            assert direct.error is None
-            assert direct.text == "Synthetic \u03b1"
-            assert direct.bytes_read == len("Synthetic \u03b1\x00".encode("utf-16-le"))
-            assert _registry._registry_text(state, key, "valid") == "Synthetic \u03b1"
-            before = state.bytes_read
-            with pytest.raises(ValueError, match="read limit"):
-                _registry._registry_text(state, key, "oversize")
-            assert state.truncated
-            assert state.bytes_read == before + 64
-            with pytest.raises(ValueError, match="type"):
-                _registry._registry_text(state, key, "wrong")
-            with pytest.raises(FileNotFoundError):
-                _registry._registry_text(state, key, "missing")
-    finally:
-        winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
+    # Replace the native API before invoking the real reader. No registry
+    # handles are opened, and no keys or values are created or changed.
+    def query(
+        key: Any,
+        name: str,
+        reserved: Any,
+        value_type: Any,
+        buffer: Any,
+        size: Any,
+    ) -> int:
+        assert name == "fixture"
+        size_field = ctypes.cast(size, ctypes.POINTER(wintypes.DWORD)).contents
+        assert size_field.value == ctypes.sizeof(buffer) == 64
+        if status == 234:
+            # Report a much larger required buffer; the reader must not retry.
+            size_field.value = 4096
+        elif status == 0:
+            kind_field = ctypes.cast(value_type, ctypes.POINTER(wintypes.DWORD))
+            kind_field.contents.value = kind
+            ctypes.memmove(buffer, data, len(data))
+            size_field.value = len(data)
+        return status
+
+    native_query = Mock(side_effect=query)
+    loader = Mock(return_value=SimpleNamespace(RegQueryValueExW=native_query))
+    monkeypatch.setattr(ctypes, "WinDLL", loader)
+    result = windows_registry.read_registry_text(0, "fixture", 64)
+
+    loader.assert_called_once_with("advapi32.dll")
+    native_query.assert_called_once()
+    assert result.bytes_read == charged
+    assert result.truncated is truncated
+    if expected_error is None:
+        assert result.error is None
+        assert result.text == "Synthetic \u03b1"
+    else:
+        assert isinstance(result.error, expected_error)
+        assert not result.text
