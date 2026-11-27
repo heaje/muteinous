@@ -401,8 +401,8 @@ def _windows_steam_roots(state: _Discovery) -> Iterator[Path]:
             except (OSError, ValueError) as error:
                 state.issue("Steam registry", str(error))
     for variable in ("ProgramFiles(x86)", "ProgramFiles"):
-        if location := os.environ.get(variable):
-            path = Path(location) / "Steam"
+        if program_files := os.environ.get(variable):
+            path = Path(program_files) / "Steam"
             if _valid_path(path) and path.is_dir():
                 yield path
 
