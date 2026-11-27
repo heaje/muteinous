@@ -179,8 +179,11 @@ def test_aggregate_budget_and_ambiguous_epic_metadata(
     manifests = tmp_path / "manifests"
     manifests.mkdir()
     (manifests / "duplicate.item").write_text(
-        '{"InstallLocation": ' + json.dumps(str(tmp_path))
-        + ', "InstallLocation": ' + json.dumps(str(manifests)) + "}",
+        '{"InstallLocation": '
+        + json.dumps(str(tmp_path))
+        + ', "InstallLocation": '
+        + json.dumps(str(manifests))
+        + "}",
         encoding="utf-8",
     )
     result = _discover(epic=manifests)
