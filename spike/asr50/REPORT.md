@@ -4,7 +4,7 @@ Temporary investigation record. Not an architecture decision, runtime/model sele
 
 Evidence levels: **L1** documented support, **L2** successful build/install, **L3** device enumeration, **L4** computation on the device, **L5** ASR inference. "GPU ran it" (L4/L5) is not "GPU result is correct" (see Moonshine on DirectML).
 
-Scope limits for everything below: one machine (Ryzen 9 9900X + RX 7900 XT, Windows 11), English only, synthetic SAPI speech (not game dialogue). No NVIDIA or Intel evidence. Speed/RTF was deprioritized by the maintainer and incidental timings were taken under concurrent load, so no performance findings are claimed.
+Scope limits for everything below: one machine (Ryzen 9 9900X + RX 7900 XT, Windows 11), English only, synthetic SAPI speech (not game dialogue). No NVIDIA or Intel evidence. Speed was deprioritized at first and the accuracy-run timings were taken under concurrent load, so they are not used. A dedicated serial speed benchmark on a quiet machine (WP22) was run afterwards and is in section 9.1; it has its own limits (no game running, synthetic speech, one machine).
 
 ## 1. Repository and hardware state
 
@@ -23,7 +23,7 @@ Scope limits for everything below: one machine (Ryzen 9 9900X + RX 7900 XT, Wind
 
 ## 2. Engineering time
 
-Supervisor wall-clock 15:33 to about 21:40 MT (about 6.1 h). Delegate effort is self-reported or estimated and ran in parallel: phase 1 (WP1-6 + review) about 2 h; phase 2 (WP7-14 + review 2) about 4.5 h; phase 3 (corpus v2, device guard, v2 re-runs, review 3) about 4 h; phase 4 (VAD gate, corpus v3, masked/v3 re-runs, DirectML stability, timing-convention analysis, review 4 and reconciliations) about 5 h. Approximate total 15 h of delegate effort plus 6.1 h supervisor wall-clock, **beyond the original eight-hour cap, which the maintainer extended** ("spend extra time", "keep going"). Hours spent on #50 before this task were not provided.
+Supervisor wall-clock 15:33 to about 21:40 MT (about 6.1 h). Delegate effort is self-reported or estimated and ran in parallel: phase 1 (WP1-6 + review) about 2 h; phase 2 (WP7-14 + review 2) about 4.5 h; phase 3 (corpus v2, device guard, v2 re-runs, review 3) about 4 h; phase 4 (VAD gate, corpus v3, masked/v3 re-runs, DirectML stability, timing-convention analysis, review 4 and reconciliations) about 5 h; phase 5 (serial speed benchmark WP22) 4.1 h wall-clock. Approximate total 19 h of delegate effort plus about 6.5 h supervisor wall-clock before the speed run (the speed run's wall-clock overlaps its delegate time), **beyond the original eight-hour cap, which the maintainer extended** ("spend extra time", "keep going"). Hours spent on #50 before this task were not provided.
 
 ## 3. Evidence and commands (reproducible)
 
@@ -197,13 +197,38 @@ On the 30 timing clips DirectML WER was 3.63 versus 0.54 on CPU (target P/R 0/0)
 | faster-whisper env | 267,087,721 (+ 486,098,798 model) |
 | Earlier CI-measured installs | faster-whisper 262.85 MB, WinML 113.33 MB, Moonshine 82.71 MB, sherpa-onnx 52.94 MB |
 
+### 9.1 Speed (WP22; quiet machine, strictly serial; L5 runs)
+
+Method: one config at a time after an idle gate (CPU <5%, GPU engines ~0); 14 fixed clips (8 short 2-6 s, 4 medium 18-25 s, 2 long ~100 s); 5 repeats (3 on long); 28 configs, each 66/66 valid; no counter sampling in timed windows (GPU telemetry from separate untimed passes); outputs checked against the accuracy runs (0 baseline disagreements). Drift: the first config repeated at the end was +0.39% median per-clip latency. CPU configs at 12 threads (the 9900X's physical cores) and 4 threads (a proxy for sharing the CPU with a game). Median wall latency in seconds; speed multiple = audio seconds per wall second. whisper.cpp numbers are per CLI invocation and **include process start and model load** (0.15-0.38 s); ORT, Parakeet, faster-whisper and Moonshine are in-process after load and warm-up, so the two groups are not like for like.
+
+| Config | Short latency | Medium latency (speed x) | Long ~100 s latency (speed x) | Cores used | Load (s) |
+|---|---:|---:|---:|---:|---:|
+| Parakeet int8 CPU, 12 / 4 threads | 0.129 / 0.084 | 0.415 (47.6x) / 0.377 (47.4x) | 3.28 (31.7x) / 4.59 (22.6x) | 11.7-17.5 / 4.0-5.5 | 1.03 |
+| Moonshine base CPU, 12 / 4 | 0.103 / 0.097 | 0.50 (36x) / 0.53 (35x) | 2.98 (35x) / 3.94 (26x) | 13-18 / 4.2-5.3 | 0.61 |
+| ORT Whisper Turbo q4 DirectML | 0.325 | 0.66 (28.7x) | 3.38 (30.8x) | 1.0 | 2.86 |
+| ORT Whisper Turbo q4 CPU, 12 / 4 | 1.97 / 4.03 | 2.31 (9.3x) / 4.44 (4.8x) | 9.35 (11x) / 17.6 (5.8x) | 12.3 / 4.0 | 2.4 |
+| ORT Whisper Small.en fp16 DirectML | 0.246 | 0.99 (18.5x) | 4.17 (21.7x) | 1.0 | 1.39 |
+| ORT Whisper Small.en fp16 CPU, 12 / 4 | 0.67 / 0.85 | 1.39 (14x) / 1.68 (11.9x) | 5.71 (16.8x) / 6.84 (14.1x) | 13 / 4.2 | 1.75 |
+| whisper.cpp Turbo q5_0 Vulkan | 0.68 | 0.91 (23.7x) | 2.32 (44x) | 0.8 | 0.38 |
+| whisper.cpp Turbo q5_0 CPU, 12 / 4 | 3.29 / 7.38 | 3.65 (5.9x) / 7.97 (2.7x) | 14.3 (6.1x) / 32.1 (2.7x) | 11.7 / 4.0 | 0.33 |
+| whisper.cpp Small.en q5_1 Vulkan | 0.38 | 0.64 (32.7x) | 2.28 (45.8x) | 1.0 | 0.15 |
+| whisper.cpp Small.en q5_1 CPU, 12 / 4 | 0.82 / 1.56 | 1.25 (16.7x) / 2.40 (9.5x) | 5.45 (19x) / 10.1 (10.3x) | 11.3 / 3.9 | 0.12 |
+| faster-whisper Small.en beam5 CPU, 12 / 4 | 0.75 / 0.74 | 1.22 (16x) / 1.16 (16.5x) | 8.74 (11.9x) / 9.19 (11.3x) | 11.8 / 4.0 | 0.66 |
+| faster-whisper Small.en beam1 CPU, 12 / 4 | 0.73 / 0.73 | 1.03 (19.7x) / 1.01 (20x) | 5.25 (19.8x) / 6.27 (16.6x) | 11.8 / 4.0 | 0.66 |
+| Silero VAD gate, CPU (12 / 4 threads) | 0.003 / 0.002 | 0.013 / 0.010 | 0.058 / 0.054 | n/a | 0.07 |
+| wav2vec2 CTC aligner CPU, 12 / 4 | 0.052 / 0.060 | 0.38 (52x) / 0.50 (39x) | 2.56 (40x) / 4.45 (23x) | 12 / 4.0 | 0.32 |
+
+Observations: (1) Most configs run well faster than real time on every clip class. The exceptions are the large Whisper model on CPU: whisper.cpp Turbo is only 1.1x real time on short utterances at 12 threads and 0.5x at 4 threads (7.4 s for a 3.8 s clip, including process start), and ORT Turbo q4 on 4 CPU threads is 0.93x on short utterances; both reach only 2.7-5.8x on long audio at 4 threads. (2) For the large Whisper model the GPU matters: Turbo on Vulkan is about 4x faster than 12 CPU threads and 9x faster than 4 on medium clips; for Small.en the GPU gain is about 2x versus 12 threads. (3) The GPU paths use about one CPU core; the CPU paths use all 12 or 4 cores in bursts. This is the main case for the GPU: it frees roughly 11 cores. (4) Parakeet on CPU at 4 threads is as fast as or faster than every Whisper path, GPU included, on short and medium clips (0.08-0.38 s; on ~100 s clips the GPU paths are faster, 2.3-3.4 s versus 3.3-4.6 s), so on this data the GPU is not needed for speed if Parakeet is the model; it is needed only for Whisper-class models (Turbo especially). (5) DirectML and Vulkan whisper.cpp are similar for Turbo in steady state (short whisper.cpp 0.68 s less its 0.38 s start and load is about 0.30 s versus ORT's 0.33 s); the larger ORT Small.en fp16 on DirectML is slower than ORT Turbo q4 on DirectML on medium and long clips (faster on short ones), which was not investigated. (6) Pipeline helpers are cheap: the VAD gate is 1,400-1,900x real time; the aligner is 23-71x real time (0.4-0.5 s per 20 s clip) and so adds a small cost beside the ASR step. (7) Memory (peak RSS, separate pass): Parakeet 0.8-2.6 GB, ORT Turbo CPU 2.9 GB, ORT Turbo DirectML process 1.6 GB, whisper.cpp Turbo CPU 0.9 GB and Vulkan 0.17 GB (weights in VRAM). (8) A spot check by the supervisor (whisper.cpp Turbo, one 25 s clip, 4 Vulkan and 2 CPU runs) gave 1.01 s and 4.04 s, about 10% above the medium-class medians (different clip subset and launcher, so approximate agreement only).
+
+Limits: no game or other GPU load was running, so contention with a game is untested; CPU and GPU telemetry for whisper.cpp are from separate untimed passes; GPU utilization and dedicated-memory values are adapter-wide (Windows exposed no PID-matched instances for most runs), so they include other processes and are not per-process VRAM (about 40-52% engine use during the Vulkan and DirectML runs that have a reading, and 4.2 GB adapter-wide dedicated during DirectML runs); GPU clock/thermal data were not captured; the report's limitation line says no pipeline-overhead measurement was made, which I read as no end-to-end ASR + VAD + aligner chain (the VAD and aligner are timed separately above); synthetic SAPI speech; one machine on AC power and the Balanced plan. The benchmark's first controller stalled several times; the stalled and wrong-environment attempts are retained and excluded (WP22.md).
+
 ## 10. Errors, warnings, unresolved blockers
 
 - `onnxruntime-windowsml` prints "Init provider bridge failed" on import (the older project silenced it by redirecting stderr during import); DirectML still executes. The historical override remains a dependency-consistency failure (`uv pip check`); faster-whisper pulls `onnxruntime`, which conflicts by module name with the Windows ML wheel.
 - whisper.cpp DTW requires flash attention off (`-nfa`), else it warns and returns no word times.
 - ORT DirectML + `CPUExecutionProvider` in the provider list silently retries on CPU after a bad `device_id`.
 - WP13's first report claimed a valid DirectML session failed; the corrected finding is that it failed only on the invalid-device retry path (and a later guard test failed from wrong input shape). Treat the first report as superseded.
-- Untested: Windows ML catalog AMD provider, HIP/ROCm, NVIDIA and Intel hardware, iGPU, real game audio, whisper.cpp's own VAD (no VAD model approved), speed, low-VRAM behavior, per-process VRAM.
+- Untested: Windows ML catalog AMD provider, HIP/ROCm, NVIDIA and Intel hardware, iGPU, real game audio, whisper.cpp's own VAD (no VAD model approved), speed under game/GPU load, low-VRAM behavior, per-process VRAM.
 - The older Hushpatch project's DirectML two-session crash claim was reproduced (6.1); its MIGraphX segfault and `add_provider_for_devices` 4.5x slowdown were not tested.
 - Not independently recomputed by any review: WP14's aggregate aligner numbers (WP20 reproduced its oracle trim-edge figures) and WP15's header-vs-PCM determinism explanation (regen_a/regen_b match).
 - Process note: three delegates (WP10, WP11, WP13) initially computed target or WER aggregates across clip boundaries; review 4 caught this and the figures in this report are the per-clip central values. Delegates repeatedly stopped before finishing queued work and needed follow-ups.
@@ -233,7 +258,7 @@ Moonshine Voice's own runtime fetches `.ort` files from `download.moonshine.ai` 
 3. Production-shaped wrapper experiments: device guard against real whisper.cpp and ORT use in a worker process; a one-session-per-process worker pool on DirectML (6.1 shows it works for 2-4 processes in a short test) with per-process VRAM, low-VRAM and long-run behavior.
 4. Real-ish dialogue and more voices/accents/longer clips: corpus v3 is synthetic SAPI speech with only 3-5 clips per acoustic condition, so condition rankings are anecdotal.
 5. If Moonshine stays a candidate: operator-level isolation of the cached-decoder NaN on DirectML.
-6. Optional, needs approval: Windows ML catalog AMD provider; HIP SDK for whisper.cpp HIP / CT2 ROCm; NVIDIA and Intel runs on those machines; speed benchmarks on a quiet machine.
+6. Optional, needs approval: Windows ML catalog AMD provider; HIP SDK for whisper.cpp HIP / CT2 ROCm; NVIDIA and Intel runs on those machines; speed with a game or other GPU load running (the quiet-machine speed run is in 9.1).
 
 ## 13. Decisions requiring maintainer approval
 
