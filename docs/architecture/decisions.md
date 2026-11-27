@@ -899,6 +899,29 @@ These maintainer-approved amendments settle outstanding M2 planning questions. T
 - M2 persists scan results through the M1 result-bundle foundation (D105–D112) as the **last M2 slice**, after the reader and scan work, with the targeted invalidation of D20.
 - Reader-reference/reclamation and cache policy (D111–D122 as applicable) remain separate and deferred as already recorded. This does not specify a persistence format or alter the existing result-bundle decisions.
 
+### Amendment 2026-11-27: Speech-recognition engine selection by device
+
+**Status: Proposed in this PR; becomes approved when the maintainer merges it.** Refines D47, D48, D50 and D51. D46 and D144/D145 rules are unchanged. Evidence is from the [M2.0 comparison report](https://github.com/heaje/muteinous/blob/a59cac72758df32ba76a896625bfc93366307154/spike/asr50/REPORT.md) (one machine, English, mostly synthetic speech plus one game's voice lines); it is comparison evidence, not production verification.
+
+- **Selection:** when the resolved device (D48) is a suitable GPU, the recognition engine is whisper.cpp with Whisper Large-v3 Turbo q5_0 on Vulkan (a multilingual model). When the resolved device is CPU, the engine is Parakeet TDT 0.6B v2 int8 through sherpa-onnx (English only). The application resolves the engine from the resolved device and the effective language (D51). Users still do not select models (D47); explicit CPU or GPU selection remains a hardware choice.
+- **Cache validity (D46, D50):** the analysis signature records the engine, model and revision, and precision. D50's reuse across CPU and GPU applies when the same engine and model run on both devices. Where a device change selects a different engine, cached analysis for the new engine is required.
+- **Speech-presence gate:** a speech-presence gate precedes the Whisper-family engine and ASR is skipped for audio with no detected speech; replacing non-speech with silence is not sufficient. The gate is not a guarantee. The gate model needs its own pinned upstream manifest entry and download approval under D144 and D145.
+- **Device placement:** each runtime uses a guard that proves actual placement and raises a typed error when an explicit GPU request cannot be honored (D49); the tested runtimes do not refuse by default.
+- **Not established:** non-English accuracy of any model, other games, ambient or processed audio, and a multilingual CPU-only engine. A CPU-only machine needing a language Parakeet v2 does not support has no fast option; this is deferred until other languages are scheduled.
+
+### Amendment 2026-11-27: Supporting models and replaceability
+
+**Status: Proposed in this PR; becomes approved when the maintainer merges it.** Refines D03, D46, D47, D67, D144 and D145; reaffirms D03's rule that an abstraction needs a real consumer and a justified variation.
+
+- **Scope:** D47, D144 and D145 apply to the supporting models the application chooses and manages as well as the speech-recognition model: the word-alignment model, the speech-presence gate model and the context judge. There is no user model selection and no model-management UI.
+- **Replaceability:** a model, runtime or stage implementation must be replaceable without changes outside its own seam.
+- **Seams:** use narrow internal interfaces, one per stage (recognize speech, align words, gate speech, judge ambiguous words), with built-in registration only (D03). Add a capability flag only where engines demonstrably differ, for example native word times or none, maximum clip length, whether the gate is required, and supported devices.
+- **Manifest as data (D144):** each supported model's pinned revision, per-file SHA-256, license and per-model settings are recorded together. For the context judge the prompt template, answer rule and decision threshold are model-specific settings and change with the model.
+- **Cache signatures:** the aligner's identity and version enter the speech-analysis signature because they determine word timings (D46). The context judge's model and prompt version belong to the effective-edit-outcome fingerprint (D19, D44), because decisions are recomputed without repeating recognition (D45).
+- **Admission:** a replacement model is admitted only after the repository's qualification checks: synthetic corpora and per-clip scoring, listed-word recall on real audio (kept local, never committed), silence and vocal-effort behavior, device-placement verification with CPU/GPU agreement, memory and speed.
+- **Context judge device:** run it on the CPU build by default unless a measured need says otherwise.
+- **Not established:** a multilingual aligner or context judge, and the context judge's labelled accuracy on real lines.
+
 ## Process rules
 
 - Discuss and settle one substantial architectural decision at a time.
