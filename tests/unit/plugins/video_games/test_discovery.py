@@ -342,7 +342,10 @@ def test_probe_skips_reparse_points_and_special_files(
                 SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400),
             )
         if path == special:
-            return os.stat_result((stat.S_IFIFO, *tuple(info)[1:]))
+            return cast(
+                os.stat_result,
+                SimpleNamespace(st_mode=stat.S_IFIFO, st_file_attributes=0),
+            )
         return info
 
     monkeypatch.setattr(Path, "lstat", observed_lstat)
