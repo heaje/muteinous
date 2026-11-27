@@ -120,6 +120,9 @@ class _Discovery:
         if remaining <= 0:
             raise _LimitReached
         limit = min(remaining, _MAX_METADATA)
+        parent = path.parent.lstat()
+        if not _ordinary(parent) or not stat.S_ISDIR(parent.st_mode):
+            raise ValueError("metadata parent is not an ordinary directory")
         info = path.lstat()
         if not _ordinary(info) or not stat.S_ISREG(info.st_mode):
             raise ValueError("metadata is not an ordinary file")
@@ -356,6 +359,9 @@ def _registry_text(state: _Discovery, key: SupportsInt, name: str) -> str:
         ctypes.byref(size),
     )
     _check(state.cancelled)
+    if status and status != 2:
+        # On failure, the amount transferred is unspecified. Charge the buffer.
+        state.bytes_read += limit
     if status == 234:  # ERROR_MORE_DATA; do not allocate a larger buffer.
         state.truncated = True
         raise ValueError("registry metadata exceeds read limit")

@@ -7,7 +7,8 @@ import os
 import stat
 import sys
 from pathlib import Path
-from typing import Any
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -178,7 +179,9 @@ def test_aggregate_budget_and_ambiguous_epic_metadata(
     manifests = tmp_path / "manifests"
     manifests.mkdir()
     (manifests / "duplicate.item").write_text(
-        '{"InstallLocation": "one", "InstallLocation": "two"}', encoding="utf-8"
+        '{"InstallLocation": ' + json.dumps(str(tmp_path))
+        + ', "InstallLocation": ' + json.dumps(str(manifests)) + "}",
+        encoding="utf-8",
     )
     result = _discover(epic=manifests)
     assert not result.candidates
@@ -324,14 +327,17 @@ def test_probe_skips_reparse_points_and_special_files(
     linked.mkdir()
     (linked / "hidden.ast").write_bytes(b"STRM")
     special = game / "special"
-    special.touch()
+    special.write_bytes(b"STRM")
     candidate = discovery.select_folder(game).candidates[0]
     original_lstat = Path.lstat
 
     def observed_lstat(path: Path) -> os.stat_result:
         info = original_lstat(path)
         if path == linked:
-            return os.stat_result((stat.S_IFLNK, *tuple(info)[1:]))
+            return cast(
+                os.stat_result,
+                SimpleNamespace(st_mode=info.st_mode, st_file_attributes=0x400),
+            )
         if path == special:
             return os.stat_result((stat.S_IFIFO, *tuple(info)[1:]))
         return info
@@ -468,11 +474,15 @@ def test_registry_reader_bounds_real_synthetic_values(
             winreg.SetValueEx(key, "valid", 0, winreg.REG_SZ, "Synthetic \u03b1")
             winreg.SetValueEx(key, "oversize", 0, winreg.REG_SZ, "x" * 64)
             winreg.SetValueEx(key, "wrong", 0, winreg.REG_BINARY, b"data")
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ) as key:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
+        ) as key:
             assert discovery._registry_text(state, key, "valid") == "Synthetic \u03b1"
+            before = state.bytes_read
             with pytest.raises(ValueError, match="read limit"):
                 discovery._registry_text(state, key, "oversize")
             assert state.truncated
+            assert state.bytes_read == before + 64
             with pytest.raises(ValueError, match="type"):
                 discovery._registry_text(state, key, "wrong")
             with pytest.raises(FileNotFoundError):
