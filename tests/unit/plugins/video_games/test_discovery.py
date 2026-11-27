@@ -164,7 +164,9 @@ def test_registry_adapter_accounts_for_failures_and_remaining_budget(
             registry.RegistryReadResult(4, text="x"),
             registry.RegistryReadResult(0, error=FileNotFoundError("missing")),
             registry.RegistryReadResult(2, error=ValueError("type")),
-            registry.RegistryReadResult(4, error=ValueError("read limit"), truncated=True),
+            registry.RegistryReadResult(
+                4, error=ValueError("read limit"), truncated=True
+            ),
         )
     )
     limits: list[int] = []
