@@ -17,19 +17,25 @@ def main():
     p.add_argument("--out",required=True)
     p.add_argument("--audio",default=r"C:\scratch\asr50\corpus_v2_frozen")
     p.add_argument("--sets",default="all")
-    p.add_argument("--clip-id")
+    p.add_argument("--clip-id",action="append")
+    p.add_argument("--vad-manifest")
+    p.add_argument("--profile",action="store_true")
     p.add_argument("--threads",type=int,default=4)
     p.add_argument("--diagnostic",action="store_true")
     a=p.parse_args()
     if hasattr(sys.stdout,"reconfigure"): sys.stdout.reconfigure(errors="backslashreplace")
     out=pathlib.Path(a.out); out.mkdir(parents=True,exist_ok=True)
     gt=json.loads((pathlib.Path(a.audio)/"ground_truth_v2.json").read_text(encoding="utf-8"))
+    vad={}
+    if a.vad_manifest:
+        vm=json.loads(pathlib.Path(a.vad_manifest).read_text(encoding="utf-8"))
+        vad={c["clip_id"]:c for c in vm["clips"]}
     selected=[c for c in gt["clips"] if a.sets=="all" or c["set"] in a.sets.split(",")]
-    if a.clip_id: selected=[c for c in selected if c["clip_id"]==a.clip_id]
+    if a.clip_id: selected=[c for c in selected if c["clip_id"] in a.clip_id]
     tok=ns["Tokenizer"].from_file(str(ns["ART"]/"tokenizer.json"))
     class Args: pass
     cfg=Args(); cfg.threads=a.threads; cfg.out=str(out); cfg.device=a.device; cfg.device_id=0; cfg.disable_fallback=False
-    enc=ns["session"](ns["ENC"],cfg,True); dec=ns["session"](ns["DEC"],cfg,True); past=ns["session"](ns["PAST"],cfg,True)
+    enc=ns["session"](ns["ENC"],cfg,a.profile); dec=ns["session"](ns["DEC"],cfg,a.profile); past=ns["session"](ns["PAST"],cfg,a.profile)
     print("providers",enc.get_providers(),dec.get_providers(),past.get_providers())
     diagnosis=None
     for c in selected:
@@ -42,7 +48,8 @@ def main():
             text,n,hit=ns["infer"](chunk,enc,dec,past,tok,limit)
             texts.append(text.strip()); generated.append(n); caphit |= hit
         full=" ".join(t for t in texts if t)
-        obj={"text":full,"words":[],"clip_set":c["set"],"meta":{"runtime":"onnxruntime","version":ns["ort"].__version__,"artifact":"moonshine-base-onnx-int8","requested_device":a.device,"actual_providers":{"encoder":enc.get_providers(),"decoder":dec.get_providers(),"past":past.get_providers()},"actual_device_verified_by":"InferenceSession.get_providers and per-node ORT profile","threads":a.threads,"sample_rate_hz":16000,"chunk_seconds":20 if len(chunks)>1 else None,"chunk_count":len(chunks),"chunking":"fixed non-overlapping 20-second windows; concatenate text with spaces" if len(chunks)>1 else "none","chunk_token_caps":[min(512,max(1,int(len(q)/16000*6+8))) for q in chunks],"generated_tokens":generated,"token_cap_hit":caphit,"word_timestamps":"unavailable: text-only HF ONNX export","clip_set":c["set"],"audio_seconds":len(audio)/16000,"clip_sha256":hashlib.sha256(path.read_bytes()).hexdigest()}}
+        gate=vad.get(c["clip_id"],{}).get("gate_no_speech") if a.vad_manifest else None
+        obj={"text":full,"words":[],"clip_set":c["set"],"gate_no_speech":gate,"meta":{"runtime":"onnxruntime","version":ns["ort"].__version__,"artifact":"moonshine-base-onnx-int8","requested_device":a.device,"actual_providers":{"encoder":enc.get_providers(),"decoder":dec.get_providers(),"past":past.get_providers()},"actual_device_verified_by":"InferenceSession.get_providers; per-node profile available when enabled","threads":a.threads,"sample_rate_hz":16000,"chunk_seconds":20 if len(chunks)>1 else None,"chunk_count":len(chunks),"chunking":"fixed non-overlapping 20-second windows; concatenate text with spaces" if len(chunks)>1 else "none","chunk_token_caps":[min(512,max(1,int(len(q)/16000*6+8))) for q in chunks],"chunk_texts":texts if len(chunks)>1 else None,"generated_tokens":generated,"token_cap_hit":caphit,"word_timestamps":"unavailable: text-only HF ONNX export","clip_set":c["set"],"audio_seconds":len(audio)/16000,"clip_sha256":hashlib.sha256(path.read_bytes()).hexdigest()}}
         (out/(c["clip_id"]+".json")).write_text(json.dumps(obj,ensure_ascii=False,indent=2),encoding="utf-8")
         print(c["clip_id"],repr(full),flush=True)
         if a.diagnostic and diagnosis is None:

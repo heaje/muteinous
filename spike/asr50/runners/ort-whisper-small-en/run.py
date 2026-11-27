@@ -193,16 +193,30 @@ def main():
     p.add_argument("--disable-cpu-ep-fallback", action="store_true")
     p.add_argument("--policy", choices=["on", "off"], default="on")
     p.add_argument("--long-and-nonspeech-only", action="store_true")
+    p.add_argument("--clip-id", action="append")
+    p.add_argument("--skip-gated", action="store_true")
     a = p.parse_args()
     audio_root = pathlib.Path(a.audio_root)
     files = sorted(audio_root.glob("*.wav"))
     gen = json.loads((MODEL/"generation_config.json").read_text(encoding="utf-8"))
     tok = Tokenizer.from_file(str(MODEL/"tokenizer.json"))
-    gt_path = audio_root / "ground_truth_v2.json"
-    if not gt_path.exists():
-        gt_path = audio_root / "ground_truth.json"
+    gt_path = next((audio_root / name for name in
+                    ("ground_truth_v2.json", "ground_truth_v3.json", "ground_truth.json")
+                    if (audio_root / name).exists()), None)
+    if gt_path is None:
+        raise FileNotFoundError(f"no ground-truth JSON in {audio_root}")
     truth_data = json.loads(gt_path.read_text(encoding="utf-8"))
     truth = {c.get("clip_id", c.get("id")): c for c in truth_data["clips"]}
+    manifest_path = audio_root / "manifest.json"
+    manifest = {}
+    if manifest_path.exists():
+        for item in json.loads(manifest_path.read_text(encoding="utf-8"))["clips"]:
+            key = item.get("clip_id") or item.get("input") or item.get("file") or item.get("output")
+            if key:
+                manifest[pathlib.Path(key).stem] = item
+    if a.clip_id:
+        wanted = set(a.clip_id)
+        files = [f for f in files if f.stem in wanted]
     if a.long_and_nonspeech_only:
         files = [f for f in files if
                  truth[f.stem].get("category") in ("natural_long", "silence", "non_speech")
@@ -233,7 +247,11 @@ def main():
         for wav in files:
             audio = read_wav(wav)
             t = time.perf_counter()
-            text, chunks = transcribe(audio, *sessions, tok, gen, a.policy)
+            gate_no_speech = bool(manifest.get(wav.stem, {}).get("gate_no_speech", False))
+            if getattr(a, "skip_gated", False) and gate_no_speech:
+                text, chunks = "", []
+            else:
+                text, chunks = transcribe(audio, *sessions, tok, gen, a.policy)
             elapsed = time.perf_counter()-t
             duration = len(audio)/16000
             clip_hash = hashlib.sha256(audio.astype("<f4", copy=False).tobytes()).hexdigest()
@@ -243,6 +261,8 @@ def main():
                 "schema_version": 1, "candidate": "ort-whisper-small-en",
                 "clip_id": cid, "category": truth[cid]["category"],
                 "clip_set": truth[cid].get("set"),
+                "condition": truth[cid].get("condition"),
+                "gate_no_speech": gate_no_speech,
                 "run": {"kind": kind, "index": pass_i, "process_id": os.getpid()},
                 "hardware": {"cpu": "AMD Ryzen 9 9900X",
                     "gpu": "AMD Radeon RX 7900 XT" if a.device == "dml" else None,
@@ -271,18 +291,22 @@ def main():
                 "hypothesis": {"text": text, "words": []}, "metrics": {},
             }
             records.append(record)
-            raw = {"text": text, "words": [], "clip_set": truth[cid].get("set"), "meta": {
+            raw = {"text": text, "words": [], "clip_set": truth[cid].get("set"),
+                   "condition": truth[cid].get("condition"),
+                   "gate_no_speech": gate_no_speech, "meta": {
                 "runtime": "onnxruntime", "runtime_version": ort.__version__,
                 "model_artifact": MODEL_ID, "model_sha256": model_hash,
                 "requested_device": a.device, "actual_device": record["device"]["actual"],
                 "clip_set": truth[cid].get("set"),
+                "condition": truth[cid].get("condition"),
+                "gate_no_speech": gate_no_speech,
                 "settings": record["settings"], "thread_count": a.threads,
                 "wall_seconds": elapsed, "peak_working_set_bytes": proc.memory_info().peak_wset,
                 "peak_dedicated_gpu_bytes": None, "run_kind": kind,
                 "run_index": pass_i, "pid": os.getpid()}}
             (rawdir/f"{cid}_{kind}_{pass_i}.json").write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
-            if a.policy == "on" and kind == "v2":
+            if a.policy == "on" and kind in ("v2", "vadmasked", "v3"):
                 (rawdir/f"{cid}.json").write_text(
                     json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps({"clip": cid, "seconds": elapsed, "audio_seconds": duration,

@@ -125,3 +125,184 @@ Completed 480 successful invocations across 60 frozen clips: full JSON for every
 Timing reports use exact-word WER matches from the canonical `matched_word_pairs` helper. All returned hypothesis words had usable boundaries. Across configurations, median start errors were 79.6–90 ms and median end errors 124.7–150.2 ms; within 200 ms, 82.2–90.3% of starts and 57.5–82.4% of ends were aligned. These distributions exclude unmatched reference words, as required by exact-word matching.
 
 All 240 Vulkan GPU invocations logged `using Vulkan0 backend`; the CPU counterparts logged CPU allocation with no Vulkan selection. The previous process-filtered counter run remains the L5 GPU-computation proof. All 42-second clips were accepted at full sample count, and output timestamps extended near clip ends; no truncation was observed. No VAD model was downloaded and no speed/timing benchmark was run.
+
+## VAD-masked v2
+
+Ran the WP18 masked copies across both models, Vulkan GPU, and CPU: full JSON on every clip and `-ml 1` plus DTW on all 30 timing clips (480 successful runs). The frozen v2 reference transcript and exact boundaries were unchanged; manifest and masked WAV hashes were checked. Every Vulkan run logged `using Vulkan0 backend` (120 per model). No performance timing was collected. The three views below are the existing unmasked v2 baseline, actual ASR on every masked clip (**masked-run**, A), and **gated-skip** (B: replace output with empty on `gate_no_speech`).
+
+The mask manifest flagged 20 clips: 19 silence/non-speech clips **and one real-speech miss**, `timing_noise_pink_-5_01`. It also passed `nonspeech_pink_noise_30s` (a non-speech false negative for the gate), so that clip still reaches ASR in B.
+
+### Full-mode lexical and hallucination scores
+
+WER uses all 40 transcript-bearing clips; target metrics use all clips. Hallucination is over the 20 silence/non-speech clips. Each cell lists WER (S/D/I), target P/R, then hallucinated words/min and clips with output.
+
+| Model/device | Unmasked v2 | A: masked-run | B: gated-skip |
+|---|---|---|---|
+| turbo / Vulkan | .0224 (18/0/9); 100/85.3%; 6.27, 16/20 | .0306 (20/1/16); 100/82.8%; 8.73, 20/20 | .0306 (18/3/16); 100/82.8%; 0.22, 1/20 |
+| turbo / CPU | .0248 (21/0/9); 100/82.8%; 5.82, 16/20 | .0315 (21/1/16); 100/81.9%; 8.73, 20/20 | .0315 (19/3/16); 100/81.9%; 0.22, 1/20 |
+| small.en / Vulkan | .0207 (16/6/3); 98.0/83.6%; 16.57, 10/20 | .0224 (19/6/2); 98.0/82.8%; 0.22, 1/20 | .0224 (19/6/2); 98.0/82.8%; 0.22, 1/20 |
+| small.en / CPU | .0224 (17/5/5); 98.0/82.8%; 37.61, 10/20 | .0190 (15/6/2); 98.0/83.6%; 0.22, 1/20 | .0190 (15/6/2); 98.0/83.6%; 0.22, 1/20 |
+
+`nonspeech_pink_noise_30s` was the sole non-speech clip with output in both views: Vulkan turbo “BANG”; Vulkan small.en “gunshot”. On the gate-missed speech clip, turbo A said “Thank you” on Vulkan and empty on CPU; B skips both. For B, the clip's three reference words are scored as deletions; WER can remain unchanged while S/D/I shifts because A's wrong text had the same edit distance.
+
+### Word timing on the 30 timing clips
+
+Timing errors compare exact-word pairs using canonical matching. Cells show mean/median/p95 ms, then percentage within 50/100/200 ms. Gated-skip timing is numerically identical to masked-run for all configurations: the gate-missed clip contributes no exact-word matches in A either. “Unmatched ref” is the number of reference words without an exact matched word; hypothesis words missing timestamps were zero throughout.
+
+**`-ml 1`**
+
+| Model/device/view | Matched | Start error; ≤50/100/200 | End error; ≤50/100/200 | Unmatched ref |
+|---|---:|---|---|---:|
+| turbo/Vulkan baseline | 76 | 104.6/90.0/374.8; 31.6/59.2/84.2% | 193.5/147.1/449.2; 15.8/34.2/61.8% | 18 |
+| turbo/Vulkan A and B | 73 | 103.2/90.0/271.5; 28.8/60.3/84.9% | 199.1/160.2/449.2; 15.1/31.5/60.3% | 21 |
+| turbo/CPU baseline | 73 | 110.1/90.0/349.8; 30.1/58.9/82.2% | 201.5/148.8/449.2; 13.7/32.9/60.3% | 21 |
+| turbo/CPU A and B | 72 | 113.7/90.0/376.2; 30.6/59.7/81.9% | 209.7/160.2/520.8; 16.7/34.7/56.9% | 22 |
+| small.en/Vulkan baseline | 73 | 94.6/90.0/269.8; 32.9/61.6/89.0% | 141.2/125.2/371.2; 13.7/38.4/82.2% | 21 |
+| small.en/Vulkan A and B | 74 | 92.2/86.1/269.8; 35.1/63.5/89.2% | 141.0/129.7/371.2; 12.2/37.8/81.1% | 20 |
+| small.en/CPU baseline | 72 | 87.7/86.1/252.8; 34.7/63.9/90.3% | 148.1/131.6/371.2; 12.5/34.7/79.2% | 22 |
+| small.en/CPU A and B | 73 | 87.1/82.2/252.8; 35.6/64.4/90.4% | 145.1/130.2/371.2; 12.3/35.6/79.5% | 21 |
+
+**DTW (`-nfa -dtw <preset>`)**
+
+| Model/device/view | Matched | Start error; ≤50/100/200 | End error; ≤50/100/200 | Unmatched ref |
+|---|---:|---|---|---:|
+| turbo/Vulkan baseline | 73 | 99.4/82.2/374.8; 32.9/65.8/86.3% | 208.0/150.2/500.8; 15.1/31.5/57.5% | 21 |
+| turbo/Vulkan A and B | 70 | 98.4/86.1/271.5; 31.4/64.3/87.1% | 195.1/148.6/424.2; 17.1/35.7/60.0% | 24 |
+| turbo/CPU baseline | 74 | 95.3/79.6/308.2; 35.1/68.9/85.1% | 198.9/145.2/500.8; 13.5/29.7/63.5% | 20 |
+| turbo/CPU A and B | 73 | 103.0/86.2/376.2; 32.9/64.4/84.9% | 190.8/144.6/520.8; 16.4/35.6/64.4% | 21 |
+| small.en/Vulkan baseline | 74 | 94.7/90.0/269.8; 32.4/60.8/89.2% | 139.3/124.7/371.2; 14.9/39.2/82.4% | 20 |
+| small.en/Vulkan A and B | 73 | 93.4/90.0/269.8; 34.2/63.0/89.0% | 141.0/129.2/371.2; 12.3/38.4/80.8% | 21 |
+| small.en/CPU baseline | 72 | 94.6/90.0/269.8; 31.9/62.5/88.9% | 143.0/124.7/371.2; 12.5/38.9/80.6% | 22 |
+| small.en/CPU A and B | 74 | 92.6/86.1/269.8; 33.8/63.5/89.2% | 137.5/123.1/371.2; 13.5/40.5/82.4% | 20 |
+
+### VAD-masked v2 summary
+
+Across 60 clips, masked A reduced small.en silence/non-speech hallucinations sharply but raised turbo hallucination rate. B skipped all flagged clips, reducing non-speech output to one remaining false-negative clip; however, it also suppresses the real-speech `timing_noise_pink_-5_01`, costing three reference-word deletions in B. The gate's unflagged 30-second pink-noise clip still hallucinates “BANG”/“gunshot”. Lexical WER spans .0190–.0315; the gate can improve silence handling without being safe until its speech false-negative is addressed. Timing errors use only correctly matched words, so timing metrics mask the dropped/misrecognized word count; unmatched-reference counts are shown separately.
+
+All 480 ASR calls succeeded; `results.jsonl` has 480 observations, and 480 normalized clip JSONs (including `gate_no_speech`) plus the unmasked/A/B score summary are under `C:\scratch\asr50\results_v2_vadmasked\whispercpp\`. Detailed per-run logs are under `C:\scratch\asr50\WP8\logs\vadmasked\`.
+
+## Corpus v3
+
+Processed the frozen lexical-stress corpus (380 clips, 27.30 minutes; 340 transcript-bearing, 40 non-speech) both raw and WP18 VAD-masked. Each corpus/config has 380 full-mode runs: turbo and small.en on Vulkan (`-dev 0`) and CPU (`-ng`), totaling 3,040 successful invocations. All inputs and masked outputs were SHA-256 checked against the frozen ground truth/manifest. Every one of 760 Vulkan runs logged `whisper_backend_init_gpu: using Vulkan0 backend`; every CPU counterpart logged CPU allocation without Vulkan. The WP18 gate flags all 40 non-speech clips and none of the 340 speech clips, so gated-skip is the masked run with those 40 hypotheses replaced by empty text. No timing or speed measurements were collected.
+
+Scoring uses the existing `benchmark.score` tokenization (NFKC, case-fold, punctuation-separated word tokens; contractions remain one token). WER S/D/I is over the 340 speech clips; condition, voice, and rate WERs are separately normalized by their reference word counts. Target/distractor metrics are all-token occurrence precision/recall across all 380 clips. Non-speech hallucinations cover the 40 clips only. Full per-word target/distractor counts, per-condition records, and GPU/CPU disagreement clip IDs are reproducible with `score_v3.py` and stored in `C:\scratch\asr50\results_v3\whispercpp\score-summary.json`.
+
+### Overall, keyword, and non-speech metrics
+
+WER shown as percent (S/D/I); target and distractor columns are aggregate P/R percentages. Hallucination is words/minute and clips with output out of 40. Gated-skip equals masked-run for speech WER because no speech clip was flagged; its non-speech outputs are empty.
+
+| Corpus/view | Model/device | WER (S/D/I) | Targets P/R | Distractors P/R | Non-speech hallucination |
+|---|---|---|---|---|---|
+| Raw | turbo/Vulkan | 6.38% (132/41/6) | 91.3/95.5 | 93.3/82.4 | 4.77/min; 18/40 |
+| Raw | turbo/CPU | 6.38% (135/38/6) | 91.3/95.5 | 93.3/82.4 | 4.65/min; 18/40 |
+| Raw | small.en/Vulkan | 9.08% (176/64/15) | 91.5/81.8 | 100/64.7 | 3.74/min; 13/40 |
+| Raw | small.en/CPU | 8.87% (173/62/14) | 91.4/80.3 | 95.8/67.6 | 3.61/min; 13/40 |
+| Masked-run | turbo/Vulkan | 6.63% (137/42/7) | 91.3/95.5 | 93.3/82.4 | 10.32/min; 40/40 |
+| Masked-run | turbo/CPU | 6.66% (138/42/7) | 91.3/95.5 | 93.3/82.4 | 10.32/min; 40/40 |
+| Masked-run | small.en/Vulkan | 9.01% (177/63/13) | 93.3/84.8 | 95.8/67.6 | 0/min; 0/40 |
+| Masked-run | small.en/CPU | 8.91% (175/62/13) | 93.2/83.3 | 100/64.7 | 0/min; 0/40 |
+| Gated-skip | turbo/Vulkan | 6.63% (137/42/7) | 91.3/95.5 | 93.3/82.4 | 0/min; 0/40 |
+| Gated-skip | turbo/CPU | 6.66% (138/42/7) | 91.3/95.5 | 93.3/82.4 | 0/min; 0/40 |
+| Gated-skip | small.en/Vulkan | 9.01% (177/63/13) | 93.3/84.8 | 95.8/67.6 | 0/min; 0/40 |
+| Gated-skip | small.en/CPU | 8.91% (175/62/13) | 93.2/83.3 | 100/64.7 | 0/min; 0/40 |
+
+Per-word `banana`, `cobalt`, `harbor` and `cobol`, `arbor`, `bandana` P/R are included for every row in `score-summary.json` (`target_word_details`, `distractor_details`); aggregate P/R above is not a substitute for those individual counts.
+
+**Per-word P/R percentages** (gated-skip equals masked-run for these transcript-bearing terms):
+
+| Model/device | Corpus | banana | cobalt | harbor | cobol | arbor | bandana |
+|---|---|---:|---:|---:|---:|---:|---:|
+| turbo/Vulkan | raw | 100/100 | 76.9/95.2 | 100/92.6 | 100/25.0 | 100/100 | 85.7/100 |
+| turbo/Vulkan | masked | 100/100 | 76.9/95.2 | 100/92.6 | 100/25.0 | 100/100 | 85.7/100 |
+| turbo/CPU | raw | 100/100 | 76.9/95.2 | 100/92.6 | 100/25.0 | 100/100 | 85.7/100 |
+| turbo/CPU | masked | 100/100 | 76.9/95.2 | 100/92.6 | 100/25.0 | 100/100 | 85.7/100 |
+| small.en/Vulkan | raw | 100/100 | 85.7/85.7 | 90.0/66.7 | 100/37.5 | 100/71.4 | 100/75.0 |
+| small.en/Vulkan | masked | 100/100 | 85.7/85.7 | 95.2/74.1 | 80/50.0 | 100/71.4 | 100/75.0 |
+| small.en/CPU | raw | 100/100 | 85.7/85.7 | 89.5/63.0 | 80/50.0 | 100/71.4 | 100/75.0 |
+| small.en/CPU | masked | 100/100 | 85.7/85.7 | 95.0/70.4 | 100/37.5 | 100/71.4 | 100/75.0 |
+
+### WER by speech condition
+
+Each cell is **raw → masked-run** WER% (S/D/I); the listed `n` is speech clips. Gated-skip has identical condition scores because all speech clips pass the gate. Small sample condition cells (`n=3–5`) are descriptive.
+
+**turbo**
+
+| Condition | n | Vulkan raw → masked | CPU raw → masked |
+|---|---:|---|---|
+| clean | 300 | 6.2 (109/41/4) → 6.2 (109/41/4) | 6.2 (112/38/4) → 6.2 (110/41/4) |
+| white noise 15 dB | 3 | 3.8 (1/0/0) → 3.8 (1/0/0) | 3.8 (1/0/0) → 3.8 (1/0/0) |
+| white noise 5 dB | 3 | 0 (0/0/0) → 0 (0/0/0) | 0 (0/0/0) → 0 (0/0/0) |
+| white noise 0 dB | 3 | 9.5 (2/0/0) → 14.3 (3/0/0) | 9.5 (2/0/0) → 14.3 (3/0/0) |
+| pink noise 15 dB | 3 | 12.0 (3/0/0) → 12.0 (3/0/0) | 12.0 (3/0/0) → 12.0 (3/0/0) |
+| pink noise 5 dB | 3 | 0 (0/0/0) → 0 (0/0/0) | 0 (0/0/0) → 0 (0/0/0) |
+| pink noise 0 dB | 3 | 15.4 (4/0/0) → 19.2 (4/1/0) | 15.4 (4/0/0) → 19.2 (4/1/0) |
+| babble 10 dB | 4 | 2.9 (1/0/0) → 2.9 (1/0/0) | 2.9 (1/0/0) → 2.9 (1/0/0) |
+| babble 0 dB | 4 | 17.6 (4/0/2) → 17.6 (4/0/2) | 17.6 (4/0/2) → 17.6 (4/0/2) |
+| music loop | 3 | 0 (0/0/0) → 0 (0/0/0) | 0 (0/0/0) → 0 (0/0/0) |
+| game effects | 3 | 0 (0/0/0) → 0 (0/0/0) | 0 (0/0/0) → 0 (0/0/0) |
+| reverb | 3 | 12.0 (3/0/0) → 32.0 (7/0/1) | 12.0 (3/0/0) → 32.0 (7/0/1) |
+| radio 8-bit | 5 | 12.2 (5/0/0) → 12.2 (5/0/0) | 12.2 (5/0/0) → 12.2 (5/0/0) |
+
+**small.en**
+
+| Condition | n | Vulkan raw → masked | CPU raw → masked |
+|---|---:|---|---|
+| clean | 300 | 8.2 (146/52/6) → 8.0 (143/51/5) | 8.0 (144/50/5) → 7.9 (142/50/5) |
+| white noise 15 dB | 3 | 19.2 (4/1/0) → 15.4 (3/1/0) | 19.2 (4/1/0) → 19.2 (4/1/0) |
+| white noise 5 dB | 3 | 4.3 (0/0/1) → 4.3 (0/0/1) | 4.3 (0/0/1) → 0 (0/0/0) |
+| white noise 0 dB | 3 | 23.8 (5/0/0) → 23.8 (5/0/0) | 23.8 (5/0/0) → 47.6 (10/0/0) |
+| pink noise 15 dB | 3 | 4.0 (1/0/0) → 4.0 (1/0/0) | 4.0 (1/0/0) → 4.0 (1/0/0) |
+| pink noise 5 dB | 3 | 3.8 (1/0/0) → 3.8 (1/0/0) | 3.8 (1/0/0) → 3.8 (1/0/0) |
+| pink noise 0 dB | 3 | 15.4 (4/0/0) → 15.4 (4/0/0) | 15.4 (4/0/0) → 3.8 (0/1/0) |
+| babble 10 dB | 4 | 5.9 (2/0/0) → 5.9 (2/0/0) | 5.9 (2/0/0) → 5.9 (2/0/0) |
+| babble 0 dB | 4 | 61.8 (5/8/8) → 61.8 (5/8/8) | 61.8 (5/8/8) → 61.8 (5/8/8) |
+| music loop | 3 | 4.5 (1/0/0) → 4.5 (1/0/0) | 4.5 (1/0/0) → 4.5 (1/0/0) |
+| game effects | 3 | 4.5 (1/0/0) → 4.5 (1/0/0) | 0 (0/0/0) → 0 (0/0/0) |
+| reverb | 3 | 20.0 (3/2/0) → 20.0 (3/2/0) | 28.0 (5/2/0) → 28.0 (5/2/0) |
+| radio 8-bit | 5 | 9.8 (3/1/0) → 9.8 (3/1/0) | 12.2 (5/0/0) → 9.8 (4/0/0) |
+
+Non-speech-only conditions are excluded from WER by definition; their 40-clip hallucination metrics are in the overall table and scorer output.
+
+### Clean speech by voice and synthesis rate
+
+All 300 clean clips have voice/rate metadata (150 per voice; 24–42 per rate). Cells are Vulkan raw/masked and CPU raw/masked WER percentages. Gated-skip equals masked-run for these speech-only subsets.
+
+| Model | Voice | Vulkan raw/masked | CPU raw/masked |
+|---|---|---|---|
+| turbo | Microsoft David Desktop | 6.45/6.37 | 6.69/6.45 |
+| turbo | Microsoft Zira Desktop | 5.96/6.04 | 5.72/6.04 |
+| small.en | Microsoft David Desktop | 7.82/7.66 | 7.66/7.41 |
+| small.en | Microsoft Zira Desktop | 8.62/8.38 | 8.38/8.46 |
+
+| Rate | n | turbo Vulkan raw/masked | turbo CPU raw/masked | small.en Vulkan raw/masked | small.en CPU raw/masked |
+|---:|---:|---|---|---|---|
+| -4 | 24 | 3.59/3.59 | 3.59/3.59 | 6.15/6.67 | 6.67/6.67 |
+| -3 | 34 | 2.96/2.96 | 3.33/2.59 | 4.44/4.44 | 4.44/4.44 |
+| -2 | 34 | 3.79/3.79 | 3.79/3.79 | 10.00/8.97 | 8.97/9.31 |
+| -1 | 38 | 8.49/8.49 | 8.18/8.18 | 9.12/9.12 | 8.81/8.81 |
+| 0 | 33 | 10.11/10.49 | 9.74/11.24 | 10.49/10.49 | 9.74/9.74 |
+| 1 | 32 | 5.75/5.75 | 5.75/5.75 | 7.66/7.66 | 7.66/7.66 |
+| 2 | 24 | 6.12/6.12 | 6.63/6.63 | 9.18/9.18 | 9.18/9.18 |
+| 3 | 39 | 7.53/7.23 | 7.23/6.93 | 9.94/9.34 | 10.24/9.64 |
+| 4 | 42 | 6.23/6.23 | 6.52/6.52 | 6.52/6.23 | 6.23/5.95 |
+
+### Vulkan/CPU text agreement
+
+Agreement is per-clip equality after canonical word tokenization, not raw JSON string equality.
+
+| Corpus/view | Model | Identical | Different |
+|---|---|---:|---:|
+| Raw | turbo | 363/380 | 17 |
+| Raw | small.en | 368/380 | 12 |
+| Masked-run | turbo | 366/380 | 14 |
+| Masked-run | small.en | 373/380 | 7 |
+| Gated-skip | turbo | 366/380 | 14 |
+| Gated-skip | small.en | 373/380 | 7 |
+
+### Corpus-v3 summary (<250 words)
+
+Completed 3,040 successful full-mode runs over 380 clips each for raw and masked corpora, both models and devices. Raw WER was 6.38% for turbo and 8.87–9.08% for small.en; masked-run WER was 6.63–6.66% and 8.91–9.01%. Silero's manifest flagged all 40 non-speech clips and no speech, so gated-skip preserved speech WER and reduced non-speech output to zero. Masking alone increased turbo hallucinations to 10.32 words/minute and 40/40 clips; small.en produced no non-speech text on masked files. Raw hallucination ranged 3.61–4.77/minute.
+
+Target/distractor P/R, condition S/D/I, and clean voice/rate breakdowns are tabulated and centrally reproducible using the scorer normalization. Lowest condition robustness was babble at 0 dB for small.en (61.8% WER); turbo's clean WER was 6.2%. GPU/CPU token-normalized outputs differed on 7–17 clips per model/corpus. All Vulkan jobs explicitly logged Vulkan0; CPU jobs confirmed CPU allocation. No performance timings were run.
+
+Raw and masked normalized outputs plus 3,040 observation rows are under `C:\scratch\asr50\results_v3\whispercpp\`; central scoring command: `python C:\code\muteinous-spike50\spike\asr50\runners\whispercpp\score_v3.py`.

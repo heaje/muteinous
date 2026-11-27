@@ -1,6 +1,6 @@
 # WP1 — Hardware inventory and Windows support matrix
 
-**Checked:** 2026-11-26. Machine: test workstation, local read-only inspection. Evidence levels follow COMMON.md: L1 documented support; L2 build/install; L3 device enumeration; L4 actual GPU computation; L5 ASR inference (not performed).
+**Checked:** 2026-11-26. Machine: local workstation, local read-only inspection. Evidence levels follow COMMON.md: L1 documented support; L2 build/install; L3 device enumeration; L4 actual GPU computation; L5 ASR inference (not performed).
 
 ## Local inventory
 
@@ -20,7 +20,7 @@
 | Vulkan compute-useful extensions/features | Present: `VK_KHR_cooperative_matrix` (`cooperativeMatrix=true`), `VK_KHR_shader_float16_int8` (`shaderFloat16=true`, `shaderInt8=true`), `VK_KHR_16bit_storage` (storage-buffer 16-bit access true), `VK_KHR_shader_integer_dot_product` (8-bit signed/unsigned accelerated; 16-bit/32-bit dot product accelerated properties false), `VK_EXT_subgroup_size_control` (true), subgroup operations/stages advertised. Cooperative BF16 matrix feature is false. | `vulkaninfo`; L3 capability enumeration only; extension presence does not establish successful compute |
 | HIP/ROCm | No HIP SDK/ROCm installation found; `hipcc` not found. AMD display driver installed; Vulkan is available. | PATH/registry/program-files read-only inspection |
 | Dev tools | `git.exe` installed; `cmake`, `ninja`, MSVC `cl.exe` not found. No Visual Studio install directory found. Windows Kits `10\Include` directory not found. Vulkan loader info tool `vulkaninfo.exe` and `dxdiag.exe` present. | PATH + filesystem inspection |
-| Python | `uv 0.13.9`; `uv` resolves CPython 3.14.10 for disposable environment. `python` command is Windows Store alias, not a usable default Python. Separate Python 3.12 at `%LOCALAPPDATA%\Programs\Python\Python312` per environment handoff. | Local command execution + COMMON.md |
+| Python | `uv 0.13.9`; `uv` resolves CPython 3.14.10 for disposable environment. `python` command is Windows Store alias, not a usable default Python. Separate Python 3.12 at `C:\Users\<user>\AppData\Local\Programs\Python\Python312` per environment handoff. | Local command execution + COMMON.md |
 
 `dxdiag` and `vulkaninfo` were queried read-only. No driver, SDK, system software or model weights were installed. `uv run --with` resolved py-cpuinfo in a disposable uv-managed execution environment; no global installation was made.
 

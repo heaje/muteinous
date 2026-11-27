@@ -37,3 +37,28 @@ execution. It runs full JSON on all 60 clips and `-ml 1` plus DTW on only the
 30 constructed timing clips, for both models on Vulkan and CPU. It collects no
 speed measurements and takes no timing lock. Normalized outputs, JSONL and
 score summary are written under `C:\scratch\asr50\results_v2\whispercpp\`.
+
+## WP18 VAD-masked corpus
+
+```powershell
+python C:\code\muteinous-spike50\spike\asr50\runners\whispercpp\benchmark_v2_vadmasked.py
+```
+
+The runner verifies masked-audio hashes, checks that WP18's ground truth is
+unchanged, and requires `using Vulkan0 backend` on each GPU run. It writes raw
+masked-run JSON (including `gate_no_speech`), all three score views
+(`unmasked-v2`, `masked-run`, `gated-skip`), and score summaries to
+`C:\scratch\asr50\results_v2_vadmasked\whispercpp\`.
+
+## Corpus v3 lexical stress run
+
+```powershell
+python C:\code\muteinous-spike50\spike\asr50\runners\whispercpp\benchmark_v3.py
+python C:\code\muteinous-spike50\spike\asr50\runners\whispercpp\score_v3.py
+```
+
+The runner validates frozen input and masked output hashes, verifies Vulkan0
+for every GPU process, and writes raw and masked normalized per-clip JSON plus
+JSONL observations under `C:\scratch\asr50\results_v3\whispercpp\`. The central
+scorer uses `benchmark.score` normalization and includes raw, masked-run, and
+masked gated-skip metrics.

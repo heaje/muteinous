@@ -131,10 +131,34 @@ def rms_gate(samples):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", choices=("cpu", "dml"), required=True)
+    ap.add_argument("--corpus-root", type=pathlib.Path, default=CORPUS)
+    ap.add_argument("--output-root", type=pathlib.Path, default=OUT)
+    ap.add_argument("--ground-truth", type=pathlib.Path)
+    ap.add_argument("--vad-manifest", type=pathlib.Path)
+    ap.add_argument("--masked-file-manifest", type=pathlib.Path)
     args = ap.parse_args()
     provider = "CPUExecutionProvider" if args.device == "cpu" else "DmlExecutionProvider"
-    manifest = json.loads((CORPUS / "ground_truth_v2.json").read_text(encoding="utf-8"))
+    ground_truth_path = args.ground_truth or (args.corpus_root / "ground_truth_v2.json")
+    manifest = json.loads(ground_truth_path.read_text(encoding="utf-8"))
     clips = manifest["clips"]
+    vad_flags = {}
+    masked_files = {}
+    if args.vad_manifest:
+        vad_data = json.loads(args.vad_manifest.read_text(encoding="utf-8"))
+        vad_flags = {
+            c.get("clip_id", pathlib.Path(c["input"]).stem): bool(c["gate_no_speech"])
+            for c in vad_data["clips"]
+        }
+        if set(vad_flags) != {c["clip_id"] for c in clips}:
+            raise ValueError("VAD manifest clip IDs do not match ground_truth_v2.json")
+    if args.masked_file_manifest:
+        vad_data = json.loads(args.masked_file_manifest.read_text(encoding="utf-8"))
+        masked_files = {
+            c.get("clip_id", pathlib.Path(c["input"]).stem): c["output"]
+            for c in vad_data["clips"]
+        }
+        if set(masked_files) != {c["clip_id"] for c in clips}:
+            raise ValueError("Masked manifest clip IDs do not match ground_truth_v2.json")
     extractor = WhisperFeatureExtractor.from_pretrained(str(MODEL), local_files_only=True)
     tokenizer = Tokenizer.from_file(str(MODEL / "tokenizer.json"))
     gen = json.loads((MODEL / "generation_config.json").read_text(encoding="utf-8"))
@@ -143,11 +167,12 @@ def main():
     decoder_past = create_session(MODEL / "onnx" / "decoder_with_past_model_q4.onnx", provider)
     actual = ("CPUExecutionProvider" if args.device == "cpu" else
               "DmlExecutionProvider+CPUExecutionProvider (profile-verified mixed; device_id=0)")
-    out_dir = OUT / args.device
+    out_dir = args.output_root / args.device
     out_dir.mkdir(parents=True, exist_ok=True)
     records = []
     for clip in clips:
-        path = CORPUS / clip["wav"]
+        filename = masked_files.get(clip["clip_id"], clip["wav"])
+        path = args.corpus_root / filename
         audio = read_float_wav(path)
         chunks = [audio[start:start + WINDOW] for start in range(0, len(audio), WINDOW)] or [audio]
         text_parts = [decode_window(chunk, extractor, encoder, decoder, decoder_past, tokenizer, gen)
@@ -165,6 +190,7 @@ def main():
         rec = {
             "schema_version": 1, "candidate": "ort-whisper-turbo", "clip_id": clip["clip_id"],
             "clip_set": clip["set"], "category": clip["category"], "transcript": clip["transcript"],
+            "gate_no_speech": vad_flags.get(clip["clip_id"], False),
             "run": {"kind": "default", "index": 0, "process_id": os.getpid()},
             "hardware": {"cpu": "AMD Ryzen 9 9900X",
                          "gpu": "AMD Radeon RX 7900 XT" if args.device == "dml" else None,
@@ -192,6 +218,7 @@ def main():
         }
         records.append(rec)
         raw = {"text": default_text, "words": [], "clip_set": clip["set"],
+               "gate_no_speech": vad_flags.get(clip["clip_id"], False),
                "meta": {"runtime": "onnxruntime", "runtime_version": ort.__version__,
                         "model_artifact": rec["model"]["artifact_id"], "model_sha256": rec["model"]["sha256"],
                         "requested_device": args.device, "actual_device": actual,
@@ -201,7 +228,7 @@ def main():
         (out_dir / f"{clip['clip_id']}.json").write_text(json.dumps(raw, indent=2), encoding="utf-8")
         print(json.dumps({"clip_id": clip["clip_id"], "set": clip["set"], "text": default_text,
                           "guard_text": gate_text, "chunks": len(chunks)}), flush=True)
-    with (OUT / "results.jsonl").open("a", encoding="utf-8") as stream:
+    with (args.output_root / "results.jsonl").open("a", encoding="utf-8") as stream:
         for rec in records:
             stream.write(json.dumps(rec, ensure_ascii=False) + "\n")
     print(json.dumps({"device": args.device, "clips": len(records),

@@ -101,3 +101,88 @@ Raw outputs, including `clip_set` and both word-end variants, are in `C:\scratch
 ### Corpus v2 summary (<250 words)
 
 Parakeet TDT 0.6B v2 int8 completed all 60 frozen corpus-v2 clips on CPU after SHA-256 validation. On 40 transcript-bearing clips (1,208 reference words), WER was 1.57%; target precision/recall across all clips were 98.02%/85.34%. The 20 silence/non-speech clips produced no text (0 words/minute, 0 clips with output). Exact timing was scored only on the 30 constructed clips using sample-index boundaries and `score.py`'s `matched_word_pairs`: 75 correctly matched words, 0/91 words missing alignments. Mean start error was 61.94 ms. For end boundaries, next-word-start gave mean 137.84 ms / p95 298.19 ms; last-subtoken-start-plus-duration gave mean 132.56 ms / p95 281.19 ms. Both rules and threshold fractions are tabulated above. No length failure occurred, even for the two ~104-second natural-sentence clips; peak parent working set was 2.23 GB and no chunking was needed. The previous v1 timing figures are withdrawn; no v1 result files were changed.
+
+## VAD-masked v2
+
+Ran Parakeet CPU on all 60 timeline-preserving masked clips (view A, **masked-run**), and computed view B (**gated-skip**) by replacing every manifest `gate_no_speech=true` output with empty text/words without invoking ASR for that clip. The unmasked-v2 column uses the existing `results_v2` outputs as baseline. The v1 and unmasked-v2 files remain unchanged. VAD flags: 20/60 clips; 19 were negative clips and one was the real-speech false negative `timing_noise_pink_-5_01`. The non-speech `nonspeech_pink_noise_30s` was passed by the gate.
+
+### Lexical and hallucination comparison
+
+| Pipeline view | Speech WER (S/D/I; 1,208 ref words) | Target P / R (TP/FP/FN; all clips) | Negative hallucination (words/min; clips with output) |
+|---|---|---|---|
+| Unmasked v2 | **1.57%** (16/3/0) | **98.02% / 85.34%** (99/2/17) | 0; **0/20** |
+| A — masked-run | **1.82%** (15/7/0) | **97.96% / 82.76%** (96/2/20) | 0; **0/20** |
+| B — gated-skip | **1.82%** (15/7/0) | **97.96% / 82.76%** (96/2/20) | 0; **0/20** |
+
+The VAD false negative `timing_noise_pink_-5_01` has reference `banana cobalt harbor`. Unmasked ASR emitted three incorrect words; masking silenced the missed-speech interval, so A emitted nothing and B skips it: all three reference words are deletions in both views. The passed 30-second pink-noise clip produced no ASR text, so it did not add a hallucination.
+
+### Timing comparison
+
+Only the 30 `timing` clips were scored, against exact sample-index boundaries with `matched_word_pairs`. Error distributions are conditional on matched words; a gate-skipped clip has no matched words, rather than fabricated timing errors.
+
+| View | Matched / hypothesis words; missing | Start mean / median / p95 ms | End: next-word-start mean / median / p95 ms | End: last-token-start + duration mean / median / p95 ms |
+|---|---:|---:|---:|---:|
+| Unmasked v2 | 75 / 91; 0 | 61.94 / 48.50 / 160.00 | 137.84 / 137.00 / 298.19 | 132.56 / 136.19 / 281.19 |
+| A — masked-run | 72 / 87; 0 | 60.81 / 45.91 / 160.00 | 139.96 / 130.41 / 315.19 | 127.25 / 124.06 / 281.19 |
+| B — gated-skip | 72 / 87; 0 | 60.81 / 45.91 / 160.00 | 139.96 / 130.41 / 315.19 | 127.25 / 124.06 / 281.19 |
+
+For transparency, start-boundary fractions within 50/100/200 ms were 50.67/84.00/100.00% unmasked and 52.78/84.72/100.00% in both masked views. Next-word-start end fractions were 16.00/38.67/76.00% unmasked and 18.06/41.67/75.00% masked/gated. Last-token-duration end fractions were 20.00/41.33/76.00% unmasked and 25.00/44.44/76.39% masked/gated. The three fewer matched words in A/B include the missed-speech clip; apparent conditional-error improvement is not evidence the gate improved alignment.
+
+Masked raw files, each with `clip_set` and `gate_no_speech`, are at `C:\scratch\asr50\results_v2_vadmasked\sherpa-parakeet\cpu\<clip>.json`; `results.jsonl` and `score-comparison.json` are alongside the `cpu` directory. The comparison JSON contains per-clip outputs for all three views. Runner/scorer: `run_vadmasked_v2.py` and `score_vadmasked_v2.py` in the sherpa-parakeet runner directory.
+
+### VAD-masked v2 summary (<250 words)
+
+All 60 timeline-preserving masked clips were decoded on CPU for A; B applies the manifest gate and skips all 20 flagged clips. Relative to unmasked v2, masked-run and gated-skip both move speech WER from 1.57% to 1.82%, and target recall from 85.34% to 82.76% (target precision 97.96%). Both views have zero negative-audio hallucinations. The VAD's real-speech miss, `timing_noise_pink_-5_01`, contains three reference words: unmasked ASR substituted three wrong words, while the masked audio is silent and B skips it, so A and B both count three deletions. The gate-passed 30-second non-speech pink-noise clip still yields empty ASR output. Timing on exact-boundary clips has 72 matched words in A/B versus 75 unmasked; the skipped clip is not assigned invented timing errors. Mean start error is 60.81 ms for A/B. End means are 139.96 ms using next-word-start and 127.25 ms using final-token-start-plus-duration. All timing clips finished with no alignment fields missing; the metrics are conditional on matched words, so the smaller match count must be considered alongside the error distributions. No v1 or unmasked-v2 outputs were modified.
+
+## Corpus v3 — raw and VAD-masked CPU comparison
+
+**Scope and method:** Parakeet TDT 0.6B v2 int8 was run on all 380 frozen v3 clips from raw audio and the timeline-preserving WP18 VAD-masked audio. Each input was SHA-256 checked against the raw ground truth or masked manifest before inference. CPU, four threads, greedy decoding, and 16 kHz mono were used. The VAD gate marks exactly 40/380 clips: all 40 non-speech clips; it flags no speech clip and passes no non-speech clip. View B-gated-skip is simulated by replacing masked text/words with empty output for flagged clips. Because no speech is gated, B-masked-run and B-gated-skip are identical on lexical speech metrics; the two non-speech views differ in that gated-skip avoids ASR output for the 40 negative clips.
+
+### Overall lexical, target, and hallucination results
+
+WER uses `benchmark/score.py` normalization and edit-distance conventions; speech WER excludes the 40 authored non-speech clips. Target-word counts cover all 380 clips.
+
+| View | Speech WER (S/D/I; 2,807 reference words) | Target P / R / F1 (TP/FP/FN) | Non-speech hallucinations (words/min; clips with output) |
+|---|---|---|---|
+| A — raw | **6.16%** (130/34/9) | **90.32% / 84.85% / 87.50%** (56/6/10) | 0; **0/40** |
+| B — masked-run | **6.31%** (131/37/9) | **90.32% / 84.85% / 87.50%** (56/6/10) | 0; **0/40** |
+| B — gated-skip | **6.31%** (131/37/9) | **90.32% / 84.85% / 87.50%** (56/6/10) | 0; **0/40** |
+
+### Speech WER by condition
+
+Counts are reference words; each WER uses the same normalization as overall scoring. Gated-skip equals masked-run for all these conditions since the gate flags no speech.
+
+| Speech condition | Clips / reference words | Raw WER | Masked-run / gated-skip WER |
+|---|---:|---:|---:|
+| Clean | 300 / 2,482 | 5.40% | 5.40% |
+| Babble 10 dB | 4 / 34 | 5.88% | 5.88% |
+| Babble 0 dB | 4 / 34 | 50.00% | 50.00% |
+| Radio 8-bit | 5 / 41 | 12.20% | 9.76% |
+| Pink noise 15 dB | 3 / 25 | 0.00% | 4.00% |
+| Pink noise 5 dB | 3 / 26 | 0.00% | 0.00% |
+| Pink noise 0 dB | 3 / 26 | 15.38% | 19.23% |
+| White noise 15 dB | 3 / 26 | 7.69% | 7.69% |
+| White noise 5 dB | 3 / 23 | 13.04% | 8.70% |
+| White noise 0 dB | 3 / 21 | 4.76% | 14.29% |
+| Reverb | 3 / 25 | 20.00% | 28.00% |
+| Music loop | 3 / 22 | 0.00% | 0.00% |
+| Game effects | 3 / 22 | 0.00% | 0.00% |
+
+### Non-speech categories and gate results
+
+| Negative category | Clips | Raw hallucination (words/min; clips with output) | Masked-run | Gated-skip |
+|---|---:|---:|---:|---:|
+| Silence + dither | 8 | 0; 0/8 | 0; 0/8 | 0; 0/8 |
+| Room tone | 8 | 0; 0/8 | 0; 0/8 | 0; 0/8 |
+| Music only | 8 | 0; 0/8 | 0; 0/8 | 0; 0/8 |
+| Effects only | 8 | 0; 0/8 | 0; 0/8 | 0; 0/8 |
+| Babble/noise only | 8 | 0; 0/8 | 0; 0/8 | 0; 0/8 |
+| **All non-speech** | **40** | **0; 0/40** | **0; 0/40** | **0; 0/40** |
+
+### Artifacts and interpretation
+
+Raw per-clip JSON and 380-row JSONL are under `C:\scratch\asr50\results_v3\sherpa-parakeet\raw\cpu\`; masked equivalents are under `...\masked\cpu\`. JSONL files are in their respective `raw` and `masked` directories. `score-comparison.json` at the candidate root includes all views, by-condition/by-voice/by-rate summaries, and per-clip transcripts. Reproduction scripts are `run_v3.py --source raw|masked` and `score_v3.py` in `spike/asr50/runners/sherpa-parakeet/`. Peak process working set recorded on raw inference was 1,584,844,800 bytes. No speed conclusions are drawn.
+
+### Corpus v3 summary (<250 words)
+
+All 380 frozen v3 clips were decoded on CPU from raw and VAD-masked audio after source-hash checks. On 340 speech clips (2,807 reference words), raw WER was 6.16%; masked-run and gated-skip WER were 6.31%. Target precision/recall/F1 across all clips were 90.32%/84.85%/87.50% in each view (56 TP, 6 FP, 10 FN). Neither raw nor masked ASR hallucinated on any of the 40 authored non-speech clips; each of five negative categories had 0 words/minute and 0 clips with output. The gate flagged exactly those 40 negative clips and no speech clips, so gated-skip avoided decoding the negatives without changing speech metrics. By-condition results varied: masking matched raw on clean speech, babble, pink-noise 5/15 dB (apart from one new error at 15 dB), music, and game effects, while helping radio 8-bit and white-noise 5 dB and worsening several other noisy conditions. There are only three to five clips in most non-clean conditions, so these subgroup rates are descriptive, not stable comparative estimates. Peak working set was 1.58 GB. No speed/timing conclusions were requested or made.
