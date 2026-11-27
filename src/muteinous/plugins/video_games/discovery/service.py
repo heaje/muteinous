@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Iterable
 from pathlib import Path
 
-from . import context, platforms
+from muteinous.infrastructure.platform.environment import CURRENT_OS, OperatingSystem
+
+from . import context, providers
 from .models import Cancel, DiscoveryResult
 from .providers.base import InstallationProvider
 
@@ -32,19 +33,14 @@ def discover_installations(
     *, cancelled: Cancel = context._never_cancel
 ) -> DiscoveryResult:
     """Discover candidates using supported sources for the current platform."""
-    state = context.DiscoveryContext(cancelled)
+    state = context.DiscoveryContext(cancelled, os=CURRENT_OS)
     context._check(cancelled)
-    providers = platforms.current_providers(state)
-    if providers is None:
-        return DiscoveryResult(
-            (), ("Automatic launcher discovery unavailable on this platform",), False
-        )
-    return _discover(state, providers)
+    return _discover(state, providers.built_in_providers())
 
 
 def discover_windows(*, cancelled: Cancel = context._never_cancel) -> DiscoveryResult:
     """Compatibility entry point restricted to Windows launcher discovery."""
-    if sys.platform != "win32":
+    if CURRENT_OS != OperatingSystem.WINDOWS:
         context._check(cancelled)
         return DiscoveryResult((), ("Windows launcher discovery unavailable",), False)
     return discover_installations(cancelled=cancelled)

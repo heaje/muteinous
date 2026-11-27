@@ -9,6 +9,8 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from muteinous.infrastructure.platform.environment import CURRENT_OS, OperatingSystem
+
 from .models import Cancel, Candidate, DiscoveryCancelled, Source
 
 _MAX_ENTRIES = 4096
@@ -32,6 +34,7 @@ def _check(cancelled: Cancel) -> None:
 @dataclass
 class DiscoveryContext:
     cancelled: Cancel
+    os: OperatingSystem = CURRENT_OS
     candidates: list[Candidate] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
     identities: dict[str, int] = field(default_factory=dict)

@@ -13,9 +13,16 @@ from uuid import uuid4
 
 import pytest
 
+from muteinous.infrastructure.platform import registry
+from muteinous.infrastructure.platform.environment import OperatingSystem
 from muteinous.plugins.video_games import discovery
-from muteinous.plugins.video_games.discovery import context, platforms, probe, service
-from muteinous.plugins.video_games.discovery.platforms import _registry
+from muteinous.plugins.video_games.discovery import (
+    _registry,
+    context,
+    probe,
+    providers,
+    service,
+)
 from muteinous.plugins.video_games.discovery.providers.base import InstallationProvider
 from muteinous.plugins.video_games.discovery.providers.epic import EpicProvider
 from muteinous.plugins.video_games.discovery.providers.gog import GOGProvider
@@ -66,7 +73,7 @@ def _providers(
 ) -> tuple[InstallationProvider, ...]:
     return (
         SteamProvider(lambda state: steam_roots),
-        EpicProvider(epic),
+        EpicProvider(lambda state: epic),
         GOGProvider(lambda state: gog),
     )
 
@@ -113,15 +120,19 @@ def test_platform_neutral_discovery_uses_selected_providers(
     manifests = tmp_path / "manifests"
     _epic_manifest(manifests, tmp_path)
 
-    def selected(state: context.DiscoveryContext) -> tuple[InstallationProvider, ...]:
-        return (EpicProvider(manifests),)
+    def selected() -> tuple[InstallationProvider, ...]:
+        return (EpicProvider(lambda state: manifests), SteamProvider(), GOGProvider())
 
-    monkeypatch.setattr(platforms, "current_providers", selected)
+    monkeypatch.setattr(providers, "built_in_providers", selected)
+    monkeypatch.setattr(service, "CURRENT_OS", OperatingSystem.LINUX)
     result = discovery.discover_installations()
     assert result.candidates == (
         discovery.Candidate(tmp_path, "Synthetic", ("epic",), "available"),
     )
-    assert not result.issues
+    assert result.issues == (
+        "Steam: automatic discovery unavailable on linux",
+        "GOG: automatic discovery unavailable on linux",
+    )
     assert not result.truncated
 
 
@@ -130,14 +141,51 @@ def test_unsupported_platform_reports_discovery_unavailable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with monkeypatch.context() as patch:
-        patch.setattr(sys, "platform", "unsupported")
+        patch.setattr(service, "CURRENT_OS", OperatingSystem.UNKNOWN)
         result = discovery.discover_installations()
         assert not result.candidates
-        assert any("unavailable" in issue for issue in result.issues)
+        assert len(result.issues) == 3
+        assert all("unavailable" in issue for issue in result.issues)
         assert not result.truncated
         with pytest.raises(discovery.DiscoveryCancelled):
             discovery.discover_installations(cancelled=lambda: True)
     assert discovery.select_folder(tmp_path).candidates[0].availability == "available"
+
+
+@pytest.mark.portable
+def test_registry_adapter_accounts_for_failures_and_remaining_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = context.DiscoveryContext(lambda: False)
+    monkeypatch.setattr(context, "_MAX_TOTAL_METADATA", 10)
+    monkeypatch.setattr(_registry, "_MAX_REGISTRY_VALUE", 8)
+    outcomes = iter(
+        (
+            registry.RegistryReadResult(4, text="x"),
+            registry.RegistryReadResult(0, error=FileNotFoundError("missing")),
+            registry.RegistryReadResult(2, error=ValueError("type")),
+            registry.RegistryReadResult(4, error=ValueError("read limit"), truncated=True),
+        )
+    )
+    limits: list[int] = []
+
+    def read(key: object, name: str, max_bytes: int) -> registry.RegistryReadResult:
+        limits.append(max_bytes)
+        return next(outcomes)
+
+    monkeypatch.setattr(registry, "read_registry_text", read)
+    assert _registry._registry_text(state, 0, "valid") == "x"
+    with pytest.raises(FileNotFoundError):
+        _registry._registry_text(state, 0, "missing")
+    with pytest.raises(ValueError, match="type"):
+        _registry._registry_text(state, 0, "wrong")
+    with pytest.raises(ValueError, match="read limit"):
+        _registry._registry_text(state, 0, "oversize")
+    assert state.bytes_read == 10
+    assert state.truncated
+    with pytest.raises(context._LimitReached):
+        _registry._registry_text(state, 0, "exhausted")
+    assert limits == [8, 6, 6, 4]
 
 
 @pytest.mark.portable
@@ -587,6 +635,10 @@ def test_registry_reader_bounds_real_synthetic_values(
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
         ) as key:
+            direct = registry.read_registry_text(key, "valid", 64)
+            assert direct.error is None
+            assert direct.text == "Synthetic \u03b1"
+            assert direct.bytes_read == len("Synthetic \u03b1\x00".encode("utf-16-le"))
             assert _registry._registry_text(state, key, "valid") == "Synthetic \u03b1"
             before = state.bytes_read
             with pytest.raises(ValueError, match="read limit"):

@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import override
 
-from .. import context
+from muteinous.infrastructure.platform.environment import OperatingSystem
+
+from .. import _registry, context
 from ..models import Cancel
 from .base import InstallationProvider
 
@@ -76,18 +79,24 @@ def _steam_library(state: context.DiscoveryContext, library: Path) -> None:
 
 
 class SteamProvider(InstallationProvider):
-    """Discover Steam installations from supplied library roots."""
+    """Discover Steam installations using store-owned metadata sources."""
 
     def __init__(
-        self, roots: Callable[[context.DiscoveryContext], Iterable[Path]]
+        self, roots: Callable[[context.DiscoveryContext], Iterable[Path]] | None = None
     ) -> None:
         self._roots = roots
 
     @override
     def discover(self, state: context.DiscoveryContext) -> None:
+        roots = self._roots
+        if roots is None:
+            if state.os != OperatingSystem.WINDOWS:
+                state.issue("Steam", f"automatic discovery unavailable on {state.os}")
+                return
+            roots = self._windows_roots
         libraries: dict[str, Path] = {}
         seen_roots: set[str] = set()
-        for root in self._roots(state):
+        for root in roots(state):
             state.step()
             if not context._valid_path(root):
                 state.issue("Steam root", "invalid library path")
@@ -122,3 +131,32 @@ class SteamProvider(InstallationProvider):
                 state.issue(manifest, str(error))
         for library in libraries.values():
             _steam_library(state, library)
+
+    @staticmethod
+    def _windows_roots(state: context.DiscoveryContext) -> Iterator[Path]:
+        import winreg
+
+        for hive, value in (
+            (winreg.HKEY_CURRENT_USER, "SteamPath"),
+            (winreg.HKEY_LOCAL_MACHINE, "InstallPath"),
+        ):
+            for view in (winreg.KEY_WOW64_32KEY, winreg.KEY_WOW64_64KEY):
+                state.step()
+                try:
+                    with winreg.OpenKey(
+                        hive, r"Software\Valve\Steam", 0, winreg.KEY_READ | view
+                    ) as key:
+                        location = _registry._registry_text(state, key, value)
+                        if context._valid_path(Path(location)):
+                            yield Path(location)
+                        else:
+                            state.issue("Steam registry", "invalid Steam root")
+                except FileNotFoundError:
+                    pass
+                except (OSError, ValueError) as error:
+                    state.issue("Steam registry", str(error))
+        for variable in ("ProgramFiles(x86)", "ProgramFiles"):
+            if program_files := os.environ.get(variable):
+                path = Path(program_files) / "Steam"
+                if context._valid_path(path) and path.is_dir():
+                    yield path
