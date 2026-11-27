@@ -39,6 +39,12 @@ start and end timing error are absolute differences in milliseconds. Report
 mean, median, and nearest-rank p95 separately for starts and ends. Also report
 the fraction of these boundaries within 50, 100, and 200 ms. Missing or
 non-finite timestamps do not enter the timing-error distribution.
+
+Call `matched_word_pairs(reference_words, hypothesis_words)` from `score.py`
+to reuse the WER Levenshtein path and get exact-word `(reference_index,
+hypothesis_index)` pairs. Pass those pairs to `timing_metrics(..., matches=...)`
+when timing word arrays differ; substitutions and insertions are intentionally
+not timed as correct word matches.
 Missing-alignment rate is the proportion of hypothesized words without a
 complete finite start/end pair. A word error without a matched word is not
 timed.

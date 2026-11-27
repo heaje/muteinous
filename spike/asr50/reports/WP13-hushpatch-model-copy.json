@@ -1,0 +1,51 @@
+[
+    {
+        "file":  "whisper-small-en-onnx-fp16\\onnx\\encoder_model_fp16.onnx",
+        "size":  176607756,
+        "sha256":  "719a2f2d4450fef5bba1cf9df585336ddd1fddcf2ed0011a274d89609b25ccd2",
+        "pinned_sha256":  "719a2f2d4450fef5bba1cf9df585336ddd1fddcf2ed0011a274d89609b25ccd2",
+        "match":  true
+    },
+    {
+        "file":  "whisper-small-en-onnx-fp16\\onnx\\decoder_model_fp16.onnx",
+        "size":  307923204,
+        "sha256":  "135a8da972fb393218f7d1d0341fd5fce6da66e7a44ecd94c097d0b8c95eb0aa",
+        "pinned_sha256":  "135a8da972fb393218f7d1d0341fd5fce6da66e7a44ecd94c097d0b8c95eb0aa",
+        "match":  true
+    },
+    {
+        "file":  "whisper-small-en-onnx-fp16\\onnx\\decoder_with_past_model_fp16.onnx",
+        "size":  279476627,
+        "sha256":  "21419f942c07f2b3383813ceb02ea42892f1b5a3177f52e85ea67452163870d2",
+        "pinned_sha256":  "21419f942c07f2b3383813ceb02ea42892f1b5a3177f52e85ea67452163870d2",
+        "match":  true
+    },
+    {
+        "file":  "whisper-small-en-onnx-fp16\\tokenizer.json",
+        "size":  2405679,
+        "sha256":  "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0",
+        "pinned_sha256":  "5eb60cec1e77aeeb6869a2bb5a8e01a84c3fe5d072d75369343021fe6f5310d0",
+        "match":  true
+    },
+    {
+        "file":  "whisper-small-en-onnx-fp16\\generation_config.json",
+        "size":  1956,
+        "sha256":  "5490747ca976d6b3765280a0697d66489020c2afa6e754244d9cd093e1639331",
+        "pinned_sha256":  "5490747ca976d6b3765280a0697d66489020c2afa6e754244d9cd093e1639331",
+        "match":  true
+    },
+    {
+        "file":  "wav2vec2-base-960h-onnx\\model.onnx",
+        "size":  377911891,
+        "sha256":  "00b7cc69516c1ab63c429e63a2b543e4d42bb77441ec5b98ee935de175b00de1",
+        "pinned_sha256":  "00b7cc69516c1ab63c429e63a2b543e4d42bb77441ec5b98ee935de175b00de1",
+        "match":  true
+    },
+    {
+        "file":  "wav2vec2-base-960h-onnx\\vocab.json",
+        "size":  358,
+        "sha256":  "4178db26b3c7570f6a47f14ac6a1c7b32950b8c2800fb097287e53776934f1c5",
+        "pinned_sha256":  "4178db26b3c7570f6a47f14ac6a1c7b32950b8c2800fb097287e53776934f1c5",
+        "match":  true
+    }
+]

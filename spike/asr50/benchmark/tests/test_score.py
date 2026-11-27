@@ -4,7 +4,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from score import edit_counts, hallucination_metrics, target_metrics, timing_metrics, tokenize
+from score import edit_counts, hallucination_metrics, matched_word_pairs, target_metrics, timing_metrics, tokenize
 
 
 def test_normalization_and_punctuation():
@@ -37,6 +37,12 @@ def test_timing_summary_and_missing_alignment():
     assert got["end_error"]["mean_ms"] == pytest.approx(100)
     assert got["missing_alignment_words"] == 1
     assert got["missing_alignment_rate"] == .5
+
+
+def test_matched_word_pairs_excludes_substitution_and_insertion():
+    refs = [{"text": "one"}, {"text": "two"}, {"text": "three"}]
+    hyps = [{"text": "one"}, {"text": "extra"}, {"text": "too"}, {"text": "three"}]
+    assert matched_word_pairs(refs, hyps) == [(0, 0), (2, 3)]
 
 
 def test_hallucination_rates_only_count_provided_negative_clips():

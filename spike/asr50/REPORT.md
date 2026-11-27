@@ -1,117 +1,145 @@
 # M2.0 (#50) AMD hardware ASR investigation report
 
-Temporary investigation record. Not an architecture decision, runtime/model selection, or production dependency change. D47 selection remains open. Independent review: delegate reviewer (same model) completed; corrections incorporated below. Date: 2026-11-26.
+Temporary investigation record. Not an architecture decision, runtime/model selection, or production dependency change. D47 selection remains open. Two delegate-reviewer passes (same model, read-only) were completed; their corrections are incorporated. Date: 2026-11-26.
 
-Evidence levels used throughout: **L1** documented support, **L2** successful build/install, **L3** device enumeration, **L4** actual computation on the device, **L5** actual ASR inference (not performed; no model weights downloaded).
+Evidence levels: **L1** documented support, **L2** successful build/install, **L3** device enumeration, **L4** actual computation on the device, **L5** actual ASR inference. "GPU ran it" (L4/L5) is not "GPU result is correct": see Moonshine on DirectML.
+
+Scope limits that apply to everything below: 14 synthetic clips (35 s, SAPI voice, English), 58 reference words, one machine (Ryzen 9 9900X + RX 7900 XT). It is not game dialogue and not NVIDIA or Intel evidence. Timing/speed was deprioritized by the maintainer and the incidental timings were taken under concurrent load, so none are reported as findings.
 
 ## 1. Repository and hardware state
 
 | Item | Value |
 |---|---|
-| `main` | `a76f82d03fb021d096607d189c01498e66f433cf` (verified via `git ls-remote`) |
-| Spike branch / PR | `spike/issue-50-asr-dependency-probe`, draft PR #56, head at report time = this commit's parent chain from `824671a` |
-| whisper.cpp pin | `ggml-org/whisper.cpp@96ec4d9823e9d0211944172da35f9f29134af990` (1.9.6-dev; same as release v1.9.6 top commit) |
-| CPU | AMD Ryzen 9 9900X, Zen 5, 12 cores / 24 threads; AVX2, FMA, AVX-512 (F/BW/CD/DQ/IFMA/VBMI/VBMI2/VNNI/VPOPCNTDQ/BITALG); BF16 flag not reported |
-| GPU | AMD Radeon RX 7900 XT, **discrete**, Navi 31 / RDNA3 / gfx1100, PCI 1002:744C; 20,420 MB dedicated + 16,201 MB shared (dxdiag); driver 32.0.32029.2010 (Adrenalin 26.20.29.02) |
-| iGPU | Ryzen 9 9900X has an RDNA2 iGPU on paper; **not enumerated** by Windows/dxdiag/Vulkan on this machine (BIOS state not established) |
+| `main` | `a76f82d03fb021d096607d189c01498e66f433cf` |
+| Spike branch / PR | `spike/issue-50-asr-dependency-probe`, draft PR #56 (unmerged) |
+| whisper.cpp pin | `ggml-org/whisper.cpp@96ec4d9823e9d0211944172da35f9f29134af990` (1.9.6-dev) |
+| CPU | AMD Ryzen 9 9900X, Zen 5, 12C/24T; AVX2, FMA, AVX-512 incl. VNNI; BF16 flag not reported |
+| GPU | AMD Radeon RX 7900 XT, **discrete**, Navi 31 / RDNA3 / gfx1100, PCI 1002:744C; 20,420 MB dedicated + 16,201 MB shared; driver 32.0.32029.2010 |
+| iGPU | not enumerated (Windows, dxdiag, Vulkan) |
 | RAM / OS | 31.6 GiB; Windows 11 Pro build 26300 |
-| APIs | D3D12 FL 12_2; Vulkan 1.4.359 (AMD proprietary 26.11.2), cooperative_matrix, fp16/int8, int dot; DirectML.dll present |
-| Not installed | HIP SDK/ROCm, CMake, MSVC, Ninja, Vulkan SDK (none installed by this work) |
-| Python / uv | CPython 3.14.10 via uv 0.13.9 (system `python` is a Store alias) |
+| APIs | D3D12 FL 12_2; Vulkan 1.4.359 (cooperative_matrix, fp16/int8, int dot); DirectML.dll present |
+| Not installed | HIP SDK/ROCm, CMake, MSVC, Ninja, Vulkan SDK (none installed locally) |
+| Python / uv | CPython 3.14.10 via uv 0.13.9 (whisper.cpp driver script used system Python 3.12; the runtime under test is unaffected) |
 
 ## 2. Engineering time
 
-My wall-clock: 15:33 to about 16:20 MT (~45 min). Delegate effort is self-reported and ran in parallel: WP1 ~9, WP2 ~15, WP3 ~35 (initial + follow-up), WP4 ~20, WP5 ~15, WP6 ~12 min, reviewer unreported (~15 est). Approximate total ≈ 2 h 15 min of this investigation's effort. Hours previously spent on #50 before this task were not provided, so remaining budget against the 8 h cap cannot be computed here.
+Supervisor wall-clock 15:33 to about 17:15 MT. Delegate effort is self-reported or estimated and ran in parallel: phase 1 (WP1-6 + review) about 2 h; phase 2 (WP8-14 + review 2) about 4.5 h. Approximate total 6.5 h of delegate effort plus about 1.7 h supervisor wall-clock, **likely at or past the eight-hour cap** counting everything, and hours spent on #50 before this task were not provided. No further experiments should start without maintainer direction.
 
 ## 3. Evidence and commands (reproducible)
 
-- CI: run [45908168976](https://github.com/heaje/muteinous/actions/runs/45908168976) (commit `824671a`) builds whisper.cpp at the pin: `cpu-dl` and `vulkan-dl`; earlier run 45902940651 for the dependency probes.
-- Local runs used the CI artifacts: `ggml-diag.exe list`, `ggml-diag.exe matmul <idx> <n> <iters>` (source: `spike/asr50/ggml-diag/devices.cpp`), PowerShell `Get-Counter '\GPU Engine(*)\Utilization Percentage'` filtered to the process ID.
-- DirectML/ORT: scripts and logs from WP3 (`probe.py`, `sustain.py`, `fallback_probe.py`, `windowsml_fp16.py`) in disposable `uv venv --python 3.14.10` environments with `--only-binary :all:`.
-- Benchmark: `spike/asr50/benchmark/` (`README.md`, `generate_corpus.py`, `score.py`, tests: 5 passed). Corpus (14 clips, 35.18 s, 22.05 kHz mono) generated outside git; all 14 ground-truth SHA-256 values recomputed and matched; regeneration was bit-identical.
-- Delegate reports (WP1–WP6, REVIEW, WP5 manifest) are copied under `spike/asr50/reports/`.
+- CI run [45908168976](https://github.com/heaje/muteinous/actions/runs/45908168976) builds whisper.cpp at the pin (CPU all-variants, Vulkan); workflow `.github/workflows/asr-whisper-backend-probe.yml`; diagnostic `spike/asr50/ggml-diag/devices.cpp`.
+- Models: 31 files, 3,106,591,908 bytes, downloaded from pinned revisions into staging, size and SHA-256 verified before use (`reports/WP7-download-results.json`); the 7 reused Hushpatch files were hash-verified against pinned values (`reports/WP13-hushpatch-model-copy.json`).
+- Corpus: `spike/asr50/benchmark/` (generator, scorer, tests); shared 16 kHz mono float32 inputs resampled once (`scipy.signal.resample_poly`).
+- Runners: `spike/asr50/runners/{whispercpp,sherpa-parakeet,faster-whisper,moonshine-onnx,ort-whisper-turbo,ort-whisper-small-en,wav2vec2-aligner}`. Delegate reports WP1-WP14 and both reviews: `spike/asr50/reports/`.
+- Disposable envs: `uv venv --python 3.14.10`, `--only-binary :all:`, `HF_HUB_OFFLINE=1`.
+- GPU proof method: ORT profiling JSON / verbose logs for node placement, and Windows `GPU Engine(*)` and `GPU Process Memory(*)` counters filtered to the process ID, with a CPU control.
 
-## 4. Runtime compatibility matrix (this machine: Ryzen 9 9900X + RX 7900 XT, Windows 11)
+## 4. Runtime compatibility matrix (this machine)
 
-| Runtime | CPU | AMD GPU path | Evidence on this machine |
+| Runtime / artifact | CPU | AMD GPU path | Word timing |
 |---|---|---|---|
-| whisper.cpp (ggml) | CPU all-variants: L2 build, L4 CPU matmul (variant `cascadelake` chosen on Zen 5) | **Vulkan: L4** (below). HIP: L1 only (HIP SDK lists RX 7900 XT; not installed; Windows HIP via ggml CMake needs validation, source has a `hipcc` workaround) | no ASR (L5 not run) |
-| ONNX Runtime + DirectML (standalone `onnxruntime-directml` 1.24.4, CPython 3.14) | L2 | **DirectML: L4** (below) | no ASR |
-| ONNX Runtime + Windows ML wheel (`onnxruntime-windowsml` 1.30.1) | L2 | wheel's bundled DML: L4; catalog EPs (AMDGPU/MIGraphX/Vitis): **not tested** (needs network/system changes; docs list Python 3.10-3.13 only) | warns "Init provider bridge failed" on import |
-| faster-whisper 1.2.1 / CTranslate2 4.9.1 | L1 metadata: cp314 win_amd64 wheel exists; CPU int8/float32 | L1: Windows ROCm build guide maps RX 7900 XT to gfx1100, but it is a **source build** with AMD ROCm SDK wheels, validated on RX 7900 XTX / Python 3.11 / ROCm 7.2.0; no prebuilt CT2 ROCm wheel evidence | not installed or run locally; CI probe (L2) passed on a generic runner |
-| sherpa-onnx 2.0.3 + Parakeet TDT 0.6B v2 | L1: cp314 win_amd64 wheel; int8 export exists; CI probe L2 | unverified; DirectML availability in the published wheel not established | Parakeet gives token timings; word times need aggregation |
-| Moonshine (`moonshine-voice` 0.1.6) | L1/L2: generic py3 Windows wheel, no cp314 classifier; CI probe L2 | none found | word timestamps documented |
+| whisper.cpp, Turbo q5_0 and Small.en q5_1 | L5, WER .190-.241 | **Vulkan: L5, proven by process GPU counters (31-56% engine, 1.04 GiB)** | `-ml 1`/DTW ran (DTW needs flash attention off); accuracy unvalidated |
+| ONNX Runtime + DirectML, Whisper Small.en fp16 (Hushpatch recipe) | L5, WER .190 | **DirectML: L5, WER .172, mixed DML/CPU placement, counters verified** | none (text only) |
+| ONNX Runtime + DirectML, Whisper Large-v3 Turbo q4 | L5, WER .155 | **DirectML: L5, identical output to CPU, MatMulNBits on DML, ~2.77 GiB** | none |
+| sherpa-onnx 2.0.3 + Parakeet TDT 0.6B v2 int8 | L5, **WER .121** | none: `directml`/`cuda`/`dml` all fall back to CPU with a warning; wheel lacks DirectML | token times grouped to words (see 7) |
+| faster-whisper 1.2.1 / CT2 4.9.1, Small.en | L5, WER .138 with bundled Silero VAD (.224 without) | none: `cuda` raises a driver error, `auto` -> CPU, ROCm/HIP not accepted | native DTW |
+| Moonshine base int8 (HF ONNX) | L5, WER .224 | DirectML executes but output is corrupt (WER 2.14, target 0/0); cause unproven | none |
+| ORT Windows ML catalog providers | not tested (needs network + Windows App SDK; docs list CPython 3.10-3.13) | not tested | n/a |
+| HIP/ROCm (whisper.cpp, CT2) | not tested (needs system HIP SDK; not approved) | L1 only; CT2's Windows ROCm guide is a source-build recipe validated on RX 7900 XTX / Python 3.11 | n/a |
 
-## 5. Verified AMD GPU computation (L4)
+## 5. Central rescore (one scorer, raw per-clip outputs; reviewer 2)
 
-All synthetic, no model weights.
+| Runner | Config / device | WER (S/D/I) | Target precision / recall | Silence + non-speech words/min |
+|---|---|---:|---|---:|
+| sherpa-parakeet | CPU | .1207 (6/1/0) | .967 / .829 | 0 |
+| faster-whisper | beam5 + VAD | .1379 (6/0/2) | .968 / .857 | 0 |
+| faster-whisper | beam5, no VAD | .2241 (6/0/7) | .968 / .857 | 75 |
+| faster-whisper | beam1, no VAD | .2241 (7/0/6) | 1.000 / .829 | 60 |
+| moonshine-onnx | CPU | .2241 (8/1/4) | .966 / .800 | 0 |
+| moonshine-onnx | **DirectML** | **2.1379** (57/0/67) | 0 / 0 | 0 |
+| ort-whisper-turbo (q4) | CPU | .1552 (7/0/2) | .938 / .857 | 30 |
+| ort-whisper-turbo (q4) | DirectML | .1552 (7/0/2) | .938 / .857 | 30 |
+| ort-whisper-small-en (fp16) | CPU | .1897 (7/0/4) | 1.000 / .829 | 30 |
+| ort-whisper-small-en (fp16) | DirectML | .1724 (6/0/4) | .968 / .857 | 30 |
+| whisper.cpp turbo | Vulkan GPU | .2069 (8/1/3) | .966 / .800 | 45 |
+| whisper.cpp turbo | CPU | .2414 (8/1/5) | .966 / .800 | 45 |
+| whisper.cpp small.en | Vulkan GPU / CPU | .1897 (7/0/4) | .967 / .829 | 30 |
 
-- **ggml Vulkan (whisper.cpp backend):** `Vulkan0` = RX 7900 XT (AMD proprietary driver, KHR_coopmat, fp16 true, warp 64). 2048x2048 f32 matmul: max relative error vs double-precision reference 2.2e-6 (n=4096: 4.4e-6), 0.61 ms warm vs 42 ms on the CPU device in the same binary. Sustained 4096 run: process-filtered GPU **compute** engine ~84% in 6 of 7 one-second samples. Reported TFLOPS exceed fp32 peak, so ggml is probably using fp16 matrix cores with fp32 accumulation; do not read it as an fp32 benchmark.
-- **ORT DirectML:** fp32/fp16 MatMul chains and Conv matched CPU exactly; profile JSON `args.provider == DmlExecutionProvider`; verbose logs "All nodes placed on [DmlExecutionProvider]". Sustained 22 s run: 3D engine mean/peak 52.7/52.9% (fp16) and 64.4/65.4% (fp32) on the RX 7900 XT LUID; CPU controls showed no GPU engine instance for the PID. Counter samples were several seconds apart (not 1 Hz).
-- **Explicit-GPU and fallback behavior:** DirectML invalid `device_id` fails loudly (`887A0002`). A CPU-only op (string `Identity`) silently runs on CPU by default; `session.disable_cpu_ep_fallback=1` makes session creation fail. ggml-diag refuses a nonexistent device index (exit 2). **whisper-cli explicit-GPU failure behavior is untested (needs a model); the application will need its own strict-GPU enforcement for D48.**
+Corrections applied after review: WP13's faster-whisper comparison figure of .2759 matches no configuration and is withdrawn (use the configuration-specific figures above). The 14-clip, 58-word set means a single word changes WER by 1.7 points; do not rank candidates on differences smaller than a few words.
 
-## 6. CPU compatibility
+Silence/non-speech output: faster-whisper without VAD and the Whisper ONNX models emit text ("you", "Thank you", "Bang", "gun shots"); whisper.cpp small.en emitted `[BLANK_AUDIO]` on the silent clip (a control marker, normalized to empty). VAD (faster-whisper's bundled Silero) removed all of it; no VAD was available for whisper.cpp (not approved). The real pipeline needs silence gating.
 
-CI probes: faster-whisper, sherpa-onnx, Moonshine, WinML standard and whisper.cpp CPU build passed install/import/build (L2) on Windows Server 2025 / CPython 3.14.10 (4 vCPU runner). Locally verified CPU computation (L4-equivalent, CPU device): ORT CPU, ggml CPU. No CPU ASR (L5).
+## 6. Explicit-device and fallback behavior (D48/D49)
 
-## 7. Footprint
+| Runtime | Behavior with a bad or unavailable GPU request |
+|---|---|
+| whisper.cpp `-dev 1`, `-dev 7`, nonexistent `GGML_VK_VISIBLE_DEVICES` | **exit 0, transcribes on CPU**, log only says `no GPU found`. `-ng` is an explicit logged CPU choice. Application must enforce no silent fallback |
+| ORT DirectML, invalid `device_id` | with DML as the only provider: session creation raises (`887A0002`). With `CPUExecutionProvider` also listed (the usual config): logs an error and returns a CPU session. **Application must pick the provider list deliberately and verify actual providers** |
+| ORT `session.disable_cpu_ep_fallback=1` | session creation fails when any node is CPU-assigned (all three Whisper/Moonshine ONNX graphs have CPU-assigned nodes), so strict mode is not usable as-is for these exports |
+| sherpa-onnx | non-CPU provider request -> warns and runs on CPU; transcript still succeeds |
+| faster-whisper | `device='cuda'` raises at construction (no silent fallback); `device='auto'` resolves to CPU |
+| ggml-diag (spike tool) | refuses nonexistent device index (exit 2) |
+
+## 7. Word timing
+
+- Native: faster-whisper DTW (per word), whisper.cpp DTW/`-ml 1` token times, Parakeet token times grouped into words. Whisper ONNX and Moonshine ONNX exports give none.
+- Separate aligner (from the older Hushpatch project's design): wav2vec2-base-960h ONNX CTC forced alignment on CPU against known text, with a mean-log-probability per-word score (fits D67). Implemented independently in `runners/wav2vec2-aligner`; aligns all 14 oracle clips with no missing words; true words scored about -0.1 versus about -14 for appended hallucinated words on one clean clip (uncalibrated).
+- **Timing accuracy is not established.** The SAPI SpeakProgress start times in `ground_truth.json` are not defensible as independent acoustic boundaries: on `clean_001` the audio's silent gaps (about 0.90 s and 1.04 s) conflict with SAPI's 0.854/1.377 s starts, and aligner-minus-SAPI differences grow with word position (aligner comparison only; reviewer 2 supports the concern but did not re-verify the aggregate numbers). Therefore the reported timing errors (Parakeet about 273 ms start, aligner 256/482 ms, native DTW) are disagreement with approximate SAPI annotations, not validated boundary accuracy, and no timing ranking is claimed. WER, target recall/precision and hallucination figures use transcripts only and are unaffected.
+
+## 8. Footprint
 
 | Item | Bytes |
 |---|---|
 | whisper.cpp CPU all-variants build (exe+dll) | 11,703,296 |
-| whisper.cpp Vulkan + CPU all-variants build | 54,137,344 (includes 316,416 B `vulkan-shaders-gen.exe`, build-only; `ggml-vulkan.dll` alone is 42,117,632) |
-| Runtime dependencies | MSVC runtime (`msvcp140`, `vcruntime140`, `vcruntime140_1`), OpenMP `vcomp140.dll`; `vulkan-1.dll` from the GPU driver; no vendor SDK |
-| ORT DirectML env (post-install, includes venv scaffolding) | 170,074,007 |
-| ORT Windows ML wheel env | 142,340,453 |
-| ORT CPU env | 121,507,852 |
-| CI-measured dependency installs (earlier run) | faster-whisper 262.85 MB, WinML standard 113.33 MB, Moonshine 82.71 MB, sherpa-onnx 52.94 MB |
+| whisper.cpp Vulkan + CPU build | 54,137,344 (incl. 316,416 B build-only shader generator; `ggml-vulkan.dll` 42,117,632) |
+| whisper.cpp runtime deps | MSVC runtime, OpenMP `vcomp140.dll`, driver `vulkan-1.dll`; no vendor SDK |
+| ORT env sizes (post-install, incl. venv) | DirectML 170,074,007; Windows ML 142,340,453; CPU 121,507,852 |
+| faster-whisper env | 267,087,721 (+ 486,098,798 model) |
+| Earlier CI-measured installs | faster-whisper 262.85 MB, WinML 113.33 MB, Moonshine 82.71 MB, sherpa-onnx 52.94 MB |
 
-Model sizes are in section 9. Footprints for real packaged distributions are unmeasured.
+## 9. Errors, warnings, unresolved blockers
 
-## 8. Errors, warnings, unresolved blockers
+- `onnxruntime-windowsml` prints "Init provider bridge failed" on import (the older project silenced it with a stderr redirect during import); DirectML still executes inside that wheel. The historical override remains a dependency-consistency failure (`uv pip check`); faster-whisper pulls `onnxruntime`, which conflicts on module name with the Windows ML wheel.
+- whisper.cpp DTW requires flash attention off (`-nfa`), else it warns and returns no word times.
+- Moonshine DirectML corruption: observed; cause unproven (quantized `DynamicQuantizeLinear`/`MatMulIntegerToFloat` nodes ran on DML; no operator isolation done).
+- WP13's first report claimed a valid DirectML session failed; the later correction says the failure was the invalid-device retry path and a valid `device_id=0` session works (ORT 1.24.4, 1.30.1 and 1.32.0 all create sessions). Treat the first report as superseded.
+- Untested: Windows ML catalog AMD provider, HIP/ROCm, NVIDIA and Intel hardware, iGPU, real game audio, long clips, whisper.cpp VAD.
+- The older project reported DirectML crashing when two sessions share a process, MIGraphX segfaulting on the second inference, and `add_provider_for_devices` running 4.5x slower; these were not independently tested here.
 
-- Historical WinML override fails `uv pip check`; standard `onnxruntime-windowsml` passes `uv pip check` but logs `Init provider bridge failed` on import (same warning seen in the override). DML still executes through that wheel (L4).
-- Windows ML catalog acquisition (dynamic AMD EP) untested: needs network + Windows App SDK runtime, a system change; docs list CPython 3.10-3.13 only. Its applicability to RX 7900 XT is documented only at provider level ("supported AMD GPUs"), not exact-card.
-- HIP/ROCm paths untested: require the system-wide HIP SDK (not authorized). whisper.cpp pinned CMake notes CMake on Windows lacks HIP language support, with a `hipcc` workaround; not categorical impossibility.
-- CI hosted runners enumerate CPU only (AMD EPYC); GPU evidence comes only from local runs.
-- No iGPU enumerated, so integrated-GPU behavior is untestable here. NVIDIA and Intel paths are untested on this hardware.
-- Word timing quality is unproven for every candidate (whisper.cpp `-ml 1`/DTW experimental; Parakeet token-to-word aggregation; Moonshine attention asset).
-- SAPI ground-truth word ends are approximate (next word event / utterance end).
+## 10. Model-artifact manifest (downloaded and verified; nothing further requested)
 
-## 9. Proposed model-artifact manifest (approval request; nothing downloaded)
+All verified against pinned revision metadata (LFS SHA-256 where available; small-file hashes observed on download are trust-on-first-use).
 
-Full per-file revisions, filenames, sizes and SHA-256 (LFS `oid`) are in `reports/WP5-manifest.json`; eight entries were spot-checked against live HuggingFace metadata by the reviewer. Non-LFS small files have no SHA-256 and are marked UNVERIFIED until a small-file fetch is approved. Preferred set for comparison (runtime / artifact / revision / bytes / license):
+| Artifact | Repo @ revision | Bytes | License |
+|---|---|---:|---|
+| Whisper Large-v3 Turbo q5_0 (whisper.cpp) | `ggerganov/whisper.cpp@5359861c739e955e79d9a303bcbc70fb988958b1` | 574,041,195 | MIT |
+| Whisper Small.en q5_1 (whisper.cpp) | same | 190,098,681 | MIT |
+| Parakeet TDT 0.6B v2 int8 (sherpa-onnx) | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8@84b478d541cdbf0c296a7ab5f1e20a6f8f998114` | 661,288,526 | CC-BY-4.0 (attribution) |
+| Moonshine base int8 ONNX | `onnx-community/moonshine-base-ONNX@b1e9b6aae3c3c7298f10c3798393fdf38e8fbbad` | 105,876,417 | MIT |
+| Whisper Small.en CT2 (faster-whisper) | `Systran/faster-whisper-small.en@d1d751a5f8271d482d14ca55d9e2deeebbae577f` | 486,098,798 | MIT |
+| Whisper Large-v3 Turbo q4 ONNX | `onnx-community/whisper-large-v3-turbo@360ebcde2559d60bb474678be3c1de9ef347d01a` | 1,089,188,291 | not stated in HF metadata |
+| Whisper Small.en fp16 ONNX (reused from Hushpatch) | `onnx-community/whisper-small.en@482fb8ba081b6e906f92efe103622316b2a0cc69` | 766,415,222 | Apache-2.0 |
+| wav2vec2-base-960h ONNX (reused from Hushpatch) | `onnx-community/wav2vec2-base-960h-ONNX@729c1a6730fb549c20a1c73a3d3f96f11020225e` | 377,912,249 | Apache-2.0 |
 
-| # | Combo | Repo @ revision | Download bytes | License |
-|---|---|---|---:|---|
-| 1 | Whisper Large-v3 Turbo q5_0 / whisper.cpp (Vulkan/CPU) | `ggerganov/whisper.cpp@5359861c739e955e79d9a303bcbc70fb988958b1`, `ggml-large-v3-turbo-q5_0.bin` | 574,041,195 | MIT |
-| 2 | Whisper Small.en q5_1 / whisper.cpp | same repo/revision, `ggml-small.en-q5_1.bin` | 190,098,681 | MIT |
-| 3 | Parakeet TDT 0.6B v2 int8 / sherpa-onnx | `csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8@84b478d541cdbf0c296a7ab5f1e20a6f8f998114` (encoder, decoder, joiner, tokens) | 661,288,526 | CC-BY-4.0 (attribution required) |
-| 4 | Moonshine base int8 / ONNX Runtime | `onnx-community/moonshine-base-ONNX@b1e9b6aae3c3c7298f10c3798393fdf38e8fbbad` | 105,876,417 | MIT |
-| **Core total** | | | **1,531,304,819 (1.43 GiB)** | |
-| Opt. A | Whisper Small.en CT2 / faster-whisper (CPU) | `Systran/faster-whisper-small.en@d1d751a5f8271d482d14ca55d9e2deeebbae577f` | 486,098,798 | MIT |
-| Opt. B | Whisper Large-v3 Turbo q4 ONNX / ORT DirectML | `onnx-community/whisper-large-v3-turbo@360ebcde2559d60bb474678be3c1de9ef347d01a` | 1,089,188,291 | not stated in HF metadata (UNVERIFIED) |
+Moonshine Voice's own runtime fetches `.ort` files from `download.moonshine.ai` with no fixed commit or per-file SHA-256 (D144 would need a Muteinous-owned pinned manifest). Per issue #50, models are not to be mirrored in GitHub Releases.
 
-Notes: Moonshine's official runtime (`moonshine-voice`) fetches `.ort` components from `https://download.moonshine.ai/model/...` (dated directory such as `medium-streaming-en/quantized_26_08_21`), with no fixed commit or published per-file SHA-256, so D144 provenance would need a Muteinous-owned pinned manifest; the HF ONNX route in row 4 is pinnable. `alignment_heads` is not a separate artifact in these repos. Expected installed size is assumed equal to download size (excludes caches). Issue #50: do not mirror models in GitHub Releases. Each combo downloads only one variant; the full catalog (13.65 GB) is not a request.
+## 11. Benchmark status
 
-## 10. Benchmark plan
+Defined in `spike/asr50/benchmark/README.md`; scorer includes a matched-word-pair helper for timing. Lexical metrics (WER, target recall/precision, silence hallucination) are valid for this synthetic set. Timing metrics need a better ground truth: reviewer 2 proposes synthesizing each word separately, keeping each WAV's exact sample count, concatenating with explicit silence gaps, and verifying boundaries acoustically. Not done.
 
-Defined in `spike/asr50/benchmark/README.md`: recall/precision/F1 on target words, FP/FN, WER (explicit normalization), word start/end error (mean/median/p95; 50/100/200 ms), missing alignments, silence hallucinations, RTF, cold vs warm in fresh processes, peak RAM/VRAM, footprint; JSONL result schema; equivalent inputs (16 kHz mono float32, same clips and thread counts). Corpus categories: clean, noisy (10/0/-5 dB), music/effects, quiet (-30/-40 dBFS), silence, non-speech, rapid, repeated targets, similar-sounding, boundary words. The current corpus is small (14 clips, 35 s) and synthetic SAPI speech; scale and diversity (second SAPI voice, more targets) should grow before any model choice.
+## 12. Recommended next experiments
 
-## 11. Recommended next experiments
+1. Build the constructed-boundary corpus v2 and re-score native DTW (faster-whisper, whisper.cpp), Parakeet token times and the wav2vec2 aligner on it.
+2. Extend the corpus (more clips, a second voice, longer clips, real-ish dialogue without game assets) before using differences of a few words to choose.
+3. Whisper-based GPU candidates to carry forward for AMD evidence: whisper.cpp Vulkan and ORT DirectML (fp16 Small.en proven; q4 Turbo proven). Parakeet and faster-whisper are CPU-only on this hardware.
+4. Test explicit-device enforcement in a thin wrapper (verify actual provider/backend, refuse silent fallback) for both whisper.cpp and ORT.
+5. Isolate the Moonshine DirectML corruption (operator-level tensor comparison) only if Moonshine stays a candidate.
+6. Optional with approval: Windows ML catalog AMD provider; HIP SDK for whisper.cpp HIP / CT2 ROCm; NVIDIA and Intel runs on those machines.
 
-1. After approval: download the core set (1.43 GiB) plus the small unverified files, verify hashes, and run the equivalent-input benchmark on CPU and on the RX 7900 XT (whisper.cpp Vulkan; ORT DirectML for Opt. B).
-2. Test whisper.cpp explicit device behavior (`-dev`, `-ng`, `GGML_VK_VISIBLE_DEVICES`) and word-timing modes (`-ml 1`, DTW) with a model.
-3. Parakeet token-to-word aggregation prototype and sherpa-onnx provider check (DirectML availability).
-4. Optional, needs approval: HIP SDK install for whisper.cpp HIP and CTranslate2 ROCm source build; Windows ML catalog test for the AMD GPU EP.
-5. NVIDIA and Intel coverage on those machines (whisper.cpp CUDA/Vulkan, SYCL/OpenVINO; ORT DirectML on Intel).
-6. Grow the corpus and add a native Linux/macOS CPU check if those platforms stay in scope.
+## 13. Decisions requiring maintainer approval
 
-## 12. Decisions requiring maintainer approval
-
-1. Approve (or amend) the model downloads in section 9, including fetching the small unverified config/tokenizer files to compute SHA-256.
-2. Approve installing the AMD HIP SDK on this machine (system-wide), or decline HIP/ROCm testing.
-3. Approve Windows ML catalog acquisition testing (network + shared package install), or decline.
-4. Decide whether to keep the temporary workflows on PR #56 or remove them after this phase; PR #56 stays draft and unmerged.
-5. Confirm remaining time budget and whether to continue past the point where selection stays with the maintainer (D47).
-6. Per-hardware model strategy (different models for CPU, NVIDIA, AMD, Intel) is a future architectural decision; this report only supplies evidence.
+1. Whether to spend more budget at all (the eight-hour cap appears reached) and, if so, on which of the next experiments.
+2. Approval for system-level steps, if wanted: HIP SDK install; Windows ML catalog acquisition.
+3. Whether to keep the temporary workflows on PR #56 (the maintainer chose "keep until selection").
+4. Direction for any future per-hardware model strategy (CPU, NVIDIA, AMD, Intel); this report supplies evidence only. Whether separate aligner-based word timing is acceptable under the SpeechAnalysisResult contract is an architecture question for the maintainer.
+5. Runtime/model selection (D47) remains with the maintainer.

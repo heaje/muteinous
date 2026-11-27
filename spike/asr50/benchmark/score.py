@@ -57,6 +57,16 @@ def edit_counts(reference: Sequence[str], hypothesis: Sequence[str]) -> dict:
             "insertions": insertions, "matches": matches, "wer": wer}
 
 
+def matched_word_pairs(reference_words: Sequence[dict],
+                       hypothesis_words: Sequence[dict]) -> list[tuple[int, int]]:
+    """Return exact-word (reference index, hypothesis index) pairs from WER's edit path."""
+    reference = [tokenize(word["text"])[0] if tokenize(word["text"]) else ""
+                 for word in reference_words]
+    hypothesis = [tokenize(word["text"])[0] if tokenize(word["text"]) else ""
+                  for word in hypothesis_words]
+    return edit_counts(reference, hypothesis)["matches"]
+
+
 def target_metrics(reference: str | Sequence[str], hypothesis: str | Sequence[str],
                    targets: Iterable[str] = TARGET_WORDS) -> dict:
     ref = tokenize(reference) if isinstance(reference, str) else list(reference)
