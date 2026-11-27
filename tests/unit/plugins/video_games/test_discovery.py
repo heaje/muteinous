@@ -14,6 +14,12 @@ from uuid import uuid4
 import pytest
 
 from muteinous.plugins.video_games import discovery
+from muteinous.plugins.video_games.discovery import context, probe, service
+from muteinous.plugins.video_games.discovery.providers import _registry
+from muteinous.plugins.video_games.discovery.providers.base import InstallationProvider
+from muteinous.plugins.video_games.discovery.providers.epic import EpicProvider
+from muteinous.plugins.video_games.discovery.providers.gog import GOGProvider
+from muteinous.plugins.video_games.discovery.providers.steam import SteamProvider
 
 
 def _vdf_path(path: Path) -> str:
@@ -48,9 +54,17 @@ def _discover(
     epic: Path | None = None,
     gog: tuple[tuple[object, object], ...] = (),
 ) -> discovery.DiscoveryResult:
-    return discovery._discover(
-        discovery._Discovery(lambda: False), steam_roots, epic, gog
+    return service._discover(
+        context.DiscoveryContext(lambda: False), _providers(steam_roots, epic, gog)
     )
+
+
+def _providers(
+    steam_roots: tuple[Path, ...] = (),
+    epic: Path | None = None,
+    gog: tuple[tuple[object, object], ...] = (),
+) -> tuple[InstallationProvider, ...]:
+    return SteamProvider(steam_roots), EpicProvider(epic), GOGProvider(gog)
 
 
 @pytest.mark.portable
@@ -158,7 +172,7 @@ def test_discovery_metadata_budget(
     epic = tmp_path / "epic"
     epic.mkdir()
     (epic / "oversize.item").write_bytes(b"x" * 33)
-    monkeypatch.setattr(discovery, "_MAX_METADATA", 32)
+    monkeypatch.setattr(context, "_MAX_METADATA", 32)
     result = _discover(epic=epic)
     assert not result.candidates
     assert result.truncated
@@ -166,7 +180,7 @@ def test_discovery_metadata_budget(
 
     for index in range(5):
         (epic / f"{index}.item").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(discovery, "_MAX_ENTRIES", 2)
+    monkeypatch.setattr(context, "_MAX_ENTRIES", 2)
     limited = _discover(epic=epic)
     assert limited.truncated
     assert any("budget exhausted" in issue for issue in limited.issues)
@@ -192,12 +206,38 @@ def test_aggregate_budget_and_ambiguous_epic_metadata(
     (manifests / "duplicate.item").unlink()
     for index in range(3):
         (manifests / f"{index}.item").write_text(" " * 8 + "{}", encoding="utf-8")
-    monkeypatch.setattr(discovery, "_MAX_TOTAL_METADATA", 25)
-    state = discovery._Discovery(lambda: False)
-    limited = discovery._discover(state, (), manifests, ())
+    monkeypatch.setattr(context, "_MAX_TOTAL_METADATA", 25)
+    state = context.DiscoveryContext(lambda: False)
+    limited = service._discover(state, _providers(epic=manifests))
     assert limited.truncated
     assert state.bytes_read <= 25
     assert any("read limit" in issue for issue in limited.issues)
+
+
+@pytest.mark.portable
+def test_entry_budget_is_shared_across_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    epic_game = tmp_path / "epic_game"
+    gog_game = tmp_path / "gog_game"
+    excluded = tmp_path / "excluded"
+    for game in (epic_game, gog_game, excluded):
+        game.mkdir()
+    manifests = tmp_path / "manifests"
+    _epic_manifest(manifests, epic_game)
+    monkeypatch.setattr(context, "_MAX_ENTRIES", 2)
+
+    result = _discover(
+        epic=manifests,
+        gog=((str(gog_game), "GOG"), (str(excluded), "Excluded")),
+    )
+
+    assert [(c.path, c.sources) for c in result.candidates] == [
+        (epic_game, ("epic",)),
+        (gog_game, ("gog",)),
+    ]
+    assert result.truncated
+    assert any("budget exhausted" in issue for issue in result.issues)
 
 
 @pytest.mark.portable
@@ -362,7 +402,7 @@ def test_probe_entry_budget_and_no_extension_based_capability(
     for index in range(8):
         (tmp_path / f"{index}.ast").write_bytes(b"nope")
     candidate = discovery.select_folder(tmp_path).candidates[0]
-    monkeypatch.setattr(discovery, "_MAX_PROBE_ENTRIES", 3)
+    monkeypatch.setattr(probe, "_MAX_PROBE_ENTRIES", 3)
     result = discovery.probe_installation(candidate)
     assert result.entries_examined == 3
     assert result.truncated
@@ -382,7 +422,9 @@ def test_cancellation_during_discovery_and_probe(tmp_path: Path) -> None:
         return checks > 3
 
     with pytest.raises(discovery.DiscoveryCancelled):
-        discovery._discover(discovery._Discovery(cancelled), (), tmp_path, ())
+        service._discover(
+            context.DiscoveryContext(cancelled), _providers(epic=tmp_path)
+        )
     checks = 0
     with pytest.raises(discovery.DiscoveryCancelled):
         discovery.probe_installation(candidate, cancelled=cancelled)
@@ -438,7 +480,7 @@ def test_windows_discovery_registry_and_environment(
             return Key("game")
         raise FileNotFoundError(name)
 
-    def query_value(state: discovery._Discovery, key: Key, name: str) -> str:
+    def query_value(state: context.DiscoveryContext, key: Key, name: str) -> str:
         values = {
             ("steam", "SteamPath"): str(steam),
             ("game", "path"): str(gog_game),
@@ -447,7 +489,7 @@ def test_windows_discovery_registry_and_environment(
         return values[key.kind, name]
 
     monkeypatch.setattr(winreg, "OpenKey", open_key)
-    monkeypatch.setattr(discovery, "_registry_text", query_value)
+    monkeypatch.setattr(_registry, "_registry_text", query_value)
     monkeypatch.setattr(winreg, "QueryInfoKey", lambda key: (1, 0, 0))
     monkeypatch.setattr(winreg, "EnumKey", lambda key, index: "1")
     monkeypatch.setenv("ProgramData", str(tmp_path))
@@ -471,8 +513,8 @@ def test_registry_reader_bounds_real_synthetic_values(
     import winreg
 
     key_path = rf"Software\MuteinousTests-{uuid4().hex}"
-    monkeypatch.setattr(discovery, "_MAX_REGISTRY_VALUE", 64)
-    state = discovery._Discovery(lambda: False)
+    monkeypatch.setattr(_registry, "_MAX_REGISTRY_VALUE", 64)
+    state = context.DiscoveryContext(lambda: False)
     try:
         with winreg.CreateKeyEx(
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ | winreg.KEY_WRITE
@@ -483,15 +525,15 @@ def test_registry_reader_bounds_real_synthetic_values(
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_READ
         ) as key:
-            assert discovery._registry_text(state, key, "valid") == "Synthetic \u03b1"
+            assert _registry._registry_text(state, key, "valid") == "Synthetic \u03b1"
             before = state.bytes_read
             with pytest.raises(ValueError, match="read limit"):
-                discovery._registry_text(state, key, "oversize")
+                _registry._registry_text(state, key, "oversize")
             assert state.truncated
             assert state.bytes_read == before + 64
             with pytest.raises(ValueError, match="type"):
-                discovery._registry_text(state, key, "wrong")
+                _registry._registry_text(state, key, "wrong")
             with pytest.raises(FileNotFoundError):
-                discovery._registry_text(state, key, "missing")
+                _registry._registry_text(state, key, "missing")
     finally:
         winreg.DeleteKey(winreg.HKEY_CURRENT_USER, key_path)
