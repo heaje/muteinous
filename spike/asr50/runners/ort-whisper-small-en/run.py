@@ -16,7 +16,7 @@ import psutil
 from tokenizers import Tokenizer
 
 MODEL = pathlib.Path(r"C:\scratch\asr50\models\whisper-small-en-onnx-fp16")
-AUDIO = pathlib.Path(r"C:\scratch\asr50\WP6\audio16k")
+AUDIO = pathlib.Path(r"C:\scratch\asr50\corpus_v2_frozen")
 MODEL_ID = MODEL.name
 
 
@@ -64,7 +64,8 @@ WINDOW = np.hanning(400).astype(np.float32)
 
 
 def features(audio: np.ndarray) -> np.ndarray:
-    audio = audio[:480000]
+    if len(audio) > 480000:
+        raise ValueError("features() accepts one <=30-second chunk; caller must chunk explicitly")
     audio = np.pad(audio, (0, max(0, 480000-len(audio))))
     # Whisper STFT center padding, periodic reflect; omit final frame.
     padded = np.pad(audio, (200, 200), mode="reflect")
@@ -93,7 +94,7 @@ def create(path, provider, device_id, threads, profile=False, disable_cpu_fallba
     return ort.InferenceSession(str(path), sess_options=opts, providers=providers)
 
 
-def transcribe(audio, enc, dec, past_sess, tokenizer, gen, max_tokens):
+def transcribe_chunk(audio, enc, dec, past_sess, tokenizer, gen, max_tokens, loop_detection):
     feat = features(audio)
     hidden = enc.run(None, {"input_features": feat})[0]
     # This is the English-only checkpoint; forced_decoder_ids contains
@@ -127,6 +128,7 @@ def transcribe(audio, enc, dec, past_sess, tokenizer, gen, max_tokens):
     eos = int(gen["eos_token_id"])
     generated, last = [], None
     repetition = 0
+    stop_reason = "token_cap"
     for step in range(max_tokens):
         row = logits[0, -1].astype(np.float32, copy=True)
         row[list(gen.get("suppress_tokens", []))] = -np.inf
@@ -134,11 +136,13 @@ def transcribe(audio, enc, dec, past_sess, tokenizer, gen, max_tokens):
             row[list(gen.get("begin_suppress_tokens", []))] = -np.inf
         last = int(np.argmax(row))
         if last == eos:
+            stop_reason = "eos"
             break
         generated.append(last)
-        if len(generated) >= 8 and generated[-8:] == generated[-4:]*2:
+        if loop_detection and len(generated) >= 8 and generated[-8:] == generated[-4:]*2:
             repetition += 1
             if repetition >= 2:
+                stop_reason = "loop"
                 break
         else:
             repetition = 0
@@ -153,12 +157,31 @@ def transcribe(audio, enc, dec, past_sess, tokenizer, gen, max_tokens):
         newcache.update({name: value for name, value in cache.items()
                          if ".encoder." in name})
         cache = newcache
-    return tokenizer.decode(generated, skip_special_tokens=True).strip(), feat
+    return tokenizer.decode(generated, skip_special_tokens=True).strip(), feat, len(generated), stop_reason
+
+
+def transcribe(audio, enc, dec, past_sess, tokenizer, gen, policy):
+    chunk_size = 480000
+    texts, ranges = [], []
+    loop_detection = policy == "on"
+    for start in range(0, len(audio), chunk_size):
+        chunk = audio[start:start+chunk_size]
+        duration_s = len(chunk) / 16000
+        cap = min(444, 10 + int(np.ceil(duration_s * 10))) if policy == "on" else 444
+        text, _, token_count, stop_reason = transcribe_chunk(
+            chunk, enc, dec, past_sess, tokenizer, gen, cap, loop_detection)
+        texts.append(text)
+        ranges.append({"start_s": start / 16000,
+                       "end_s": (start + len(chunk)) / 16000,
+                       "token_cap": cap, "generated_tokens": token_count,
+                       "stop_reason": stop_reason})
+    return " ".join(t for t in texts if t).strip(), ranges
 
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--device", choices=["dml", "cpu"], required=True)
+    p.add_argument("--audio-root", default=str(AUDIO))
     p.add_argument("--device-id", type=int, default=0)
     p.add_argument("--threads", type=int, default=12)
     p.add_argument("--limit", type=int, default=0)
@@ -168,16 +191,26 @@ def main():
     p.add_argument("--kind", default="warm")
     p.add_argument("--out", default=r"C:\scratch\asr50\results\ort-whisper-small-en")
     p.add_argument("--disable-cpu-ep-fallback", action="store_true")
+    p.add_argument("--policy", choices=["on", "off"], default="on")
+    p.add_argument("--long-and-nonspeech-only", action="store_true")
     a = p.parse_args()
-    files = sorted(AUDIO.glob("*.wav"))
-    if a.limit:
-        files = files[:a.limit]
+    audio_root = pathlib.Path(a.audio_root)
+    files = sorted(audio_root.glob("*.wav"))
     gen = json.loads((MODEL/"generation_config.json").read_text(encoding="utf-8"))
     tok = Tokenizer.from_file(str(MODEL/"tokenizer.json"))
-    truth_data = json.loads((AUDIO/"ground_truth.json").read_text(encoding="utf-8"))
+    gt_path = audio_root / "ground_truth_v2.json"
+    if not gt_path.exists():
+        gt_path = audio_root / "ground_truth.json"
+    truth_data = json.loads(gt_path.read_text(encoding="utf-8"))
     truth = {c.get("clip_id", c.get("id")): c for c in truth_data["clips"]}
+    if a.long_and_nonspeech_only:
+        files = [f for f in files if
+                 truth[f.stem].get("category") in ("natural_long", "silence", "non_speech")
+                 or truth[f.stem].get("duration_s", 0) > 30]
+    if a.limit:
+        files = files[:a.limit]
     outroot = pathlib.Path(a.out)
-    rawdir = outroot/a.device
+    rawdir = (outroot if a.policy == "on" else outroot/"policy-off")/a.device
     rawdir.mkdir(parents=True, exist_ok=True)
     model_bytes = sum(f.stat().st_size for f in MODEL.rglob("*") if f.is_file())
     model_sha = hashlib.sha256()
@@ -200,7 +233,7 @@ def main():
         for wav in files:
             audio = read_wav(wav)
             t = time.perf_counter()
-            text, feat = transcribe(audio, *sessions, tok, gen, a.max_tokens)
+            text, chunks = transcribe(audio, *sessions, tok, gen, a.policy)
             elapsed = time.perf_counter()-t
             duration = len(audio)/16000
             clip_hash = hashlib.sha256(audio.astype("<f4", copy=False).tobytes()).hexdigest()
@@ -209,6 +242,7 @@ def main():
             record = {
                 "schema_version": 1, "candidate": "ort-whisper-small-en",
                 "clip_id": cid, "category": truth[cid]["category"],
+                "clip_set": truth[cid].get("set"),
                 "run": {"kind": kind, "index": pass_i, "process_id": os.getpid()},
                 "hardware": {"cpu": "AMD Ryzen 9 9900X",
                     "gpu": "AMD Radeon RX 7900 XT" if a.device == "dml" else None,
@@ -223,8 +257,11 @@ def main():
                     "bytes": model_bytes, "cache_bytes": 0},
                 "settings": {"language": "en", "sample_rate_hz": 16000, "channels": 1,
                     "threads": a.threads, "decoding": {"greedy": True,
-                    "max_new_tokens": a.max_tokens, "timestamps": False,
-                    "loop_detection": "repeated 4-token sequence twice"}},
+                    "policy": a.policy, "timestamps": False,
+                    "chunking": "fixed non-overlapping 30-second chunks",
+                    "chunks": chunks,
+                    "token_caps": [x["token_cap"] for x in chunks],
+                    "loop_detection": "repeated 4-token sequence twice" if a.policy == "on" else "disabled"}},
                 "input": {"sample_rate_hz": 16000, "channels": 1, "dtype": "float32",
                     "clip_sha256": clip_hash},
                 "measurements": {"audio_duration_s": duration, "runtime_s": elapsed,
@@ -234,18 +271,22 @@ def main():
                 "hypothesis": {"text": text, "words": []}, "metrics": {},
             }
             records.append(record)
-            raw = {"text": text, "words": [], "meta": {
+            raw = {"text": text, "words": [], "clip_set": truth[cid].get("set"), "meta": {
                 "runtime": "onnxruntime", "runtime_version": ort.__version__,
                 "model_artifact": MODEL_ID, "model_sha256": model_hash,
                 "requested_device": a.device, "actual_device": record["device"]["actual"],
+                "clip_set": truth[cid].get("set"),
                 "settings": record["settings"], "thread_count": a.threads,
                 "wall_seconds": elapsed, "peak_working_set_bytes": proc.memory_info().peak_wset,
                 "peak_dedicated_gpu_bytes": None, "run_kind": kind,
                 "run_index": pass_i, "pid": os.getpid()}}
             (rawdir/f"{cid}_{kind}_{pass_i}.json").write_text(
                 json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
+            if a.policy == "on" and kind == "v2":
+                (rawdir/f"{cid}.json").write_text(
+                    json.dumps(raw, ensure_ascii=False, indent=2), encoding="utf-8")
             print(json.dumps({"clip": cid, "seconds": elapsed, "audio_seconds": duration,
-                              "text": text, "feature_shape": feat.shape}), flush=True)
+                              "text": text, "chunks": len(chunks)}), flush=True)
     with (outroot/"results.jsonl").open("a", encoding="utf-8") as f:
         for rec in records:
             f.write(json.dumps(rec, ensure_ascii=False)+"\n")

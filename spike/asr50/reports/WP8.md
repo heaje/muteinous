@@ -1,5 +1,7 @@
 # WP8 — whisper.cpp CPU/Vulkan execution
 
+> **Timing correction:** Corpus v1 used invalid SAPI word timestamps. Withdraw all corpus-v1 timing-accuracy figures and claims in this report; they are retained only as historical text and are superseded by the exact-boundary corpus-v2 results below.
+
 Date: 2026-11-26. Host: Ryzen 9 9900X, Radeon RX 7900 XT, Windows 11 Pro. CI executables are assigned to commit `96ec4d98`; `--version` reports whisper.cpp `1.9.6-dev`. Copied (not run in place) WP2 artifacts to `C:\scratch\asr50\WP8\bin\vulkan` and `...\bin\cpu`.
 
 ## Models and benchmark
@@ -76,3 +78,50 @@ Completed all 14 clips for both models on Vulkan GPU, Vulkan build forced CPU, a
 Evidence levels: CI build L2; RX 7900 XT enumeration L3; process-filtered GPU engine utilization (30.6–55.5%) and 1.04 GiB dedicated allocation during ASR establish L4/L5. Explicit `-dev 1`, `-dev 7`, and nonexistent visibility index `5` all exited 0 and fell back to CPU; application-side enforcement is necessary. CPU dispatch loaded `ggml-cpu-cascadelake.dll` in both builds.
 
 Commands included copied-binary `--help`/`--version`, the full-JSON functional matrix, DTW/`-ml 1` passes, scorer, failure probes, `ggml-diag list`, separate-PID GPU sampler with long turbo audio and CPU control, and threshold probes. Wall-clock effort was approximately 40 minutes. Per maintainer direction, thread sweeps and cold/warm/RTF work were stopped; incidental timings are explicitly marked unreliable. No remaining blocker to the functional findings; no maintainer approval beyond the already approved model use was needed.
+
+## Corpus v2
+
+Corpus v1 timing accuracy results above are **withdrawn**: its SAPI word boundaries were invalid. Do not use those timing figures. The frozen, read-only v2 corpus was hash-verified before use: 60 clips (30 constructed `timing`, 30 transcript-only `natural`), including 8 natural-long clips from 17.89 to 42.16 seconds. Ran both approved models on Vulkan GPU and CPU: full JSON for all 60 clips and `-ml 1` plus DTW (`-nfa -dtw large.v3.turbo` / `small.en`) on the 30 constructed timing clips. CPU means the CPU-DL binary forced with `-ng`. This is 480 successful functional invocations; no performance timing/speed measurements or lock were used. Output raw JSON is under `C:\scratch\asr50\results_v2\whispercpp\<model>-<device>-<mode>\<clip>.json`; aggregate rows and scores are `results.jsonl` and `score-summary.json`.
+
+Every GPU run (120 per model) logged `whisper_backend_init_gpu: using Vulkan0 backend`; CPU runs (120 per model) logged `CPU total size` and no Vulkan backend line. This confirms selection per run and is consistent with the already-recorded process-filtered GPU compute/memory proof above. For each long clip, CLI logged processing the complete input sample count; recognized word timestamps reached approximately 16.7–41.2 seconds on inputs up to 42.16 seconds. No input truncation was observed.
+
+### Full-mode lexical metrics
+
+WER is over 40 speech clips (timing + transcript-bearing natural clips; silence and non-speech excluded). Target precision/recall use all 60 clips. Hallucination rates aggregate 20 silence/non-speech clips by their total audio duration.
+
+| Model | Device | WER | Target precision | Target recall | Hallucinated words/min | Silence/non-speech clips with output |
+|---|---|---:|---:|---:|---:|---:|
+| turbo | Vulkan | 0.0224 | 100.0% | 85.3% | 6.27 | 80% (16/20) |
+| turbo | CPU | 0.0248 | 100.0% | 82.8% | 5.82 | 80% (16/20) |
+| small.en | Vulkan | 0.0207 | 98.0% | 83.6% | 16.57 | 50% (10/20) |
+| small.en | CPU | 0.0224 | 98.0% | 82.8% | 37.61 | 50% (10/20) |
+
+### Word-boundary metrics on constructed timing set
+
+Only exact-word pairs from `matched_word_pairs` are included in boundary error distributions. Mean/median/p95 and within-threshold fractions are across the matched boundaries; `missing` is the `timing_metrics` helper’s count of hypothesis words without usable start/end times. No hypothesis timing words were missing in any configuration. All samples are absolute errors in milliseconds; p95 uses nearest-rank.
+
+**`-ml 1` (30 timing clips per configuration)**
+
+| Model | Device | Matched boundaries | Start mean / median / p95 | Start ≤50 / ≤100 / ≤200 ms | End mean / median / p95 | End ≤50 / ≤100 / ≤200 ms | Missing |
+|---|---|---:|---|---|---|---|---:|
+| turbo | Vulkan | 76 | 104.6 / 90.0 / 374.8 | 31.6 / 59.2 / 84.2% | 193.5 / 147.1 / 449.2 | 15.8 / 34.2 / 61.8% | 0 |
+| turbo | CPU | 73 | 110.1 / 90.0 / 349.8 | 30.1 / 58.9 / 82.2% | 201.5 / 148.8 / 449.2 | 13.7 / 32.9 / 60.3% | 0 |
+| small.en | Vulkan | 73 | 94.6 / 90.0 / 269.8 | 32.9 / 61.6 / 89.0% | 141.2 / 125.2 / 371.2 | 13.7 / 38.4 / 82.2% | 0 |
+| small.en | CPU | 72 | 87.7 / 86.1 / 252.8 | 34.7 / 63.9 / 90.3% | 148.1 / 131.6 / 371.2 | 12.5 / 34.7 / 79.2% | 0 |
+
+**DTW (`-nfa -dtw <preset>`, 30 timing clips per configuration)**
+
+| Model | Device | Matched boundaries | Start mean / median / p95 | Start ≤50 / ≤100 / ≤200 ms | End mean / median / p95 | End ≤50 / ≤100 / ≤200 ms | Missing |
+|---|---|---:|---|---|---|---|---:|
+| turbo | Vulkan | 73 | 99.4 / 82.2 / 374.8 | 32.9 / 65.8 / 86.3% | 208.0 / 150.2 / 500.8 | 15.1 / 31.5 / 57.5% | 0 |
+| turbo | CPU | 74 | 95.3 / 79.6 / 308.2 | 35.1 / 68.9 / 85.1% | 198.9 / 145.2 / 500.8 | 13.5 / 29.7 / 63.5% | 0 |
+| small.en | Vulkan | 74 | 94.7 / 90.0 / 269.8 | 32.4 / 60.8 / 89.2% | 139.3 / 124.7 / 371.2 | 14.9 / 39.2 / 82.4% | 0 |
+| small.en | CPU | 72 | 94.6 / 90.0 / 269.8 | 31.9 / 62.5 / 88.9% | 143.0 / 124.7 / 371.2 | 12.5 / 38.9 / 80.6% | 0 |
+
+### Corpus-v2 summary (<250 words)
+
+Completed 480 successful invocations across 60 frozen clips: full JSON for every clip and both `-ml 1` and DTW timing runs for the 30 exact-boundary constructed clips, for turbo and small.en on Vulkan and CPU. Speech-only WER was 0.0207–0.0248; target precision 98.0–100.0% and recall 82.8–85.3%. Silence/non-speech hallucinations varied from 5.82 to 37.61 words/min across 20 clips.
+
+Timing reports use exact-word WER matches from the canonical `matched_word_pairs` helper. All returned hypothesis words had usable boundaries. Across configurations, median start errors were 79.6–90 ms and median end errors 124.7–150.2 ms; within 200 ms, 82.2–90.3% of starts and 57.5–82.4% of ends were aligned. These distributions exclude unmatched reference words, as required by exact-word matching.
+
+All 240 Vulkan GPU invocations logged `using Vulkan0 backend`; the CPU counterparts logged CPU allocation with no Vulkan selection. The previous process-filtered counter run remains the L5 GPU-computation proof. All 42-second clips were accepted at full sample count, and output timestamps extended near clip ends; no truncation was observed. No VAD model was downloaded and no speed/timing benchmark was run.

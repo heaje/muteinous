@@ -62,3 +62,42 @@ Installed support versions: NumPy 2.5.5, psutil 7.2.2, soundfile 0.14.0; `sherpa
 CPU functional support is confirmed (L5) for the approved Parakeet TDT 0.6B v2 int8 artifact using the CPython 3.14.10 `sherpa-onnx==2.0.3` Windows wheel. All 14 clips ran; WER was 12.07%, target precision 96.67%, target recall 82.86%, and silence/non-speech hallucination was 0 words/minute. Token timestamps/durations converted to finite word boundaries for all 57 hypothesis words; matched-word timing errors were roughly 273 ms mean start and 336 ms mean end, with the SAPI ground truth itself approximate.
 
 No tested GPU provider was selected: `directml`, `cuda`, and `dml` all warned and fell back to CPU. The CPU-only provider listing and zero PID-filtered GPU-engine/dedicated-memory samples show no GPU use (no GPU L4/L5 evidence). A DirectML-enabled sherpa Windows wheel would require a source rebuild with `SHERPA_ONNX_ENABLE_DIRECTML=ON` and the Windows SDK/toolchain plus compatible packaged ONNX Runtime. Commands: created a disposable uv environment, installed binary wheels only, ran the 14-clip offline recognizer, and scored with unmodified `score.py`. Performance conclusions are omitted per maintainer priority. Estimated wall-clock effort: about 45 minutes, including serialized counter capture. No blocker remains; no build or maintainer approval is requested.
+
+## Corpus v2
+
+**Scope:** Re-ran the CPU recognizer over the frozen, read-only 60-clip `C:\scratch\asr50\corpus_v2_frozen\` corpus. Every WAV's supplied SHA-256 was verified before inference. No v1 raw results or scores were changed. The v1 SAPI timing results in the earlier sections are **withdrawn** because those boundaries are invalid; use only the exact constructed v2 timing set below.
+
+### Lexical results
+
+| Measure | Corpus v2 result |
+|---|---:|
+| Clips | 60 total: 30 `timing`, 30 `natural` |
+| Speech clips scored for WER | 40; 1,208 reference words |
+| WER | **1.57%** (16 substitutions, 3 deletions, 0 insertions) |
+| Target metrics, all 60 clips | **99 TP, 2 FP, 17 FN** |
+| Target precision / recall | **98.02% / 85.34%** |
+| Silence/non-speech hallucination | **0 words/minute; 0/20 clips with output** |
+
+WER is summed over transcript-bearing speech clips only. Target precision/recall includes all clips, including silence/non-speech negatives, using exact target occurrences. Silence/non-speech words/minute uses their combined audio duration.
+
+### Exact-boundary timing results
+
+Timing metrics use only the 30 `set="timing"` clips and exact `start_sample`/`end_sample` divided by 16,000. The unmodified `score.py` `matched_word_pairs()` helper supplied exact-word alignment pairs; errors below include only those matched pairs (**75 pairs**). There were **91 hypothesized timing-set words**; missing/non-finite alignments: **0/91 (0%)**.
+
+| Boundary | End rule | Mean ms | Median ms | p95 ms | Within 50 ms | Within 100 ms | Within 200 ms |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Start | First subtoken timestamp (common to both) | 61.94 | 48.50 | 160.00 | 50.67% | 84.00% | 100.00% |
+| End | First token timestamp of next word; final word uses last token start + duration | 137.84 | 137.00 | 298.19 | 16.00% | 38.67% | 76.00% |
+| End alternative | Last subtoken start + its duration for every word | 132.56 | 136.19 | 281.19 | 20.00% | 41.33% | 76.00% |
+
+The end alternative modestly improved the aggregate mean/p95 and the 50/100 ms fractions on this timing set. It does not change starts or matched-pair selection.
+
+### Long-clip behavior and artifacts
+
+All 60 clips completed without a length error, truncation exception, or chunking. This included `natural_long` clips through 42.16 s and two transcript-only `natural_sentences` clips of 103.49 and 104.83 s. The process peak working set was **2,231,074,816 bytes** (parent process); no fixed chunking policy was needed. All inputs were passed as one full waveform to the offline recognizer.
+
+Raw outputs, including `clip_set` and both word-end variants, are in `C:\scratch\asr50\results_v2\sherpa-parakeet\cpu\<clip>.json`; the 60-record `results.jsonl` and `score-summary.json` are in `C:\scratch\asr50\results_v2\sherpa-parakeet\`. Runner: `spike/asr50/runners/sherpa-parakeet/run_v2.py`; scorer: `spike/asr50/runners/sherpa-parakeet/score_v2.py`.
+
+### Corpus v2 summary (<250 words)
+
+Parakeet TDT 0.6B v2 int8 completed all 60 frozen corpus-v2 clips on CPU after SHA-256 validation. On 40 transcript-bearing clips (1,208 reference words), WER was 1.57%; target precision/recall across all clips were 98.02%/85.34%. The 20 silence/non-speech clips produced no text (0 words/minute, 0 clips with output). Exact timing was scored only on the 30 constructed clips using sample-index boundaries and `score.py`'s `matched_word_pairs`: 75 correctly matched words, 0/91 words missing alignments. Mean start error was 61.94 ms. For end boundaries, next-word-start gave mean 137.84 ms / p95 298.19 ms; last-subtoken-start-plus-duration gave mean 132.56 ms / p95 281.19 ms. Both rules and threshold fractions are tabulated above. No length failure occurred, even for the two ~104-second natural-sentence clips; peak parent working set was 2.23 GB and no chunking was needed. The previous v1 timing figures are withdrawn; no v1 result files were changed.

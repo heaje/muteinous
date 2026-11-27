@@ -89,7 +89,3 @@ All links above accessed 2026-11-26. PyPI release facts were read from JSON APIs
 - **Commands run:** PowerShell `Invoke-RestMethod https://pypi.org/pypi/<name>/json` for six projects and filtered current-release filenames for cp314 Windows/py3 Windows wheel tags. No installs, no SDK changes, no model downloads.
 - **Time:** approximately 20 wall-clock minutes, research only.
 - **Blockers/approval:** Exact Windows AMD GPU backend compatibility and benchmark is open; CP314 Moonshine behavior needs test; word timing quality should be validated on approved synthetic clips. Maintainer approval is required before any weight download or inference not already authorized by the spike rules; no such action was taken. No runtime/model selection recommended as settled.
-
-
-## Review correction (2026-11-26)
-The CTranslate2 Windows ROCm guide (opennmt.net/CTranslate2/building_rocm_windows.html) maps RX 7900 XT and XTX to gfx1100 but is a source-build recipe using AMD ROCm SDK Python wheels, validated on RX 7900 XTX, Windows 11 build 26200, ROCm 7.2.0, Python 3.11. It does not establish prebuilt CTranslate2 ROCm wheels or a tested RX 7900 XT / CPython 3.14 build.

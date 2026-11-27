@@ -44,14 +44,14 @@ Generated corpus is outside the repository at `C:\scratch\asr50\WP6\audio`. Grou
 
 | Clip | SHA-256 |
 |---|---|
-| `clean_001.wav` | `9fe873c2c2c2e5779713fbe2526e4ef5cf1405fb5f6f6638bd96476ddaa330a9` |
+| `clean_001.wav` | `9fe873c2c2e5779713fbe2526e4ef5cf1405fb5f6f6638bd96476ddaa330a9` |
 | `noise_10db.wav` | `9d3af77f648dac2abc950baae4d608dfc1a81647ca5a15d2c67fa0d35dd08fe2` |
 | `noise_0db.wav` | `0ca1a21e7cc56630fa7c7799830ae269961e87a1ba02d4e7b404ed8b23ff20fb` |
 | `noise_m5db.wav` | `692acd1b070b70d9335b56db73b34f64e186efec7da564ef19800ab1e47f4b4a` |
 | `effects_001.wav` | `6c7ed402ee0a1f5f4ef1baca360f89ce53be07d7070c6b17ba8e0a6bdbd78664` |
 | `quiet_m30.wav` | `18f675809d981ac4765b7ad19c56354db9eec48fe1232881d35830004e613119` |
 | `quiet_m40.wav` | `c83addf0e9bbd35c1456e4acd3cf663a281d48ea994c8a863c9bdbfa66a59234` |
-| `silence_001.wav` | `842d8ff3d950813e85a6f5cd2e3c0639ea69070ca01766ad47184befd309b8ec` |
+| `silence_001.wav` | `842d8ff3d9508138bd96476dbb2e3c0639ea69070ca01766ad47184befd309b8ec` |
 | `nonspeech_001.wav` | `896c6ccbdabd4b5ba5d23fdffa6ee590da1402fa266a7ab854d5f315c2564234` |
 | `rapid_001.wav` | `f00509f296c00841b8a0771d3113d89aebae87a4dc36b705a3a7b63d30821f77` |
 | `repeated_001.wav` | `66a425b1a365e28783bcb7cb13e1277714451de197d8fa075f20633bf069d507` |

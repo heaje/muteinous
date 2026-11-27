@@ -23,3 +23,17 @@ internal apostrophes. Convert JSON `offsets.from/to` from milliseconds to
 seconds. DTW outputs use the aligned offsets; pinned `whisper.h` does not
 specify units for `t_dtw`, so do not interpret it as centiseconds. These are
 recognition word-boundary estimates, not phonetic forced alignments.
+
+## Frozen corpus v2
+
+Run the corpus-v2 matrix with:
+
+```powershell
+python C:\code\muteinous-spike50\spike\asr50\runners\whispercpp\benchmark_v2.py
+```
+
+This checks the frozen corpus WAV hashes and approved model hashes before
+execution. It runs full JSON on all 60 clips and `-ml 1` plus DTW on only the
+30 constructed timing clips, for both models on Vulkan and CPU. It collects no
+speed measurements and takes no timing lock. Normalized outputs, JSONL and
+score summary are written under `C:\scratch\asr50\results_v2\whispercpp\`.
