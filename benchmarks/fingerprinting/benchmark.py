@@ -42,11 +42,11 @@ def fixture(path, size, asset):
         os.fsync(stream.fileno())
 
 
-def digest(path, name, threads):
+def digest(path, name, threads, buffer=None):
     if name == "production-blake3":
         from muteinous.infrastructure.sources.fingerprints import fingerprint_file
 
-        return fingerprint_file(path).removeprefix("blake3:")
+        return fingerprint_file(path, buffer=buffer).removeprefix("blake3:")
     h = hasher(name, threads)
     with path.open("rb") as stream:
         while block := stream.read(BLOCK):
@@ -115,16 +115,74 @@ def read_only(paths, size):
     )
 
 
-def competitor_baseline(seconds=2.0):
-    payload = bytes(BLOCK)
-    start = time.perf_counter()
-    end = start + seconds
-    total = 0
-    while time.perf_counter() < end:
-        hashlib.sha256(payload).digest()
-        total += len(payload)
-    elapsed = time.perf_counter() - start
+# Reject short or poorly overlapped samples instead of reporting misleading
+# slowdown. Twenty complete blocks bound the relative two-edge block-count
+# uncertainty; 50 ms also avoids the shortest scheduling-dominated intervals.
+MIN_COMPETITOR_BLOCKS = 20
+MIN_COMPETITOR_SECONDS = 0.05
+
+
+def competitor_rate(total, elapsed):
+    if total < MIN_COMPETITOR_BLOCKS * BLOCK or elapsed < MIN_COMPETITOR_SECONDS:
+        return None
     return total / elapsed / 1e6
+
+
+class ContentionWindow:
+    """Count only complete competitor blocks inside the candidate interval."""
+
+    def __init__(self):
+        self.ready = threading.Event()
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+        self.started_at = None
+        self.total = 0
+
+    def run(self):
+        payload = bytes(BLOCK)
+        # Prove the competitor has actually executed before timing the candidate.
+        hashlib.sha256(payload).digest()
+        self.ready.set()
+        while not self.stop.is_set():
+            started = time.perf_counter()
+            hashlib.sha256(payload).digest()
+            self.record_completed(started)
+
+    def record_completed(self, started):
+        with self.lock:
+            if (
+                self.started_at is not None
+                and started >= self.started_at
+                and not self.stop.is_set()
+            ):
+                self.total += BLOCK
+
+    def begin(self):
+        if not self.ready.wait(10):
+            raise RuntimeError("Competitor did not become ready")
+        with self.lock:
+            self.started_at = time.perf_counter()
+            return self.started_at
+
+    def finish(self):
+        with self.lock:
+            ended = time.perf_counter()
+            self.stop.set()
+            return ended, self.total
+
+
+def competitor_baseline(seconds=2.0):
+    window = ContentionWindow()
+    competitor = threading.Thread(target=window.run)
+    competitor.start()
+    try:
+        start = window.begin()
+        time.sleep(seconds)
+        end, total = window.finish()
+    finally:
+        window.stop.set()
+        competitor.join()
+    return competitor_rate(total, end - start)
 
 
 def trial(paths, size, name, workers, threads, contention, solo_competitor, single_pass):
@@ -133,9 +191,7 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor, sing
     peak_rss = rss_baseline
     peak_threads = process.num_threads()
     stop = threading.Event()
-    work = [0]
-    go = threading.Event()
-    payload = bytes(BLOCK)
+    window = ContentionWindow() if contention else None
     pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
 
     def sample():
@@ -146,48 +202,51 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor, sing
             peak_rss = max(peak_rss, rss)
             peak_threads = max(peak_threads, process.num_threads())
 
-    def competing_job():
-        go.wait()
-        while not stop.is_set():
-            hashlib.sha256(payload).digest()
-            work[0] += len(payload)
-
-    def batch(part):
-        return [(i, digest(paths[i], name, threads)) for i in part]
+    def batch(part, buffer):
+        return [(i, digest(paths[i], name, threads, buffer)) for i in part]
 
     sampler = threading.Thread(target=sample)
-    competitor = threading.Thread(target=competing_job) if contention else None
+    competitor = threading.Thread(target=window.run) if window else None
     try:
         sampler.start()
         if competitor:
             competitor.start()
+        start = window.begin() if window else time.perf_counter()
         cpu_start = time.process_time()
-        start = time.perf_counter()
-        go.set()
+        if name == "production-blake3":
+            from muteinous.infrastructure.sources.fingerprints import new_fingerprint_buffer
+
+            buffers = [new_fingerprint_buffer() for _ in range(workers)]
+        else:
+            buffers = [None] * workers
         passes = 0
         while True:
             passes += 1
             if pool is None:
-                values = batch(range(len(paths)))
+                values = batch(range(len(paths)), buffers[0])
             else:
                 parts = (range(i, len(paths), workers) for i in range(workers))
-                values = [v for group in pool.map(batch, parts) for v in group]
+                values = [v for group in pool.map(batch, parts, buffers) for v in group]
             elapsed = time.perf_counter() - start
             if single_pass or elapsed >= 0.5:
                 break
+        end, timed_competitor_bytes = window.finish() if window else (time.perf_counter(), 0)
+        elapsed = end - start
         cpu = time.process_time() - cpu_start
         stop.set()
-        timed_competitor_bytes = work[0]
         values.sort()
     finally:
         stop.set()
-        go.set()
+        if window:
+            window.stop.set()
         if competitor and competitor.ident is not None:
             competitor.join()
         if pool:
             pool.shutdown(wait=True)
         if sampler.ident is not None:
             sampler.join()
+    measured_competitor = competitor_rate(timed_competitor_bytes, elapsed) if contention else None
+    contention_valid = measured_competitor is not None and solo_competitor is not None if contention else None
     return dict(
         record="trial",
         algorithm=name,
@@ -205,8 +264,10 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor, sing
         process_peak_working_set_bytes=peak_wset,
         rss_sampled_peak_bytes=peak_rss,
         threads_sampled_peak=peak_threads,
-        competitor_MB_s=timed_competitor_bytes / elapsed / 1e6,
+        competitor_bytes=timed_competitor_bytes,
+        competitor_MB_s=measured_competitor if contention_valid else None,
         competitor_solo_MB_s=solo_competitor if contention else None,
+        contention_valid=contention_valid,
         digest_list_sha256=hashlib.sha256(
             "".join(v for _, v in values).encode("ascii")
         ).hexdigest(),
@@ -266,7 +327,8 @@ def run_workload(paths, label, size, algorithms, repeats, ram, shared50, worker_
                 != row["digest_list_sha256"]
             ):
                 raise RuntimeError(f"Inconsistent digest across {name} configurations")
-            observations.setdefault((name, workers, threads, contention, trial_mode), []).append(row["MB_s"])
+            if row["contention_valid"] is not False:
+                observations.setdefault((name, workers, threads, contention, trial_mode), []).append(row["MB_s"])
             emit(
                 row
                 | dict(

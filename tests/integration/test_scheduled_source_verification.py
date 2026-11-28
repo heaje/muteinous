@@ -164,6 +164,7 @@ def test_cancellation_holds_both_resources_until_physical_stop(
     def blocked(
         path: Path,
         *,
+        buffer: bytearray | None = None,
         cancelled: Callable[[], bool] | None = None,
         report_bytes: Callable[[int], None] | None = None,
     ) -> SourceFingerprint:
@@ -173,7 +174,7 @@ def test_cancellation_holds_both_resources_until_physical_stop(
             entered.set()
             assert release.wait(5)
 
-        return original(path, cancelled=cancelled, report_bytes=report)
+        return original(path, buffer=buffer, cancelled=cancelled, report_bytes=report)
 
     monkeypatch.setattr(scheduled, "fingerprint_file", blocked)
     queue = make_queue(source_io=1)
@@ -244,12 +245,15 @@ def test_attributable_failure_preserves_independent_result(
     def controlled(
         path: Path,
         *,
+        buffer: bytearray | None = None,
         cancelled: Callable[[], bool] | None = None,
         report_bytes: Callable[[int], None] | None = None,
     ) -> SourceFingerprint:
         if path == paths[failed]:
             raise failure("controlled asset failure")
-        return original(path, cancelled=cancelled, report_bytes=report_bytes)
+        return original(
+            path, buffer=buffer, cancelled=cancelled, report_bytes=report_bytes
+        )
 
     monkeypatch.setattr(scheduled, "fingerprint_file", controlled)
     queue = make_queue()
@@ -286,10 +290,13 @@ def test_unavailable_context_after_hash_rejects_results(
     def verify(
         path: Path,
         *,
+        buffer: bytearray | None = None,
         cancelled: Callable[[], bool] | None = None,
         report_bytes: Callable[[int], None] | None = None,
     ) -> SourceFingerprint:
-        result = original(path, cancelled=cancelled, report_bytes=report_bytes)
+        result = original(
+            path, buffer=buffer, cancelled=cancelled, report_bytes=report_bytes
+        )
         unavailable.set()
         return result
 
@@ -326,16 +333,22 @@ def test_source_concurrency_default_and_overrides(
     previous = fingerprint_assets(paths)
     entered = {path: Event() for path in paths.values()}
     release = Event()
+    buffers: dict[Path, bytearray] = {}
 
     def blocked(
         path: Path,
         *,
+        buffer: bytearray | None = None,
         cancelled: Callable[[], bool] | None = None,
         report_bytes: Callable[[int], None] | None = None,
     ) -> SourceFingerprint:
+        assert buffer is not None
+        buffers[path] = buffer
         entered[path].set()
         assert release.wait(5)
-        return fingerprint_file(path, cancelled=cancelled, report_bytes=report_bytes)
+        return fingerprint_file(
+            path, buffer=buffer, cancelled=cancelled, report_bytes=report_bytes
+        )
 
     monkeypatch.setattr(scheduled, "fingerprint_file", blocked)
     queue = make_queue(cpu=cpu, source_io=source_io)
@@ -346,6 +359,9 @@ def test_source_concurrency_default_and_overrides(
         ]
         for asset in assets[:expected]:
             assert entered[paths[asset]].wait(5)
+        assert (
+            len({id(buffers[paths[asset]]) for asset in assets[:expected]}) == expected
+        )
         for job, asset in zip(jobs[expected:], assets[expected:], strict=True):
             eventually(lambda: "Waiting for:" in (queue.snapshot(job).detail or ""))
             assert queue.snapshot(job).state == JobState.QUEUED
@@ -355,6 +371,46 @@ def test_source_concurrency_default_and_overrides(
         assert all(queue.snapshot(job).state == JobState.COMPLETED for job in jobs)
     finally:
         release.set()
+        queue.close()
+
+
+def test_sequential_worker_reuses_buffer_across_assets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first, second = map(SourceAssetId, ("first", "second"))
+    paths = {first: tmp_path / first, second: tmp_path / second}
+    paths[first].write_bytes(b"x" * (256 * 1024 + 17))
+    paths[second].write_bytes(b"short")
+    previous = {asset: fingerprint_file(path) for asset, path in paths.items()}
+    buffers: list[bytearray] = []
+
+    def observe(
+        path: Path,
+        *,
+        buffer: bytearray | None = None,
+        cancelled: Callable[[], bool] | None = None,
+        report_bytes: Callable[[int], None] | None = None,
+    ) -> SourceFingerprint:
+        assert buffer is not None
+        buffers.append(buffer)
+        return fingerprint_file(
+            path, buffer=buffer, cancelled=cancelled, report_bytes=report_bytes
+        )
+
+    monkeypatch.setattr(scheduled, "fingerprint_file", observe)
+    queue = make_queue()
+    try:
+        job = submit(queue, tmp_path, paths, previous, {})
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.COMPLETED, snapshot.detail
+        result = cast(SourceVerification[str], snapshot.result)
+        assert result.fingerprints == previous
+        assert not result.failures
+        assert len(buffers) == 2
+        assert buffers[0] is buffers[1]
+        assert len(buffers[0]) == 256 * 1024
+    finally:
         queue.close()
 
 

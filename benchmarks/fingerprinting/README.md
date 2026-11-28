@@ -395,10 +395,22 @@ workers; omit configurations with more workers than files. Default worker
 candidates are 1, 2, 4, 8 and reported logical CPU count, deduplicated; record
 affinity/CPU limits too. Isolated BLAKE3 internal-thread configurations remain
 separate from the production one-thread-per-file configuration. The production
-benchmark calls the real fingerprint function; the benchmark's thread pool is
-not the application's shared queue. Summary rows include median/min/max rates.
+benchmark calls the real fingerprint function with one reusable 256 KiB buffer
+per sequential file partition (also reused between passes); the benchmark's
+thread pool is not the application's shared queue. Summary rows include
+median/min/max rates for valid trials.
 The CPU time includes the sampler and competitor; RSS and thread peaks are
-sampled, not exhaustive. Short single-pass cold runs can be noisy.
+sampled, not exhaustive. The SHA-256 competitor completes a readiness block
+before timing; only complete blocks started and recorded within the candidate
+interval count toward its throughput. Solo competitor timing uses the same
+protocol. Trials with fewer than 20 complete competitor blocks or less than
+50 ms of elapsed time (or an insufficient solo baseline) are marked
+`contention_valid: false`; raw trial bytes and timing remain, but no slowdown
+or contended summary rate is calculated for those trials. This is a pragmatic
+minimum evidence threshold, not proof of uniform contention. Short single-pass
+cold runs can be noisy; increase the number of distinct fixtures rather than
+repeating cold reads. The optional methodology regressions can be run with
+`python -m unittest discover -s benchmarks/fingerprinting -p test_benchmark_methodology.py`.
 
 Warm preparation is a pre-read, not a guarantee of residency; workloads exceeding
 available memory are labelled capacity-limited/uncontrolled. Historical `cold`

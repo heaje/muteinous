@@ -17,6 +17,7 @@ from muteinous.infrastructure.jobs.queue import (
 from muteinous.infrastructure.sources.fingerprints import (
     FingerprintCancelled,
     fingerprint_file,
+    new_fingerprint_buffer,
 )
 from muteinous.infrastructure.sources.validity import (
     SourceValidity,
@@ -117,6 +118,7 @@ def submit_source_verification(
         fingerprints: dict[SourceAssetId, SourceFingerprint] = {}
         failures: dict[SourceAssetId, str] = {}
         total = len(selected)
+        buffer = new_fingerprint_buffer()
         for index, (asset, path) in enumerate(selected.items()):
             if context.cancelled:
                 raise FingerprintCancelled("Source verification cancelled")
@@ -150,6 +152,7 @@ def submit_source_verification(
             try:
                 fingerprints[asset] = fingerprint_file(
                     path,
+                    buffer=buffer,
                     cancelled=lambda: context.cancelled,
                     report_bytes=report,
                 )

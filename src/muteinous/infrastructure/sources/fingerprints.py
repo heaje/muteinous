@@ -36,9 +36,15 @@ def _check_stable(before: os.stat_result, after: os.stat_result) -> None:
         raise UnstableSourceError("Source changed during fingerprinting")
 
 
+def new_fingerprint_buffer() -> bytearray:
+    """Allocate a fixed-size read buffer for one sequential hashing worker."""
+    return bytearray(_HASH_CHUNK_SIZE)
+
+
 def fingerprint_file(
     path: Path,
     *,
+    buffer: bytearray | None = None,
     cancelled: Callable[[], bool] | None = None,
     report_bytes: Callable[[int], None] | None = None,
 ) -> SourceFingerprint:
@@ -47,13 +53,18 @@ def fingerprint_file(
     The caller establishes original-source provenance. Stability checks reject
     detectable concurrent changes, not every possible check/open race. Progress
     reports cumulative bytes read; cancellation is cooperative between reads.
+    A supplied buffer belongs exclusively to this sequential caller and can
+    be reused for subsequent assets; hash state is always new for each file.
     """
     _check_cancelled(cancelled)
     initial = path.stat()
     if not stat.S_ISREG(initial.st_mode):
         raise OSError("Source is not a regular file")
     hasher = blake3(max_threads=1)
-    buffer = bytearray(_HASH_CHUNK_SIZE)
+    if buffer is None:
+        buffer = new_fingerprint_buffer()
+    if len(buffer) != _HASH_CHUNK_SIZE:
+        raise ValueError("Fingerprint buffer must be 256 KiB")
     view = memoryview(buffer)
     completed = 0
     with path.open("rb", buffering=0) as source:
@@ -81,4 +92,8 @@ def fingerprint_assets(
     paths: Mapping[SourceAssetId, Path],
 ) -> dict[SourceAssetId, SourceFingerprint]:
     """Fingerprint plugin-defined assets sequentially; errors reject the batch."""
-    return {asset_id: fingerprint_file(path) for asset_id, path in paths.items()}
+    buffer = new_fingerprint_buffer()
+    return {
+        asset_id: fingerprint_file(path, buffer=buffer)
+        for asset_id, path in paths.items()
+    }

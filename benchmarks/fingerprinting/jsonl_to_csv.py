@@ -63,14 +63,15 @@ def convert(source, destination):
         )
         solo = trials.get(key)
         row["candidate_solo_MB_s"] = solo["MB_s"] if solo else None
+        valid_contention = row["contention"] and row.get("contention_valid") is not False
         row["candidate_slowdown"] = (
             solo["MB_s"] / row["MB_s"]
-            if row["contention"] and solo and row["MB_s"]
+            if valid_contention and solo and row["MB_s"]
             else None
         )
         row["competitor_slowdown"] = (
             row["competitor_solo_MB_s"] / row["competitor_MB_s"]
-            if row["contention"] and row.get("competitor_MB_s")
+            if valid_contention and row.get("competitor_MB_s") and row.get("competitor_solo_MB_s")
             else None
         )
     columns = sorted({key for row in records for key in row})

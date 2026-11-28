@@ -60,8 +60,10 @@ results. No retries or separate scheduler are introduced.
 
 ### Read size and buffer reuse
 
-The buffer is a bounded-memory choice: one 256 KiB buffer is reused for each
-fingerprinting call. The storage integrity helper in
+The buffer is a bounded-memory choice: one 256 KiB buffer is reused across
+all assets of each sequential scheduled worker (and synchronous asset batch).
+Standalone fingerprint calls allocate their own buffer; callers supplying a
+buffer must use it exclusively and sequentially. Each file gets new hash state. The storage integrity helper in
 `infrastructure/storage/_filesystem.py` uses a 1 MiB read block as a precedent
 for bounded streaming, but the source fingerprinter uses a different size based
 on its separate read-size sweep

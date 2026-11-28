@@ -96,7 +96,7 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
 
     assert result == f"blake3:{blake3(content, max_threads=1).hexdigest()}"
     assert len(read_sizes) > 1
-    assert max(read_sizes) <= 1024 * 1024
+    assert max(read_sizes) == 256 * 1024
     with original_open(source, "rb") as check:
         assert check.read() == before
 
