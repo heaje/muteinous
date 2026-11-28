@@ -22,7 +22,12 @@ from muteinous.infrastructure.sources.validity import (
     SourceValidity,
     compare_source_evidence,
 )
-from muteinous.models.source import AssetFingerprints, SegmentAssets, SourceAssetId, SourceFingerprint
+from muteinous.models.source import (
+    AssetFingerprints,
+    SegmentAssets,
+    SourceAssetId,
+    SourceFingerprint,
+)
 
 _Result = TypeVar("_Result")
 SOURCE_RESOURCES = ("cpu", "source-io")
@@ -150,6 +155,9 @@ def submit_source_verification(
             )
         if context.cancelled:
             raise FingerprintCancelled("Source verification cancelled")
+        reason = validate_source_plan(submitted, check_original)
+        if reason is not None:
+            raise ValueError(reason)
         return SourceVerification(
             compare_source_evidence(
                 prior,

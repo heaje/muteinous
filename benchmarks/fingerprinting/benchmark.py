@@ -1,4 +1,4 @@
-"""Optional source-fingerprint benchmark; stdlib, psutil and blake3 only."""
+"""Optional source-fingerprint benchmark, including the production implementation."""
 
 import argparse
 import hashlib
@@ -62,6 +62,12 @@ def vectors(names):
     }
     for name in names:
         if name == "production-blake3":
+            # Load production code and check a real-file vector before trials.
+            with tempfile.TemporaryDirectory(prefix="fingerprint-vector-") as directory:
+                path = Path(directory) / "abc.bin"
+                path.write_bytes(b"abc")
+                if digest(path, name, 1) != expected["blake3"]:
+                    raise RuntimeError("Production BLAKE3 digest vector failed")
             continue
         h = hasher(name, 1)
         h.update(b"a")
@@ -233,8 +239,11 @@ def run_workload(paths, label, size, algorithms, repeats, ram, shared50, worker_
         for name in algorithms
     ]
     if "blake3" in algorithms:
-        configs += [("blake3", 1, 2, contention) for contention in (False, True)]
-        configs += [("blake3", 1, 0, contention) for contention in (False, True)]
+        configs += [
+            ("blake3", 1, threads, contention)
+            for threads in sorted({2, min(4, os.cpu_count() or 1)} - {1})
+            for contention in (False, True)
+        ]
     known = {}
     observations = {}
     for repeat in range(repeats):
@@ -389,7 +398,8 @@ def main():
             else:
                 margin = max(512 * BLOCK, size // 20)
                 if shutil.disk_usage(a.scratch).free < size + margin:
-                    raise RuntimeError(f"Insufficient scratch space for {label}")
+                    emit(dict(record="skipped-workload", workload=label, reason="insufficient scratch space", required_bytes=size + margin, available_bytes=shutil.disk_usage(a.scratch).free))
+                    continue
                 fixture_dir = directory / label
                 fixture_dir.mkdir()
                 paths = [fixture_dir / f"asset-{i:05d}.bin" for i in range(count)]

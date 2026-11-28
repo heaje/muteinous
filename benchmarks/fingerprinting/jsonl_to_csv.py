@@ -20,6 +20,10 @@ def convert(source, destination):
         row["run_id"] = f"run-{run:02d}"
     for row in records:
         recorded = run_storage.get(row["run_id"], "")
+        if row.get("cache_mode") == "cold":
+            row["cache_mode_interpretation"] = "Historical label; no verified OS eviction"
+        elif row.get("cache_mode") == "cold-eviction-reported":
+            row["cache_mode_interpretation"] = "Operator eviction reported; verify effectiveness separately"
         row["storage_label_recorded"] = recorded
         row["storage_label_correction"] = (
             "The recorded WD_BLACK SN770 label was incorrect for D:. "
@@ -40,6 +44,7 @@ def convert(source, destination):
             row["algorithm"],
             row["workers"],
             row["hash_threads"],
+            row.get("cache_mode"),
         ): row
         for row in records
         if row.get("record") == "trial" and not row["contention"]
@@ -54,6 +59,7 @@ def convert(source, destination):
             row["algorithm"],
             row["workers"],
             row["hash_threads"],
+            row.get("cache_mode"),
         )
         solo = trials.get(key)
         row["candidate_solo_MB_s"] = solo["MB_s"] if solo else None

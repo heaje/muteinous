@@ -1,6 +1,7 @@
 """Content fingerprinting uses bounded, deterministic reads."""
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -158,7 +159,15 @@ def test_path_replacement_rejects_fingerprint(
     source = tmp_path / "original.bin"
     source.write_bytes(b"original")
     replacement = tmp_path / "replacement.bin"
-    replacement.write_bytes(b"new")
+    replacement.write_bytes(b"replaced")
+    original_metadata = source.stat()
+    os.utime(
+        replacement,
+        ns=(original_metadata.st_atime_ns, original_metadata.st_mtime_ns),
+    )
+    # Filesystems without usable identities can still reject a size change.
+    if not original_metadata.st_ino or not replacement.stat().st_ino:
+        replacement.write_bytes(b"new")
     original_stat = Path.stat
     checked = False
 
@@ -166,7 +175,8 @@ def test_path_replacement_rejects_fingerprint(
         nonlocal checked
         if path == source:
             if checked:
-                return original_stat(replacement)
+                replacement.replace(source)
+                return original_stat(source)
             checked = True
         return original_stat(path, *args, **kwargs)
 

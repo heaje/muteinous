@@ -10,7 +10,10 @@ import pytest
 
 from muteinous.infrastructure.jobs.queue import JobQueue, JobState
 from muteinous.infrastructure.sources import scheduled
-from muteinous.infrastructure.sources.fingerprints import fingerprint_assets
+from muteinous.infrastructure.sources.fingerprints import (
+    UnstableSourceError,
+    fingerprint_assets,
+)
 from muteinous.infrastructure.sources.scheduled import (
     OriginalCheck,
     SourceVerification,
@@ -188,18 +191,106 @@ def test_cancellation_holds_both_resources_until_physical_stop(
         queue.close()
 
 
-def test_unexpected_error_fails_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unexpected_error_fails_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def broken(*args: object, **kwargs: object) -> SourceFingerprint:
         raise RuntimeError("unexpected defect")
 
     monkeypatch.setattr(scheduled, "fingerprint_file", broken)
     queue = make_queue()
     try:
-        job = submit(queue, tmp_path, {SourceAssetId("asset"): tmp_path / "asset"}, {}, {})
+        job = submit(
+            queue, tmp_path, {SourceAssetId("asset"): tmp_path / "asset"}, {}, {}
+        )
         assert queue.drain(5)
         snapshot = queue.snapshot(job)
         assert snapshot.state == JobState.FAILED
         assert snapshot.result is None
         assert "unexpected defect" in (snapshot.detail or "")
+    finally:
+        queue.close()
+
+
+@pytest.mark.parametrize("failure", [PermissionError, UnstableSourceError])
+def test_attributable_failure_preserves_independent_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: type[OSError],
+) -> None:
+    failed, stable = map(SourceAssetId, ("failed", "stable"))
+    paths = {asset: tmp_path / asset for asset in (failed, stable)}
+    for path in paths.values():
+        path.write_bytes(b"original")
+    previous = fingerprint_assets(paths)
+    dependencies = {
+        "failed": frozenset({failed}),
+        "stable": frozenset({stable}),
+    }
+    original = scheduled.fingerprint_file
+
+    def controlled(
+        path: Path,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+        report_bytes: Callable[[int], None] | None = None,
+    ) -> SourceFingerprint:
+        if path == paths[failed]:
+            raise failure("controlled asset failure")
+        return original(path, cancelled=cancelled, report_bytes=report_bytes)
+
+    monkeypatch.setattr(scheduled, "fingerprint_file", controlled)
+    queue = make_queue()
+    try:
+        job = submit(queue, tmp_path, paths, previous, dependencies)
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.COMPLETED, snapshot.detail
+        result = cast(SourceVerification[str], snapshot.result)
+        assert result.validity.retained == {"stable": "stable"}
+        assert result.validity.invalidated == frozenset({"failed"})
+        assert failure.__name__ in result.failures[failed]
+        assert failed not in result.fingerprints
+    finally:
+        queue.close()
+
+
+def test_unavailable_context_after_hash_rejects_results(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    asset = SourceAssetId("asset")
+    path = tmp_path / "asset"
+    path.write_bytes(b"original")
+    previous = fingerprint_assets({asset: path})
+    dependencies = {"segment": frozenset({asset})}
+    unavailable = Event()
+    original = scheduled.fingerprint_file
+
+    def check(provider: str, source_id: str, root: Path) -> str | None:
+        if unavailable.is_set():
+            return "Original context became unavailable"
+        return known_original(provider, source_id, root)
+
+    def verify(
+        path: Path,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+        report_bytes: Callable[[int], None] | None = None,
+    ) -> SourceFingerprint:
+        result = original(path, cancelled=cancelled, report_bytes=report_bytes)
+        unavailable.set()
+        return result
+
+    monkeypatch.setattr(scheduled, "fingerprint_file", verify)
+    queue = make_queue(check)
+    try:
+        job = submit(
+            queue, tmp_path, {asset: path}, previous, dependencies, check=check
+        )
+        assert queue.drain(5)
+        snapshot = queue.snapshot(job)
+        assert snapshot.state == JobState.FAILED
+        assert snapshot.result is None
+        assert "Original context became unavailable" in (snapshot.detail or "")
     finally:
         queue.close()
