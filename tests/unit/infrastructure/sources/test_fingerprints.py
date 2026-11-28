@@ -77,6 +77,9 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
         def __exit__(self, *args: Any) -> None:
             self._wrapped.close()
 
+        def fileno(self) -> int:
+            return cast(int, self._wrapped.fileno())
+
         def readinto(self, buffer: Any) -> int:
             read_sizes.append(len(buffer))
             return cast(int, self._wrapped.readinto(buffer))
