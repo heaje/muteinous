@@ -21,14 +21,14 @@ Manual folder selection works without a launcher, so users can locate games that
 
 1. Ask each built-in store provider for installation locations using the current operating system's launcher information.
 2. Check the reported directories and collect their names, locations and sources.
-3. Combine installation candidates when their resolved directories match. Steam library folders are also matched by resolved directory, so different spellings of the same library are recognized as one. If a folder cannot be resolved, compare its recorded spelling exactly, without case folding; an unresolvable stale entry stays reported.
+3. Combine installation candidates when their resolved directories match. Steam library folders are also matched by resolved directory, so different spellings of the same library are recognized as one. If a folder cannot be resolved, compare its recorded spelling exactly, without case folding; an unresolvable stale entry stays a separate candidate.
 4. Return the candidates along with any problems encountered.
 
-A **candidate** is a possible game installation. An available candidate has an existing directory; it is not necessarily complete, playable or compatible with Muteinous.
+A **candidate** is a possible game installation. An available candidate has an existing directory; it is not necessarily complete, playable or compatible with Muteinous. A recorded installation folder that is missing or inaccessible is still returned as a candidate with `missing` or `inaccessible` availability, rather than being silently discarded or turned into an issue.
 
-Not having a launcher installed is normal and does not add a discovery issue. For example, an absent Epic Manifests directory, GOG registry key, or Steam root or library list produces no issue. A stale Steam registry value pointing to a missing root is treated the same way.
+Not having a launcher installed is normal for supported (currently Windows) automatic sources and does not add a discovery issue. For example, an absent Epic Manifests directory, GOG registry key, or Steam root or library list produces no issue. A stale Steam registry value pointing to a missing root is treated the same way. On a platform where a store's automatic discovery is not implemented, that store reports a single “unavailable” issue; manual folder selection still works.
 
-An issue means discovery found launcher data that needs attention: unreadable or malformed metadata, invalid paths, oversized values, or a stale entry whose installation folder is missing or inaccessible. This includes a Steam library listed in Steam's library list whose folder is gone (for example, on an unplugged drive). An Epic installation marked incomplete by its launcher is also reported.
+An issue means discovery found launcher data that needs attention: unreadable or malformed metadata, invalid paths, or oversized values. This includes a Steam library listed in Steam's library list whose folder is gone (for example, on an unplugged drive). An Epic installation marked incomplete by its launcher is also reported.
 
 Discovery reads launcher information, not game content. It does not start the launcher or change any files. A separate, explicit user action will be needed for a comprehensive scan.
 
