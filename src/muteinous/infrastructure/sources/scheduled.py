@@ -22,14 +22,14 @@ from muteinous.infrastructure.sources.validity import (
     SourceValidity,
     compare_source_evidence,
 )
-from muteinous.models.source import AssetFingerprints, SegmentAssets, SourceAssetId
+from muteinous.models.source import AssetFingerprints, SegmentAssets, SourceAssetId, SourceFingerprint
 
 _Result = TypeVar("_Result")
 SOURCE_RESOURCES = ("cpu", "source-io")
 SOURCE_BACKEND = "blake3"
 # A caller-owned, read-only check of the resolved original-source context.
 # None means known originals; a reason means unavailable, replaced or ambiguous.
-OriginalCheck = Callable[[str, Path], str | None]
+OriginalCheck = Callable[[str, str, Path], str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,7 +56,7 @@ def validate_source_plan(plan: JobPlan, check_original: OriginalCheck) -> str | 
     path = Path(root)
     if not path.is_absolute() or not path.is_dir():
         return "Original source location is unavailable"
-    return check_original(source_id, path)
+    return check_original(plan.provider, source_id, path)
 
 
 def submit_source_verification(
@@ -98,7 +98,7 @@ def submit_source_verification(
         reason = validate_source_plan(submitted, check_original)
         if reason is not None:
             raise ValueError(reason)
-        fingerprints = {}
+        fingerprints: dict[SourceAssetId, SourceFingerprint] = {}
         failures: dict[SourceAssetId, str] = {}
         total = len(selected)
         for index, (asset, path) in enumerate(selected.items()):

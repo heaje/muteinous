@@ -9,6 +9,8 @@ from blake3 import blake3
 
 from muteinous.infrastructure.sources import fingerprints
 from muteinous.infrastructure.sources.fingerprints import (
+    FingerprintCancelled,
+    UnstableSourceError,
     fingerprint_assets,
     fingerprint_file,
 )
@@ -117,3 +119,57 @@ def test_missing_or_unreadable_file_is_not_fingerprinted(
     monkeypatch.setattr(Path, "open", cast(Any, unreadable))
     with pytest.raises(PermissionError):
         fingerprint_assets({SourceAssetId("asset"): source})
+
+
+@pytest.mark.portable
+def test_chunk_cancellation_rejects_partial_digest(tmp_path: Path) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * (1024 * 1024))
+    counts: list[int] = []
+
+    with pytest.raises(FingerprintCancelled):
+        fingerprint_file(
+            source,
+            cancelled=lambda: bool(counts),
+            report_bytes=counts.append,
+        )
+    assert 0 < counts[0] < source.stat().st_size
+    assert len(counts) == 1
+
+
+@pytest.mark.portable
+def test_detectable_modification_rejects_fingerprint(tmp_path: Path) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * (1024 * 1024))
+
+    def modify(count: int) -> None:
+        if count == 256 * 1024:
+            with source.open("ab") as stream:
+                stream.write(b"changed")
+
+    with pytest.raises(UnstableSourceError):
+        fingerprint_file(source, report_bytes=modify)
+
+
+@pytest.mark.portable
+def test_path_replacement_rejects_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "original.bin"
+    source.write_bytes(b"original")
+    replacement = tmp_path / "replacement.bin"
+    replacement.write_bytes(b"new")
+    original_stat = Path.stat
+    checked = False
+
+    def changed_path(path: Path, *args: Any, **kwargs: Any) -> Any:
+        nonlocal checked
+        if path == source:
+            if checked:
+                return original_stat(replacement)
+            checked = True
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", changed_path)
+    with pytest.raises(UnstableSourceError):
+        fingerprint_file(source)
