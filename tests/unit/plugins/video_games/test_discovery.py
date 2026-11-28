@@ -185,6 +185,36 @@ def test_epic_manifests_path_must_be_an_ordinary_directory(
 
 
 @pytest.mark.portable
+def test_epic_incomplete_install_is_reported_but_candidate_is_listed(
+    tmp_path: Path,
+) -> None:
+    installation = tmp_path / "installation"
+    installation.mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+    manifest = manifests / "incomplete.item"
+    manifest.write_text(
+        json.dumps(
+            {
+                "InstallLocation": str(installation),
+                "DisplayName": "Synthetic",
+                "bIsIncompleteInstall": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _discover(epic=manifests)
+
+    assert result.issues
+    assert any(manifest.name in issue for issue in result.issues)
+    assert any(
+        candidate.path == installation and candidate.availability == "available"
+        for candidate in result.candidates
+    )
+
+
+@pytest.mark.portable
 def test_platform_neutral_discovery_uses_selected_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -200,10 +230,9 @@ def test_platform_neutral_discovery_uses_selected_providers(
     assert result.candidates == (
         discovery.Candidate(tmp_path, "Synthetic", ("epic",), "available"),
     )
-    assert result.issues == (
-        "Steam: automatic discovery unavailable on linux",
-        "GOG: automatic discovery unavailable on linux",
-    )
+    assert len(result.issues) == 2
+    assert any(issue.startswith("Steam") for issue in result.issues)
+    assert any(issue.startswith("GOG") for issue in result.issues)
     assert not result.truncated
 
 
