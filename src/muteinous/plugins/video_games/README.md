@@ -21,10 +21,14 @@ Manual folder selection works without a launcher, so users can locate games that
 
 1. Ask each built-in store provider for installation locations using the current operating system's launcher information.
 2. Check the reported directories and collect their names, locations and sources.
-3. Combine duplicate results when their resolved directory paths match exactly.
+3. Combine installation candidates when their resolved directories match. Steam library folders are also matched by resolved directory, so different spellings of the same library are recognized as one. If a folder cannot be resolved, compare its recorded spelling exactly, without case folding; an unresolvable stale entry stays reported.
 4. Return the candidates along with any problems encountered.
 
-A **candidate** is a possible game installation. An available candidate has an existing directory; it is not necessarily complete, playable or compatible with Muteinous. Missing and inaccessible directories are reported rather than silently discarded. An Epic installation marked incomplete by its launcher is also reported.
+A **candidate** is a possible game installation. An available candidate has an existing directory; it is not necessarily complete, playable or compatible with Muteinous.
+
+Not having a launcher installed is normal and does not add a discovery issue. For example, an absent Epic Manifests directory, GOG registry key, or Steam root or library list produces no issue. A stale Steam registry value pointing to a missing root is treated the same way.
+
+An issue means discovery found launcher data that needs attention: unreadable or malformed metadata, invalid paths, oversized values, or a stale entry whose installation folder is missing or inaccessible. This includes a Steam library listed in Steam's library list whose folder is gone (for example, on an unplugged drive). An Epic installation marked incomplete by its launcher is also reported.
 
 Discovery reads launcher information, not game content. It does not start the launcher or change any files. A separate, explicit user action will be needed for a comprehensive scan.
 
@@ -119,7 +123,7 @@ File reads may request one additional byte to detect overflow, including one pos
 
 Metadata files and their immediate parent directories must be ordinary filesystem objects. Invalid paths, explicit parent traversal and Windows device or reserved names are refused. The probe skips symbolic links, Windows reparse points (such as junctions) and special files, including a linked probe root.
 
-All three entry points and the probe accept a cancellation callback. Cancellation stops between bounded operations and raises `DiscoveryCancelled` instead of returning a partial result. A blocked operating-system call cannot be interrupted by this mechanism.
+The two discovery entry points, `discover_installations()` and `select_folder()`, and the `probe_installation()` probe accept a cancellation callback. Cancellation stops between bounded operations and raises `DiscoveryCancelled` instead of returning a partial result. A blocked operating-system call cannot be interrupted by this mechanism.
 
 ## Known limitations
 
@@ -132,7 +136,7 @@ All three entry points and the probe accept a cancellation callback. Cancellatio
 
 The [discovery tests](../../../../tests/unit/plugins/video_games/test_discovery.py) create small synthetic launcher records and game directories instead of relying on actual games. They cover parsing, path checks, duplicate candidates, cancellation, read-only behavior, limits and probing.
 
-Windows tests simulate registry views and the responses of the native Windows Registry API. The bounded reader is tested with in-memory data, including missing, oversized and malformed values. Tests must never create, modify or delete actual Windows Registry keys or values, even temporarily.
+Windows tests simulate registry views and the responses of the native Windows Registry API, including Steam's conventional Program Files fallback. The bounded reader is tested with in-memory data, including missing, oversized and malformed values. Tests must never create, modify or delete actual Windows Registry keys or values, even temporarily.
 
 From the repository root, after following the [development setup](../../../../docs/development.md):
 
