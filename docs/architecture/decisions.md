@@ -837,6 +837,16 @@ The four-vCPU baseline is supported by the final-head [PR #43 Windows run](https
 
 Changing runner size or repository visibility requires reviewed re-baselining; do not silently adjust the baseline. This amendment changes policy text and derived guidance only, not production behavior.
 
+## D167 — License Muteinous under Apache 2.0
+
+**Status: Approved by the maintainer on 2026-11-28 ([#62](https://github.com/heaje/muteinous/issues/62)).** Adopt the standard, unmodified Apache License 2.0 (SPDX `Apache-2.0`) for Muteinous project software, subject to confirming rights to license the material. Permit unrestricted commercial use and redistribution, private modifications and proprietary derivatives within the license terms. Require standard attribution and modification notices, with explicit contributor patent grant and patent-litigation provisions; no additional prominent credit requirement.
+
+Prefer permissive dependencies; allow reviewed exceptions only when applicable obligations are understood, manageable and consistent with these goals. Review actual use, transitive and native components, model licenses, build configuration and redistribution contents. Unknown rights or unresolved obligations block the affected adoption or redistribution. Existing outstanding checks (including BLAKE3, frozen applications and retained native-format experiments) remain open; no decoder or model is approved by this decision alone.
+
+Use standard inbound licensing under Apache-2.0 section 5; contributors retain copyright and must have authority to submit material. No CLA or DCO is required. Maintain an explicit lightweight brand usage policy distinguishing official and unofficial products, without altering software license rights. Formal trademark registration is deferred. Preserve third-party terms and notices; do not license proprietary game assets, third-party models or trademarks by implication.
+
+Provide canonical LICENSE, appropriate NOTICE, package metadata and release-time verification for actual distributed artifacts. Document obligations through the normal review process without a new compliance framework. See [licensing guidance](../licensing.md) and [brand usage](../brand-usage.md). This decision records policy, not ownership clearance, artifact verification or implementation evidence.
+
 ## Approved M1 refinements (2026-11-25)
 
 These maintainer-approved amendments settle outstanding M1 design questions. They refine the cited decisions only; they do not establish implementation or verification evidence.

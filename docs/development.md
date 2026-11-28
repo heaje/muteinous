@@ -84,11 +84,15 @@ D163–D166 govern development, dependencies, CI and release procedures. The [PR
 
 ### Dependency maintenance and merge gates
 
+Follow [D167](architecture/decisions.md#d167--license-muteinous-under-apache-20) and the [licensing and contribution guidance](licensing.md) when submitting contributions, introducing or materially changing dependencies, and reviewing distribution artifacts. Record unresolved rights or obligations and block the affected adoption or distribution until resolved.
+
 [Dependabot configuration](../.github/dependabot.yml) schedules weekly grouped version updates independently for the uv lock/manifest and GitHub Actions. Security updates are not included in the version-update groups. Enable Dependabot alerts and security updates where available; review security updates promptly and separately. The configured commit prefixes are Conventional Commit types; Dependabot PRs must pass the same commit/title validation and all three CI checks without exemption. Inspect constraints and lock changes, review compatibility implications, and merge deliberately; never enable auto-merge for dependency PRs. The Python patch and explicit uv installer version remain deliberate compatibility pins, not Python package dependencies.
 
 Configure an active ruleset or branch protection for `main`: require pull requests, zero mandatory approving reviews, all three exact check names in the [testing policy](testing.md#mandatory-portability-checks--d165), and prohibit force pushes and deletion (including administrator bypass). For classic branch protection, enable **Do not allow bypassing the above settings**. Use GitHub Actions as the expected check source where offered. Require branches to be up to date with main before merging; rebase rather than introducing nonconventional merge commits. Confirm actual settings and availability in GitHub, rather than treating workflow definitions as enforcement. If private-repository plan or administration permissions prevent configuration, leave the protection criterion open and record the blocker and manual follow-up in the Issue/PR. Verify Dependabot scheduling in GitHub after the config is on the default branch; a feature-branch YAML file alone does not activate it.
 
 ### Manual builds and official releases
+
+Before redistribution or official publication, complete the applicable [licensing verification](licensing.md#release-time-verification) for the actual artifacts; successful CI does not establish third-party redistribution compliance.
 
 Follow [D166](architecture/decisions.md). The [manual development-build workflow](../.github/workflows/development-build.yml) builds wheel and sdist from the selected source SHA using the locked Python environment and existing package-validation helper. Download its named artifact under **Actions → run → Artifacts**; it contains the validated distributions, `build-metadata.json`, and `SHA256SUMS`. Retention is the repository's configured Actions default, not a workflow override. These are development builds, not official releases; routine PR checks do not upload retained distributions.
 

@@ -11,3 +11,7 @@ Muteinous v2 is the new Windows-first desktop application for source-aware profa
 ## Architecture decision history
 
 The [architecture decision log](docs/architecture/decisions.md) is available in this repository as the complete implementation reference. See [architecture documentation governance](docs/development.md#architecture-documentation-governance) for how proposed changes are reviewed and recorded.
+
+## License and branding
+
+Muteinous project software is licensed under the [Apache License 2.0](LICENSE) (`Apache-2.0`); see [NOTICE](NOTICE). Commercial use and proprietary derivatives are permitted under its terms. Third-party materials remain subject to their own licenses; this license does not grant rights to game content, third-party models or trademarks. See the [brand usage policy](docs/brand-usage.md) and [licensing and contribution guidance](docs/licensing.md).

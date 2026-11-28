@@ -42,6 +42,51 @@ def validate_versions(wheel: Path, sdist: Path, expected: str) -> None:
         )
 
 
+def validate_licenses(wheel: Path, sdist: Path, root: Path) -> None:
+    expected = {name: (root / name).read_bytes() for name in ("LICENSE", "NOTICE")}
+    with ZipFile(wheel) as archive:
+        (metadata,) = (
+            name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
+        )
+        prefix = metadata.removesuffix("METADATA")
+        message = BytesParser().parsebytes(archive.read(metadata))
+        if message["License-Expression"] != "Apache-2.0":
+            raise RuntimeError("Wheel has incorrect license expression")
+        if set(message.get_all("License-File", [])) != set(expected):
+            raise RuntimeError("Wheel has incorrect license-file metadata")
+        for name, contents in expected.items():
+            if archive.read(f"{prefix}licenses/{name}") != contents:
+                raise RuntimeError(f"Wheel has incorrect {name} contents")
+    with open_tar(sdist, "r:gz") as archive:
+        (member,) = (
+            member
+            for member in archive.getmembers()
+            if len(PurePosixPath(member.name).parts) == 2
+            and PurePosixPath(member.name).name == "PKG-INFO"
+        )
+        prefix = member.name.removesuffix("PKG-INFO")
+        stream = archive.extractfile(member)
+        if stream is None:
+            raise RuntimeError("Source distribution has no readable PKG-INFO")
+        with stream:
+            message = BytesParser().parsebytes(stream.read())
+        if message["License-Expression"] != "Apache-2.0":
+            raise RuntimeError("Source distribution has incorrect license expression")
+        if set(message.get_all("License-File", [])) != set(expected):
+            raise RuntimeError(
+                "Source distribution has incorrect license-file metadata"
+            )
+        for name, contents in expected.items():
+            stream = archive.extractfile(f"{prefix}{name}")
+            if stream is None:
+                raise RuntimeError(f"Source distribution has no readable {name}")
+            with stream:
+                if stream.read() != contents:
+                    raise RuntimeError(
+                        f"Source distribution has incorrect {name} contents"
+                    )
+
+
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     expected = subprocess.check_output(
@@ -69,6 +114,7 @@ def main() -> None:
         if len(wheels) != 1 or len(sdists) != 1:
             raise RuntimeError("Expected one wheel and one source distribution")
         validate_versions(wheels[0], sdists[0], expected)
+        validate_licenses(wheels[0], sdists[0], root)
         environment = work / "venv"
         subprocess.run(
             [

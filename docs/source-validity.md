@@ -132,7 +132,8 @@ upstream extension but not used by this hashing policy. The lock's target-
 conditioned crates are conservatively inventoried, not all asserted to be
 linked into each wheel. The audit did not run `cargo-license`, parse the
 CycloneDX SBOM, verify every crate's source `NOTICE`/license file, or inspect
-binary symbols/features. No checked-in third-party notice policy exists.
+binary symbols/features. The [licensing guidance](licensing.md) governs third-party notice review;
+this historical audit did not establish a complete notice inventory.
 Before redistributing a frozen application, maintainers should confirm the
 actual redistribution graph's notice obligations and provide required license
 texts/notices; this PR does not invent notice or installer infrastructure.
