@@ -10,7 +10,7 @@ code.
 
 `fingerprint_file` streams a plugin-selected file boundary through one reused
 256 KiB buffer (unbuffered `readinto`) using BLAKE3 1.0.11 with `max_threads=1`.
-Memory per call is therefore fixed at the buffer size. The returned opaque string is prefixed
+The file-content read buffer is therefore fixed in size. The returned opaque string is prefixed
 `blake3:` so it cannot compare equal to evidence from a different algorithm.
 `fingerprint_assets` visits supplied assets synchronously and sequentially.
 The implementation creates no worker pool, does not retain file contents,
@@ -25,18 +25,45 @@ small files and a modest advantage for the largest tested small-file profile.
 Results are hardware/storage-specific and the benchmark's CPU competitor was
 synthetic, not a real application job. One hashing operation therefore has a
 clear bounded memory and thread budget, with no implicit fan-out that could
-multiply across concurrent callers. This does **not** establish an
-application-wide concurrency limit: when wired into jobs, the job owner must
-declare/occupy the appropriate queue resources for the complete physical hash
-work. Hashing is not a dispatch-time validator; validators remain quick and
-read-only, and queue resource occupancy lasts until the worker's physical
-operation stops. No future scan/job integration or speculative global
-semaphore is introduced here.
+multiply across concurrent callers. The narrow scheduled verification adapter in
+`infrastructure/sources/scheduled.py` submits sequential jobs with explicit
+`cpu` and `source-io` resources. The shared queue owns their capacities and
+holds both slots until physical work stops. Queue owners route dispatch
+validation through `validate_source_plan` with the caller's original-context
+check; validation checks location and resolved context, not asset metadata or
+content. The worker rechecks that context before hashing and before returning results. The check must
+attest the selected assets as originals; paths and matching digests cannot
+establish provenance. Missing individual assets are isolated during hashing.
+The submitted asset selection and dependency maps are copied, not persisted.
+When constructing the shared queue, use `source_verification_capacities`
+to supply a default `source-io` capacity of two. Each job still hashes its
+assets sequentially and consumes one shared CPU slot and one source-I/O slot;
+two independent jobs can run concurrently when both resources permit it.
+The helper preserves explicitly configured capacities (including zero), and
+does not invent a CPU capacity or change unrelated resources. Queue owners can
+also use the existing `set_capacity` override; persistence and settings UI
+remain later integration work. No independent worker pool is created.
+The two-worker default is an approved conservative starting point, not a
+hardware-specific optimum. Development benchmark measurements remain outstanding;
+user-requested calibration and automatic tuning are not part of this slice.
+
+Hashing compares path metadata with the opened file's metadata before reading,
+then compares size, modification time, available identity and byte count after
+reading and checks the path again after closing. Detectable changes reject the
+fingerprint. Check/open and check/return races and undetectable same-metadata
+changes remain possible; these checks are rejection evidence, not a snapshot.
+Cancellation is checked between reads and assets; blocked reads may delay
+physical termination. Byte progress is reported without a percentage; the
+asset count is the number attempted out of the supplied selection. Byte updates
+are throttled within a file. The existing queue rejects cancelled and late
+results. No retries or separate scheduler are introduced.
 
 ### Read size and buffer reuse
 
-The buffer is a bounded-memory choice: one 256 KiB buffer is reused for each
-fingerprinting call. The storage integrity helper in
+The buffer is a bounded-memory choice: one 256 KiB buffer is reused across
+all assets of each sequential scheduled worker (and synchronous asset batch).
+Standalone fingerprint calls allocate their own buffer; callers supplying a
+buffer must use it exclusively and sequentially. Each file gets new hash state. The storage integrity helper in
 `infrastructure/storage/_filesystem.py` uses a 1 MiB read block as a precedent
 for bounded streaming, but the source fingerprinter uses a different size based
 on its separate read-size sweep
@@ -148,8 +175,8 @@ must be rejected by the caller. D14–D15 verified-original and backup access
 remain later M4 work. A source fingerprint is evidence of content validity
 only; it does not authorize installation or any write to user-owned content.
 
-This is a foundation only. Automatic rescanning, cache persistence, scan/preview
-workflow integration, native-format discovery/decoding, verified-original
+This is a narrow scheduled foundation only. Automatic rescanning, cache persistence,
+comprehensive scan/preview workflow integration, native-format discovery/decoding, verified-original
 resolution, installation-state management, and installation authorization are
 out of scope.
 

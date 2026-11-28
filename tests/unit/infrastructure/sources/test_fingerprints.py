@@ -1,6 +1,7 @@
 """Content fingerprinting uses bounded, deterministic reads."""
 
 import hashlib
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -9,6 +10,8 @@ from blake3 import blake3
 
 from muteinous.infrastructure.sources import fingerprints
 from muteinous.infrastructure.sources.fingerprints import (
+    FingerprintCancelled,
+    UnstableSourceError,
     fingerprint_assets,
     fingerprint_file,
 )
@@ -77,6 +80,9 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
         def __exit__(self, *args: Any) -> None:
             self._wrapped.close()
 
+        def fileno(self) -> int:
+            return cast(int, self._wrapped.fileno())
+
         def readinto(self, buffer: Any) -> int:
             read_sizes.append(len(buffer))
             return cast(int, self._wrapped.readinto(buffer))
@@ -90,7 +96,7 @@ def test_fingerprint_streams_in_fixed_size_chunks_and_does_not_modify_source(
 
     assert result == f"blake3:{blake3(content, max_threads=1).hexdigest()}"
     assert len(read_sizes) > 1
-    assert max(read_sizes) <= 1024 * 1024
+    assert max(read_sizes) == 256 * 1024
     with original_open(source, "rb") as check:
         assert check.read() == before
 
@@ -114,3 +120,66 @@ def test_missing_or_unreadable_file_is_not_fingerprinted(
     monkeypatch.setattr(Path, "open", cast(Any, unreadable))
     with pytest.raises(PermissionError):
         fingerprint_assets({SourceAssetId("asset"): source})
+
+
+@pytest.mark.portable
+def test_chunk_cancellation_rejects_partial_digest(tmp_path: Path) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * (1024 * 1024))
+    counts: list[int] = []
+
+    with pytest.raises(FingerprintCancelled):
+        fingerprint_file(
+            source,
+            cancelled=lambda: bool(counts),
+            report_bytes=counts.append,
+        )
+    assert 0 < counts[0] < source.stat().st_size
+    assert len(counts) == 1
+
+
+@pytest.mark.portable
+def test_detectable_modification_rejects_fingerprint(tmp_path: Path) -> None:
+    source = tmp_path / "large.bin"
+    source.write_bytes(b"x" * (1024 * 1024))
+
+    def modify(count: int) -> None:
+        if count == 256 * 1024:
+            with source.open("ab") as stream:
+                stream.write(b"changed")
+
+    with pytest.raises(UnstableSourceError):
+        fingerprint_file(source, report_bytes=modify)
+
+
+@pytest.mark.portable
+def test_path_replacement_rejects_fingerprint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "original.bin"
+    source.write_bytes(b"original")
+    replacement = tmp_path / "replacement.bin"
+    replacement.write_bytes(b"replaced")
+    original_metadata = source.stat()
+    os.utime(
+        replacement,
+        ns=(original_metadata.st_atime_ns, original_metadata.st_mtime_ns),
+    )
+    # Filesystems without usable identities can still reject a size change.
+    if not original_metadata.st_ino or not replacement.stat().st_ino:
+        replacement.write_bytes(b"new")
+    original_stat = Path.stat
+    checked = False
+
+    def changed_path(path: Path, *args: Any, **kwargs: Any) -> Any:
+        nonlocal checked
+        if path == source:
+            if checked:
+                replacement.replace(source)
+                return original_stat(source)
+            checked = True
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", changed_path)
+    with pytest.raises(UnstableSourceError):
+        fingerprint_file(source)

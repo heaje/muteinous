@@ -1,4 +1,4 @@
-"""Optional source-fingerprint benchmark; stdlib, psutil and blake3 only."""
+"""Optional source-fingerprint benchmark, including the production implementation."""
 
 import argparse
 import hashlib
@@ -8,6 +8,8 @@ import os
 import platform
 import shutil
 import ssl
+import statistics
+import subprocess
 import tempfile
 import threading
 import time
@@ -17,7 +19,7 @@ from pathlib import Path
 import psutil
 
 BLOCK = 1024 * 1024
-NAMES = ("sha256", "blake2b-256", "blake3")
+NAMES = ("sha256", "blake2b-256", "blake3", "production-blake3")
 SMALL_PROFILES = ((512, 4096), (2048, 16384), (8192, 65536))
 
 
@@ -40,7 +42,11 @@ def fixture(path, size, asset):
         os.fsync(stream.fileno())
 
 
-def digest(path, name, threads):
+def digest(path, name, threads, buffer=None):
+    if name == "production-blake3":
+        from muteinous.infrastructure.sources.fingerprints import fingerprint_file
+
+        return fingerprint_file(path, buffer=buffer).removeprefix("blake3:")
     h = hasher(name, threads)
     with path.open("rb") as stream:
         while block := stream.read(BLOCK):
@@ -55,6 +61,14 @@ def vectors(names):
         "blake3": "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85",
     }
     for name in names:
+        if name == "production-blake3":
+            # Load production code and check a real-file vector before trials.
+            with tempfile.TemporaryDirectory(prefix="fingerprint-vector-") as directory:
+                path = Path(directory) / "abc.bin"
+                path.write_bytes(b"abc")
+                if digest(path, name, 1) != expected["blake3"]:
+                    raise RuntimeError("Production BLAKE3 digest vector failed")
+            continue
         h = hasher(name, 1)
         h.update(b"a")
         h.update(b"bc")
@@ -67,15 +81,20 @@ def sample_memory(process):
     return getattr(info, "peak_wset", info.rss), info.rss
 
 
-def cache_mode(paths, size, ram):
+def cache_mode(paths, size, ram, eviction_argv):
     free = psutil.virtual_memory().available
-    if size > ram or (size >= 10_000_000_000 and free < 10_000_000_000):
-        return "cold", free
+    if eviction_argv:
+        # The caller must establish and authorize the eviction procedure. A
+        # successful process exit is not independent proof of cache residency.
+        subprocess.run(eviction_argv, check=True)
+        return "cold-eviction-reported", free
+    if size > ram or size > free:
+        return "capacity-limited-uncontrolled", free
     for path in paths:
         with path.open("rb") as stream:
             while stream.read(BLOCK):
                 pass
-    return "warm", free
+    return "warm-pre-read", free
 
 
 def read_only(paths, size):
@@ -96,26 +115,83 @@ def read_only(paths, size):
     )
 
 
-def competitor_baseline(seconds=2.0):
-    payload = bytes(BLOCK)
-    start = time.perf_counter()
-    end = start + seconds
-    total = 0
-    while time.perf_counter() < end:
-        hashlib.sha256(payload).digest()
-        total += len(payload)
-    elapsed = time.perf_counter() - start
+# Reject short or poorly overlapped samples instead of reporting misleading
+# slowdown. Twenty complete blocks bound the relative two-edge block-count
+# uncertainty; 50 ms also avoids the shortest scheduling-dominated intervals.
+MIN_COMPETITOR_BLOCKS = 20
+MIN_COMPETITOR_SECONDS = 0.05
+
+
+def competitor_rate(total, elapsed):
+    if total < MIN_COMPETITOR_BLOCKS * BLOCK or elapsed < MIN_COMPETITOR_SECONDS:
+        return None
     return total / elapsed / 1e6
 
 
-def trial(paths, size, name, workers, threads, contention, solo_competitor):
+class ContentionWindow:
+    """Count only complete competitor blocks inside the candidate interval."""
+
+    def __init__(self):
+        self.ready = threading.Event()
+        self.stop = threading.Event()
+        self.lock = threading.Lock()
+        self.started_at = None
+        self.total = 0
+
+    def run(self):
+        payload = bytes(BLOCK)
+        # Prove the competitor has actually executed before timing the candidate.
+        hashlib.sha256(payload).digest()
+        self.ready.set()
+        while not self.stop.is_set():
+            started = time.perf_counter()
+            hashlib.sha256(payload).digest()
+            self.record_completed(started)
+
+    def record_completed(self, started):
+        with self.lock:
+            if (
+                self.started_at is not None
+                and started >= self.started_at
+                and not self.stop.is_set()
+            ):
+                self.total += BLOCK
+
+    def begin(self):
+        if not self.ready.wait(10):
+            raise RuntimeError("Competitor did not become ready")
+        with self.lock:
+            self.started_at = time.perf_counter()
+            return self.started_at
+
+    def finish(self):
+        with self.lock:
+            ended = time.perf_counter()
+            self.stop.set()
+            return ended, self.total
+
+
+def competitor_baseline(seconds=2.0):
+    window = ContentionWindow()
+    competitor = threading.Thread(target=window.run)
+    competitor.start()
+    try:
+        start = window.begin()
+        time.sleep(seconds)
+        end, total = window.finish()
+    finally:
+        window.stop.set()
+        competitor.join()
+    return competitor_rate(total, end - start)
+
+
+def trial(paths, size, name, workers, threads, contention, solo_competitor, single_pass):
     process = psutil.Process()
     peak_wset, rss_baseline = sample_memory(process)
     peak_rss = rss_baseline
     peak_threads = process.num_threads()
     stop = threading.Event()
-    work = [0]
-    payload = bytes(BLOCK)
+    window = ContentionWindow() if contention else None
     pool = ThreadPoolExecutor(max_workers=workers) if workers > 1 else None
 
     def sample():
@@ -126,44 +202,51 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor):
             peak_rss = max(peak_rss, rss)
             peak_threads = max(peak_threads, process.num_threads())
 
-    def competing_job():
-        while not stop.is_set():
-            hashlib.sha256(payload).digest()
-            work[0] += len(payload)
-
-    def batch(part):
-        return [(i, digest(paths[i], name, threads)) for i in part]
+    def batch(part, buffer):
+        return [(i, digest(paths[i], name, threads, buffer)) for i in part]
 
     sampler = threading.Thread(target=sample)
-    competitor = threading.Thread(target=competing_job) if contention else None
+    competitor = threading.Thread(target=window.run) if window else None
     try:
         sampler.start()
         if competitor:
             competitor.start()
+        start = window.begin() if window else time.perf_counter()
         cpu_start = time.process_time()
-        start = time.perf_counter()
+        if name == "production-blake3":
+            from muteinous.infrastructure.sources.fingerprints import new_fingerprint_buffer
+
+            buffers = [new_fingerprint_buffer() for _ in range(workers)]
+        else:
+            buffers = [None] * workers
         passes = 0
         while True:
             passes += 1
             if pool is None:
-                values = batch(range(len(paths)))
+                values = batch(range(len(paths)), buffers[0])
             else:
                 parts = (range(i, len(paths), workers) for i in range(workers))
-                values = [v for group in pool.map(batch, parts) for v in group]
+                values = [v for group in pool.map(batch, parts, buffers) for v in group]
             elapsed = time.perf_counter() - start
-            if elapsed >= 0.5:
+            if single_pass or elapsed >= 0.5:
                 break
+        end, timed_competitor_bytes = window.finish() if window else (time.perf_counter(), 0)
+        elapsed = end - start
         cpu = time.process_time() - cpu_start
         stop.set()
         values.sort()
     finally:
         stop.set()
+        if window:
+            window.stop.set()
         if competitor and competitor.ident is not None:
             competitor.join()
         if pool:
             pool.shutdown(wait=True)
         if sampler.ident is not None:
             sampler.join()
+    measured_competitor = competitor_rate(timed_competitor_bytes, elapsed) if contention else None
+    contention_valid = measured_competitor is not None and solo_competitor is not None if contention else None
     return dict(
         record="trial",
         algorithm=name,
@@ -181,8 +264,10 @@ def trial(paths, size, name, workers, threads, contention, solo_competitor):
         process_peak_working_set_bytes=peak_wset,
         rss_sampled_peak_bytes=peak_rss,
         threads_sampled_peak=peak_threads,
-        competitor_MB_s=work[0] / elapsed / 1e6,
+        competitor_bytes=timed_competitor_bytes,
+        competitor_MB_s=measured_competitor if contention_valid else None,
         competitor_solo_MB_s=solo_competitor if contention else None,
+        contention_valid=contention_valid,
         digest_list_sha256=hashlib.sha256(
             "".join(v for _, v in values).encode("ascii")
         ).hexdigest(),
@@ -193,30 +278,35 @@ def emit(row):
     print(json.dumps(row, sort_keys=True), flush=True)
 
 
-def run_workload(paths, label, size, algorithms, repeats, ram, shared50):
-    mode, free_ram = cache_mode(paths, size, ram)
-    emit(
-        dict(
-            record="workload-baseline",
-            workload=label,
-            cache_mode=mode,
-            free_ram_bytes=free_ram,
-            total_ram_bytes=ram,
-            **read_only(paths, size),
+def run_workload(paths, label, size, algorithms, repeats, ram, shared50, worker_counts, eviction_argv):
+    # A repeated read-only baseline cannot represent a cold single pass.
+    if not eviction_argv:
+        mode, free_ram = cache_mode(paths, size, ram, None)
+        emit(
+            dict(
+                record="workload-baseline",
+                workload=label,
+                cache_mode=mode,
+                free_ram_bytes=free_ram,
+                total_ram_bytes=ram,
+                **read_only(paths, size),
+            )
         )
-    )
-    configs = [(name, 1, 1, False) for name in algorithms]
-    configs += [(name, 1, 1, True) for name in algorithms]
-    if len(paths) > 1:
-        configs += [
-            (name, 2, 1, contention)
-            for contention in (False, True)
-            for name in algorithms
-        ]
+    configs = [
+        (name, workers, 1, contention)
+        for workers in worker_counts
+        if workers <= len(paths)
+        for contention in (False, True)
+        for name in algorithms
+    ]
     if "blake3" in algorithms:
-        configs += [("blake3", 1, 2, contention) for contention in (False, True)]
-        configs += [("blake3", 1, 0, contention) for contention in (False, True)]
+        configs += [
+            ("blake3", 1, threads, contention)
+            for threads in sorted({2, min(4, os.cpu_count() or 1)} - {1})
+            for contention in (False, True)
+        ]
     known = {}
+    observations = {}
     for repeat in range(repeats):
         order = configs[repeat % len(configs) :] + configs[: repeat % len(configs)]
         emit(
@@ -230,13 +320,15 @@ def run_workload(paths, label, size, algorithms, repeats, ram, shared50):
         )
         for name, workers, threads, contention in order:
             solo = competitor_baseline() if contention else None
-            trial_mode, trial_free_ram = cache_mode(paths, size, ram)
-            row = trial(paths, size, name, workers, threads, contention, solo)
+            trial_mode, trial_free_ram = cache_mode(paths, size, ram, eviction_argv)
+            row = trial(paths, size, name, workers, threads, contention, solo, bool(eviction_argv))
             if (
-                known.setdefault(name, row["digest_list_sha256"])
+                known.setdefault("blake3" if name == "production-blake3" else name, row["digest_list_sha256"])
                 != row["digest_list_sha256"]
             ):
                 raise RuntimeError(f"Inconsistent digest across {name} configurations")
+            if row["contention_valid"] is not False:
+                observations.setdefault((name, workers, threads, contention, trial_mode), []).append(row["MB_s"])
             emit(
                 row
                 | dict(
@@ -247,6 +339,28 @@ def run_workload(paths, label, size, algorithms, repeats, ram, shared50):
                     total_ram_bytes=ram,
                 )
             )
+
+    for (name, workers, threads, contention, mode), values in observations.items():
+        emit(dict(
+            record="summary",
+            workload=label,
+            algorithm=name,
+            workers=workers,
+            hash_threads=threads,
+            contention=contention,
+            cache_mode=mode,
+            repetitions=len(values),
+            median_MB_s=statistics.median(values),
+            min_MB_s=min(values),
+            max_MB_s=max(values),
+        ))
+
+
+def process_affinity():
+    try:
+        return psutil.Process().cpu_affinity()
+    except (AttributeError, NotImplementedError, psutil.Error):
+        return None
 
 
 def main():
@@ -272,8 +386,26 @@ def main():
         help="Do not include the default small-asset profiles.",
     )
     p.add_argument("--repeats", type=int, default=3)
-    p.add_argument("--algorithms", nargs="+", choices=NAMES, default=NAMES)
+    p.add_argument("--algorithms", nargs="+", choices=NAMES, default=NAMES[:3])
+    p.add_argument("--workers", type=int, nargs="+", default=sorted({1, 2, 4, 8, os.cpu_count() or 1}))
+    p.add_argument("--large-assets", type=int, default=1,
+                   help="Distinct files of each requested large size; requires corresponding scratch space.")
+    p.add_argument("--eviction-argv", help="JSON array of arguments for an authorized OS cache eviction command; no shell.")
+    p.add_argument("--eviction-method", help="Document the eviction method and evidence of its effectiveness.")
+    p.add_argument("--filesystem", required=True)
+    p.add_argument("--hardware", required=True, help="Exact CPU, machine and storage context.")
     a = p.parse_args()
+    if not a.workers or any(n < 1 for n in a.workers) or not 1 <= a.large_assets <= 100:
+        p.error("Worker counts and large-asset count must be positive and bounded")
+    a.workers = sorted(set(a.workers) | {1})
+    eviction_argv = None
+    if a.eviction_argv:
+        try:
+            eviction_argv = json.loads(a.eviction_argv)
+        except ValueError:
+            p.error("Eviction argv must be a JSON array of strings")
+        if not isinstance(eviction_argv, list) or not eviction_argv or not all(isinstance(x, str) and x for x in eviction_argv) or not a.eviction_method:
+            p.error("An explicit eviction command and documented method are required")
     try:
         profiles = [
             tuple(map(int, item.lower().split("x"))) for item in a.small_profile
@@ -304,14 +436,17 @@ def main():
             ram_bytes=ram,
             psutil=psutil.__version__,
             blake3=importlib.metadata.version("blake3")
-            if "blake3" in a.algorithms
+            if any(name in ("blake3", "production-blake3") for name in a.algorithms)
             else None,
             block_bytes=BLOCK,
             storage=a.storage,
+            filesystem=a.filesystem,
+            hardware=a.hardware,
+            cpu_affinity=process_affinity(),
             arguments={**vars(a), "scratch": str(a.scratch)},
         )
     )
-    workloads = [(f"large-{mb}MB", 1, mb * 1_000_000) for mb in a.large_mb]
+    workloads = [(f"large-{a.large_assets}x{mb}MB", a.large_assets, mb * 1_000_000) for mb in a.large_mb]
     workloads.extend((f"small-{count}x{size}", count, size) for count, size in profiles)
     if a.shared_50gb:
         workloads.append(("large-50GB-shared", 1, 50_000_000_000))
@@ -325,7 +460,8 @@ def main():
             else:
                 margin = max(512 * BLOCK, size // 20)
                 if shutil.disk_usage(a.scratch).free < size + margin:
-                    raise RuntimeError(f"Insufficient scratch space for {label}")
+                    emit(dict(record="skipped-workload", workload=label, reason="insufficient scratch space", required_bytes=size + margin, available_bytes=shutil.disk_usage(a.scratch).free))
+                    continue
                 fixture_dir = directory / label
                 fixture_dir.mkdir()
                 paths = [fixture_dir / f"asset-{i:05d}.bin" for i in range(count)]
@@ -341,6 +477,8 @@ def main():
                 a.repeats,
                 ram,
                 label == "large-50GB-shared",
+                a.workers,
+                eviction_argv,
             )
             if label != "large-50GB-shared":
                 shutil.rmtree(paths[0].parent)

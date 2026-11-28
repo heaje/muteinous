@@ -1,8 +1,6 @@
-# Source fingerprint benchmark — Issue #17, Stage 1
+# Source fingerprint benchmark — historical #17 and #52
 
-**No production algorithm has been selected.** This benchmark is evidence for a
-maintainer recommendation only; explicit maintainer approval is required before
-choosing a default or adding any production hashing dependency. See [Issue
+**Historical note:** the original #17 experiment preceded the approved selection of BLAKE3. Production now uses locked BLAKE3 1.0.11, one internal thread and a 256 KiB buffer. #52 extends the harness to measure that implementation; the approved interim source-I/O default is two workers, configurable and constrained by shared CPU capacity. See [Issue
 #17](https://github.com/heaje/muteinous/issues/17), [source-validity amendment
 and D10–D15/D20](../../docs/architecture/decisions.md#amendment-2026-11-25-source-validity).
 
@@ -100,8 +98,7 @@ checksums across configurations. Runs 1–4 were checked offline across
 configurations and invocations; run 5 uses the finalized harness's in-run
 digest check.
 
-Fixtures larger than total RAM are labeled `cold` (working set larger than
-RAM, not hardware cache eviction); the 10 GB fixture is `cold` only when
+**Historical classification, not valid cold-cache evidence:** fixtures larger than total RAM were labeled `cold` (working set larger than RAM, not hardware cache eviction); the 10 GB fixture is `cold` only when
 available RAM is below 10 GB. Other workloads are labeled `warm` after
 pre-reading. The initial full run took its cache classification and initial
 pre-read at workload start, then recorded available RAM in each trial row
@@ -369,3 +366,86 @@ competitor-contended supplement must be interpreted by `run_id`; do not merge
 repeats across runs as if they were one controlled invocation. Do not begin
 Stage 2, add production dependencies, select an algorithm, merge the PR or
 close #17 as part of this benchmark.
+
+
+## #52 benchmark extension (unmeasured checkpoint)
+
+Use the locked project environment, with benchmark-only psutil installed into a
+separate environment using the locked production package, or an isolated
+benchmark environment with the same source revision on PYTHONPATH and the exact
+locked BLAKE3. Record the exact SHA, tool versions, filesystem/storage and host
+details, power/cache conditions and commands. New flags require explicit
+`--filesystem` and `--hardware` metadata.
+
+Example warm pre-read command (replace scratch/hardware/filesystem labels with
+actual values; use separate runs for each size and worker count where space is
+limited):
+
+~~~sh
+python benchmarks/fingerprinting/benchmark.py --scratch /scratch/fingerprints \
+  --storage 'actual device' --filesystem 'actual filesystem' --hardware 'actual CPU/OS' \
+  --algorithms production-blake3 blake3 --large-mb 100 1000 10000 \
+  --large-assets 4 --workers 1 2 4 8 --repeats 3
+~~~
+
+Use `--large-mb 50000` for a 50 GB asset and `--large-assets N` for N distinct
+large files of each requested size. Scratch needs N times each file size plus
+margin. Single-file workloads cannot measure concurrent independent file
+workers; omit configurations with more workers than files. Default worker
+candidates are 1, 2, 4, 8 and reported logical CPU count, deduplicated; record
+affinity/CPU limits too. Isolated BLAKE3 internal-thread configurations remain
+separate from the production one-thread-per-file configuration. The production
+benchmark calls the real fingerprint function with one reusable 256 KiB buffer
+per sequential file partition (also reused between passes); the benchmark's
+thread pool is not the application's shared queue. Summary rows include
+median/min/max rates for valid trials.
+The CPU time includes the sampler and competitor; RSS and thread peaks are
+sampled, not exhaustive. The SHA-256 competitor completes a readiness block
+before timing; only complete blocks started and recorded within the candidate
+interval count toward its throughput. Solo competitor timing uses the same
+protocol. Trials with fewer than 20 complete competitor blocks or less than
+50 ms of elapsed time (or an insufficient solo baseline) are marked
+`contention_valid: false`; raw trial bytes and timing remain, but no slowdown
+or contended summary rate is calculated for those trials. This is a pragmatic
+minimum evidence threshold, not proof of uniform contention. Short single-pass
+cold runs can be noisy; increase the number of distinct fixtures rather than
+repeating cold reads. The optional methodology regressions can be run with
+`python -m unittest discover -s benchmarks/fingerprinting -p test_benchmark_methodology.py`.
+
+Warm preparation is a pre-read, not a guarantee of residency; workloads exceeding
+available memory are labelled capacity-limited/uncontrolled. Historical `cold`
+rows are not genuine cold measurements. For cold trials, only after separate
+authorization where needed, supply `--eviction-argv` as a JSON argv array for a
+documented OS eviction procedure and `--eviction-method` describing validation
+of that procedure. The command executes without a shell before every timed
+single-pass trial, after fixture generation and any earlier trial. Nonzero exit
+aborts the run. The harness labels these rows `cold-eviction-reported`: successful
+command completion is not proof of actual cache eviction. The operator must
+verify effectiveness with appropriate OS evidence, record exact commands and
+limitations, and distinguish OS page cache from hardware/controller caching.
+No privileged operation is enabled automatically. Cold trials skip the repeated
+read-only baseline. Repeated warm reads must never be counted as cold.
+
+No new measurements are claimed at this checkpoint. Native Windows, Linux and
+macOS workloads, genuine cold conditions and the competitor/workload matrix
+remain outstanding. Prior Windows warm and WSL2 data are historical; no
+universal hardware-based worker recommendation is required.
+
+### Approved interim concurrency policy
+
+The historical Windows run-05 (24 logical CPUs, warm pre-read, isolated
+hash implementation rather than the new production function) found median
+one/two-file-worker BLAKE3 rates of 14/14, 49/58 and 193/222 MB/s for the three
+small profiles, respectively. Two workers consumed more CPU; the historical
+synthetic competitor slowdown varied. These observations do not establish a
+universally optimal worker count or a hardware-dependent threshold.
+
+The maintainer approved a pragmatic default of two concurrent source-hashing
+workers, one internal BLAKE3 thread and a reused 256 KiB read buffer each,
+subject to shared CPU capacity, explicit resource overrides and mandatory
+safety/capability limits. The earlier eight-logical-CPU proposal is withdrawn.
+Continue development measurements to characterize performance and contention
+and inform future regression analysis, not to derive a universal heuristic.
+User-requested calibration is deferred until demonstrated need; no automatic
+benchmarking, continuous tuning or application-wide calibration infrastructure
+is introduced.

@@ -55,8 +55,15 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
 
 ## Remaining integration
 
-Real provider adapters and configuration/source validation, provider/model
-safety limits and hardware-derived defaults (D90), alignment-specific budgets,
+The narrow source verification adapter uses explicit CPU and source-I/O slots
+and caller-owned original-context validation (see [source validity](../../../../docs/source-validity.md)).
+Queue owners use `source_verification_capacities` to apply the approved default
+of two source-I/O slots unless explicitly configured otherwise; shared CPU
+capacity and provider safety still constrain execution. The generic queue
+continues to treat unknown capacities as unavailable and has no domain defaults.
+Other provider adapters and configuration/source validation, provider/model
+safety limits and other resource defaults (D90), persistent settings and
+alignment-specific budgets,
 retry and stale-result coordination (D77–D86/D102), stall warnings (D94), UI
 polling and user-facing status/actions, and application shutdown policy
 (D103–D104) remain separate work. Persistence, restart recovery, distributed
