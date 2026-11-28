@@ -10,7 +10,7 @@ code.
 
 `fingerprint_file` streams a plugin-selected file boundary through one reused
 256 KiB buffer (unbuffered `readinto`) using BLAKE3 1.0.11 with `max_threads=1`.
-Memory per call is therefore fixed at the buffer size. The returned opaque string is prefixed
+The file-content read buffer is therefore fixed in size. The returned opaque string is prefixed
 `blake3:` so it cannot compare equal to evidence from a different algorithm.
 `fingerprint_assets` visits supplied assets synchronously and sequentially.
 The implementation creates no worker pool, does not retain file contents,
@@ -31,7 +31,7 @@ multiply across concurrent callers. The narrow scheduled verification adapter in
 holds both slots until physical work stops. Queue owners route dispatch
 validation through `validate_source_plan` with the caller's original-context
 check; validation checks location and resolved context, not asset metadata or
-content. The worker rechecks that context before hashing. The check must
+content. The worker rechecks that context before hashing and before returning results. The check must
 attest the selected assets as originals; paths and matching digests cannot
 establish provenance. Missing individual assets are isolated during hashing.
 The submitted asset selection and dependency maps are copied, not persisted.

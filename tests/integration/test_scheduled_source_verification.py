@@ -64,7 +64,9 @@ def submit(
     )
 
 
-def test_scheduled_verification_preserves_only_positive_evidence(tmp_path: Path) -> None:
+def test_scheduled_verification_preserves_only_positive_evidence(
+    tmp_path: Path,
+) -> None:
     changed, missing, stable = map(SourceAssetId, ("changed", "missing", "stable"))
     paths = {asset: tmp_path / asset for asset in (changed, missing, stable)}
     for path in paths.values():
