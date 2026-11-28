@@ -1,6 +1,6 @@
 # Source fingerprint benchmark — historical #17 and #52
 
-**Historical note:** the original #17 experiment preceded the approved selection of BLAKE3. Production now uses locked BLAKE3 1.0.11, one internal thread and a 256 KiB buffer. #52 extends the harness to measure that implementation; numerical queue defaults remain unapproved. See [Issue
+**Historical note:** the original #17 experiment preceded the approved selection of BLAKE3. Production now uses locked BLAKE3 1.0.11, one internal thread and a 256 KiB buffer. #52 extends the harness to measure that implementation; the approved interim source-I/O default is two workers, configurable and constrained by shared CPU capacity. See [Issue
 #17](https://github.com/heaje/muteinous/issues/17), [source-validity amendment
 and D10–D15/D20](../../docs/architecture/decisions.md#amendment-2026-11-25-source-validity).
 
@@ -415,25 +415,25 @@ No privileged operation is enabled automatically. Cold trials skip the repeated
 read-only baseline. Repeated warm reads must never be counted as cold.
 
 No new measurements are claimed at this checkpoint. Native Windows, Linux and
-macOS workloads, genuine cold conditions, competitor slowdown and the numerical
-hardware recommendation remain outstanding. Prior Windows warm and WSL2 data
-are historical and do not support a universal worker default.
+macOS workloads, genuine cold conditions and the competitor/workload matrix
+remain outstanding. Prior Windows warm and WSL2 data are historical; no
+universal hardware-based worker recommendation is required.
 
-### Provisional concurrency proposal — not approved
+### Approved interim concurrency policy
 
 The historical Windows run-05 (24 logical CPUs, warm pre-read, isolated
 hash implementation rather than the new production function) found median
 one/two-file-worker BLAKE3 rates of 14/14, 49/58 and 193/222 MB/s for the three
 small profiles, respectively. Two workers consumed more CPU; the historical
-synthetic competitor slowdown varied. No reliable 4/8/logical-count or genuine
-cold measurements exist. These observations support testing a conservative
-upper limit of two, not a universal optimum.
+synthetic competitor slowdown varied. These observations do not establish a
+universally optimal worker count or a hardware-dependent threshold.
 
-For maintainer discussion only: start by evaluating a source-I/O capacity
-of one when available logical CPU count is unknown or below eight, and two
-otherwise, always constrained by the shared CPU resource limit. This threshold
-is a proposed headroom policy, not an empirically established cutoff. Compare
-against the full production-worker matrix on the actual target machines,
-especially contention and storage conditions, before adopting any default.
-User overrides would use existing queue capacity configuration. No numeric
-production default or heuristic is implemented or considered approved.
+The maintainer approved a pragmatic default of two concurrent source-hashing
+workers, one internal BLAKE3 thread and a reused 256 KiB read buffer each,
+subject to shared CPU capacity, explicit resource overrides and mandatory
+safety/capability limits. The earlier eight-logical-CPU proposal is withdrawn.
+Continue development measurements to characterize performance and contention
+and inform future regression analysis, not to derive a universal heuristic.
+User-requested calibration is deferred until demonstrated need; no automatic
+benchmarking, continuous tuning or application-wide calibration infrastructure
+is introduced.

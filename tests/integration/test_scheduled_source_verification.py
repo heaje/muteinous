@@ -18,6 +18,7 @@ from muteinous.infrastructure.sources.fingerprints import (
 from muteinous.infrastructure.sources.scheduled import (
     OriginalCheck,
     SourceVerification,
+    source_verification_capacities,
     submit_source_verification,
     validate_source_plan,
 )
@@ -33,9 +34,17 @@ def known_original(provider: str, source_id: str, root: Path) -> str | None:
     return "Original source is unknown or replaced"
 
 
-def make_queue(check: OriginalCheck = known_original) -> JobQueue:
+def make_queue(
+    check: OriginalCheck = known_original,
+    *,
+    cpu: int = 1,
+    source_io: int | None = None,
+) -> JobQueue:
+    capacities = {"cpu": cpu}
+    if source_io is not None:
+        capacities["source-io"] = source_io
     return JobQueue(
-        {"cpu": 1, "source-io": 1},
+        source_verification_capacities(capacities),
         lambda plan: validate_source_plan(plan, check),
     )
 
@@ -167,7 +176,7 @@ def test_cancellation_holds_both_resources_until_physical_stop(
         return original(path, cancelled=cancelled, report_bytes=report)
 
     monkeypatch.setattr(scheduled, "fingerprint_file", blocked)
-    queue = make_queue()
+    queue = make_queue(source_io=1)
     try:
         running = submit(queue, tmp_path, {asset: path}, previous, dependencies)
         assert entered.wait(5)
@@ -297,3 +306,63 @@ def test_unavailable_context_after_hash_rejects_results(
         assert "Original context became unavailable" in (snapshot.detail or "")
     finally:
         queue.close()
+
+
+@pytest.mark.parametrize(
+    ("cpu", "source_io", "expected"),
+    [(4, None, 2), (4, 1, 1), (4, 3, 3), (1, None, 1)],
+)
+def test_source_concurrency_default_and_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cpu: int,
+    source_io: int | None,
+    expected: int,
+) -> None:
+    assets = [SourceAssetId(str(index)) for index in range(4)]
+    paths = {asset: tmp_path / asset for asset in assets}
+    for path in paths.values():
+        path.write_bytes(b"original")
+    previous = fingerprint_assets(paths)
+    entered = {path: Event() for path in paths.values()}
+    release = Event()
+
+    def blocked(
+        path: Path,
+        *,
+        cancelled: Callable[[], bool] | None = None,
+        report_bytes: Callable[[int], None] | None = None,
+    ) -> SourceFingerprint:
+        entered[path].set()
+        assert release.wait(5)
+        return fingerprint_file(path, cancelled=cancelled, report_bytes=report_bytes)
+
+    monkeypatch.setattr(scheduled, "fingerprint_file", blocked)
+    queue = make_queue(cpu=cpu, source_io=source_io)
+    try:
+        jobs = [
+            submit(queue, tmp_path, {asset: paths[asset]}, previous, {})
+            for asset in assets
+        ]
+        for asset in assets[:expected]:
+            assert entered[paths[asset]].wait(5)
+        for job, asset in zip(jobs[expected:], assets[expected:], strict=True):
+            eventually(lambda: "Waiting for:" in (queue.snapshot(job).detail or ""))
+            assert queue.snapshot(job).state == JobState.QUEUED
+            assert not entered[paths[asset]].is_set()
+        release.set()
+        assert queue.drain(5)
+        assert all(queue.snapshot(job).state == JobState.COMPLETED for job in jobs)
+    finally:
+        release.set()
+        queue.close()
+
+
+def test_source_default_does_not_override_unavailable_or_invent_cpu() -> None:
+    assert source_verification_capacities({}) == {"source-io": 2}
+    configured = {"cpu": 0, "source-io": 0, "gpu": 1}
+    assert source_verification_capacities(configured) == configured
+    assert source_verification_capacities({"cpu": 1}) == {
+        "cpu": 1,
+        "source-io": 2,
+    }

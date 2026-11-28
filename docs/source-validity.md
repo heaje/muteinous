@@ -35,7 +35,17 @@ content. The worker rechecks that context before hashing and before returning re
 attest the selected assets as originals; paths and matching digests cannot
 establish provenance. Missing individual assets are isolated during hashing.
 The submitted asset selection and dependency maps are copied, not persisted.
-Numeric capacity defaults remain pending benchmark evidence and approval.
+When constructing the shared queue, use `source_verification_capacities`
+to supply a default `source-io` capacity of two. Each job still hashes its
+assets sequentially and consumes one shared CPU slot and one source-I/O slot;
+two independent jobs can run concurrently when both resources permit it.
+The helper preserves explicitly configured capacities (including zero), and
+does not invent a CPU capacity or change unrelated resources. Queue owners can
+also use the existing `set_capacity` override; persistence and settings UI
+remain later integration work. No independent worker pool is created.
+The two-worker default is an approved conservative starting point, not a
+hardware-specific optimum. Development benchmark measurements remain outstanding;
+user-requested calibration and automatic tuning are not part of this slice.
 
 Hashing compares path metadata with the opened file's metadata before reading,
 then compares size, modification time, available identity and byte count after

@@ -32,9 +32,19 @@ from muteinous.models.source import (
 _Result = TypeVar("_Result")
 SOURCE_RESOURCES = ("cpu", "source-io")
 SOURCE_BACKEND = "blake3"
+DEFAULT_SOURCE_IO_CAPACITY = 2
 # A caller-owned, read-only check of the resolved original-source context.
 # None means known originals; a reason means unavailable, replaced or ambiguous.
 OriginalCheck = Callable[[str, str, Path], str | None]
+
+
+def source_verification_capacities(capacities: Mapping[str, int]) -> dict[str, int]:
+    """Supply the source-I/O default when configuring the shared queue.
+
+    Explicit capacities, including zero (unavailable), take precedence.
+    CPU and other resource capacities remain the queue owner's responsibility.
+    """
+    return {"source-io": DEFAULT_SOURCE_IO_CAPACITY, **capacities}
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +92,9 @@ def submit_source_verification(
     The caller supplies a resolved original-source context and the complete
     plugin-owned asset associations. The check must attest the actual source
     selection, not infer provenance from a path or a matching digest. The
-    queue owner routes dispatch validation through validate_source_plan with
-    the same check. No original/backup discovery is performed here.
+    queue owner configures shared capacities with source_verification_capacities
+    and routes dispatch validation through validate_source_plan with the same
+    check. No original/backup discovery is performed here.
     """
     plan = JobPlan(
         provider,
