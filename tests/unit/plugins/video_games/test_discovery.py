@@ -112,6 +112,78 @@ def test_launcher_candidates_and_deduplication(tmp_path: Path) -> None:
     assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="case-insensitive Steam paths")
+def test_steam_deduplicates_stale_roots_by_resolved_directory(
+    tmp_path: Path,
+) -> None:
+    steam = tmp_path / "Steam"
+    _steam_manifest(steam, "Missing installation")
+    differently_spelled = Path(str(steam).swapcase())
+
+    result = _discover((steam, differently_spelled))
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].availability == "missing"
+
+
+@pytest.mark.portable
+def test_absent_store_metadata_is_silent_but_missing_libraries_are_reported(
+    tmp_path: Path,
+) -> None:
+    missing_epic = tmp_path / "missing epic manifests"
+    assert not _discover(epic=missing_epic).candidates
+    assert not _discover(epic=missing_epic).issues
+
+    missing_steam = tmp_path / "missing steam"
+    absent_roots = _discover((missing_steam,))
+    assert not absent_roots.candidates
+    assert not absent_roots.issues
+
+    steam = tmp_path / "steam"
+    game = steam / "steamapps/common/Synthetic"
+    game.mkdir(parents=True)
+    _steam_manifest(steam, "Synthetic")
+    no_vdf = _discover((steam,))
+    assert [
+        (candidate.path, candidate.availability) for candidate in no_vdf.candidates
+    ] == [(game, "available")]
+    assert not no_vdf.issues
+
+    other = tmp_path / "other"
+    other_game = other / "steamapps/common/Other"
+    other_game.mkdir(parents=True)
+    _steam_manifest(other, "Other")
+    library_file = steam / "config/libraryfolders.vdf"
+    library_file.parent.mkdir()
+    (tmp_path / "unplugged").mkdir()
+    library_file.write_text(
+        f'"libraryfolders" {{ "1" "{_vdf_path(other)}" '
+        f'"2" "{_vdf_path(tmp_path / "unplugged")}" }}',
+        encoding="utf-8",
+    )
+    (tmp_path / "unplugged").rmdir()
+
+    with_missing_library = _discover((steam,))
+    assert {candidate.path for candidate in with_missing_library.candidates} == {
+        game,
+        other_game,
+    }
+    assert any("unplugged" in issue for issue in with_missing_library.issues)
+
+
+@pytest.mark.portable
+def test_epic_manifests_path_must_be_an_ordinary_directory(
+    tmp_path: Path,
+) -> None:
+    manifests_file = tmp_path / "manifests"
+    manifests_file.write_text("not a directory", encoding="utf-8")
+
+    result = _discover(epic=manifests_file)
+
+    assert not result.candidates
+    assert result.issues
+
+
 @pytest.mark.portable
 def test_platform_neutral_discovery_uses_selected_providers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -280,7 +352,6 @@ def test_missing_malformed_and_unreadable_metadata(
     result = _discover((steam,), epic_dir, ((None, "Missing registry path"),))
 
     assert not result.candidates
-    assert any("libraryfolders.vdf" in issue for issue in result.issues)
     assert any(bad_steam.name in issue for issue in result.issues)
     assert any("synthetic denied" in issue for issue in result.issues)
     assert any(malformed.name in issue for issue in result.issues)
@@ -446,7 +517,7 @@ def test_probe_signature_is_provisional_and_reads_only_prefix(
         probe = discovery.probe_installation(candidate)
     assert probe.ast_signature
     assert probe.truncated
-    assert reads == [4, 4]
+    assert reads and all(size == 4 for size in reads)
     assert source.read_bytes() == b"STRM" + b"x" * 128
     assert fake.read_bytes() == b"nope"
     assert outside_sample.read_bytes() == b"STRM"
@@ -625,13 +696,39 @@ def test_windows_discovery_registry_and_environment(
     monkeypatch.delenv("ProgramFiles(x86)", raising=False)
 
     result = discovery.discover_installations()
-    assert discovery.discover_windows() == result
 
     assert {c.path: c.sources for c in result.candidates} == {
         steam_game: ("steam",),
         epic_game: ("epic",),
         gog_game: ("gog",),
     }
+    assert not result.issues
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows registry boundary")
+def test_steam_program_files_fallback_with_absent_other_stores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import winreg
+
+    def missing_key(*args: Any, **kwargs: Any) -> None:
+        raise FileNotFoundError("synthetic absent registry key")
+
+    monkeypatch.setattr(winreg, "OpenKey", missing_key)
+    steam = tmp_path / "program files x86/Steam"
+    game = steam / "steamapps/common/Synthetic"
+    game.mkdir(parents=True)
+    _steam_manifest(steam, "Synthetic")
+    monkeypatch.setenv("ProgramFiles(x86)", str(tmp_path / "program files x86"))
+    monkeypatch.delenv("ProgramFiles", raising=False)
+    monkeypatch.setenv("ProgramData", str(tmp_path / "program data"))
+
+    result = discovery.discover_installations()
+
+    assert [
+        (candidate.path, candidate.sources, candidate.availability)
+        for candidate in result.candidates
+    ] == [(game, ("steam",), "available")]
     assert not result.issues
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 from collections.abc import Callable
 from pathlib import Path
 from typing import override
@@ -41,6 +42,16 @@ class EpicProvider(InstallationProvider):
             source = self._windows_directory
         directory = source(state)
         if directory is None:
+            return
+        try:
+            info = directory.lstat()
+        except FileNotFoundError, NotADirectoryError:
+            return
+        except OSError as error:
+            state.issue(directory, str(error))
+            return
+        if not context._ordinary(info) or not stat.S_ISDIR(info.st_mode):
+            state.issue(directory, "metadata directory is not an ordinary directory")
             return
         for path in state.files(directory):
             if path.suffix.lower() != ".item":

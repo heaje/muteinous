@@ -18,6 +18,13 @@ from .base import InstallationProvider
 _TOKEN = re.compile(r'\s+|//[^\r\n]*|"(?:\\.|[^"\\]++)*+"|[{}]|[^\s{}"]+')
 
 
+def _directory_key(path: Path) -> str:
+    try:
+        return str(path.resolve(strict=True))
+    except OSError, RuntimeError, ValueError:
+        return str(path)
+
+
 def _tokens(text: str, cancelled: Cancel) -> Iterator[str]:
     position = 0
     while position < len(text):
@@ -101,17 +108,27 @@ class SteamProvider(InstallationProvider):
             if not context._valid_path(root):
                 state.issue("Steam root", "invalid library path")
                 continue
-            if str(root) in seen_roots:
+            try:
+                root.stat()
+            except FileNotFoundError, NotADirectoryError:
                 continue
-            seen_roots.add(str(root))
-            libraries[str(root)] = root
+            except OSError:
+                pass
+            root_key = _directory_key(root)
+            if root_key in seen_roots:
+                continue
+            seen_roots.add(root_key)
+            libraries[root_key] = root
             manifest = root / "config" / "libraryfolders.vdf"
             try:
                 try:
                     content = state.read(manifest)
-                except FileNotFoundError:
+                except FileNotFoundError, NotADirectoryError:
                     manifest = root / "steamapps" / "libraryfolders.vdf"
-                    content = state.read(manifest)
+                    try:
+                        content = state.read(manifest)
+                    except FileNotFoundError, NotADirectoryError:
+                        continue
                 values = context._object(
                     _keyvalues(content, state.cancelled)["libraryfolders"]
                 )
@@ -124,7 +141,7 @@ class SteamProvider(InstallationProvider):
                         Path(location)
                     ):
                         library = Path(location)
-                        libraries[str(library)] = library
+                        libraries[_directory_key(library)] = library
                     else:
                         state.issue(manifest, "invalid Steam library path")
             except (OSError, ValueError, KeyError) as error:
@@ -158,5 +175,5 @@ class SteamProvider(InstallationProvider):
         for variable in ("ProgramFiles(x86)", "ProgramFiles"):
             if program_files := os.environ.get(variable):
                 path = Path(program_files) / "Steam"
-                if context._valid_path(path) and path.is_dir():
+                if context._valid_path(path):
                     yield path

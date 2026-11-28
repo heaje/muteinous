@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from pathlib import Path
 
-from muteinous.infrastructure.platform.environment import CURRENT_OS, OperatingSystem
+from muteinous.infrastructure.platform.environment import CURRENT_OS
 
 from . import context, providers
 from .models import Cancel, DiscoveryResult
@@ -36,14 +36,6 @@ def discover_installations(
     state = context.DiscoveryContext(cancelled, os=CURRENT_OS)
     context._check(cancelled)
     return _discover(state, providers.built_in_providers())
-
-
-def discover_windows(*, cancelled: Cancel = context._never_cancel) -> DiscoveryResult:
-    """Compatibility entry point restricted to Windows launcher discovery."""
-    if CURRENT_OS != OperatingSystem.WINDOWS:
-        context._check(cancelled)
-        return DiscoveryResult((), ("Windows launcher discovery unavailable",), False)
-    return discover_installations(cancelled=cancelled)
 
 
 def select_folder(
