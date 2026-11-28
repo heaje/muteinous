@@ -73,14 +73,18 @@ def validate_licenses(wheel: Path, sdist: Path, root: Path) -> None:
         if message["License-Expression"] != "Apache-2.0":
             raise RuntimeError("Source distribution has incorrect license expression")
         if set(message.get_all("License-File", [])) != set(expected):
-            raise RuntimeError("Source distribution has incorrect license-file metadata")
+            raise RuntimeError(
+                "Source distribution has incorrect license-file metadata"
+            )
         for name, contents in expected.items():
             stream = archive.extractfile(f"{prefix}{name}")
             if stream is None:
                 raise RuntimeError(f"Source distribution has no readable {name}")
             with stream:
                 if stream.read() != contents:
-                    raise RuntimeError(f"Source distribution has incorrect {name} contents")
+                    raise RuntimeError(
+                        f"Source distribution has incorrect {name} contents"
+                    )
 
 
 def main() -> None:
