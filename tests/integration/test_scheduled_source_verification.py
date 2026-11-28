@@ -13,6 +13,7 @@ from muteinous.infrastructure.sources import scheduled
 from muteinous.infrastructure.sources.fingerprints import (
     UnstableSourceError,
     fingerprint_assets,
+    fingerprint_file,
 )
 from muteinous.infrastructure.sources.scheduled import (
     OriginalCheck,
@@ -149,7 +150,7 @@ def test_cancellation_holds_both_resources_until_physical_stop(
     previous = fingerprint_assets({asset: path})
     dependencies = {"segment": frozenset({asset})}
     entered, release = Event(), Event()
-    original = scheduled.fingerprint_file
+    original = fingerprint_file
 
     def blocked(
         path: Path,
@@ -229,7 +230,7 @@ def test_attributable_failure_preserves_independent_result(
         "failed": frozenset({failed}),
         "stable": frozenset({stable}),
     }
-    original = scheduled.fingerprint_file
+    original = fingerprint_file
 
     def controlled(
         path: Path,
@@ -266,7 +267,7 @@ def test_unavailable_context_after_hash_rejects_results(
     previous = fingerprint_assets({asset: path})
     dependencies = {"segment": frozenset({asset})}
     unavailable = Event()
-    original = scheduled.fingerprint_file
+    original = fingerprint_file
 
     def check(provider: str, source_id: str, root: Path) -> str | None:
         if unavailable.is_set():
