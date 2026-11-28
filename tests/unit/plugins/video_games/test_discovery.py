@@ -555,10 +555,22 @@ def test_cancellation_during_discovery_and_probe(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows registry boundary")
+@pytest.mark.parametrize("is_64bit", [False, True], ids=["32-bit", "64-bit"])
 def test_windows_discovery_registry_and_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, is_64bit: bool
 ) -> None:
     import winreg
+
+    if is_64bit:
+        view = winreg.KEY_WOW64_64KEY
+        steam_hive = winreg.HKEY_LOCAL_MACHINE
+        steam_value = "InstallPath"
+        gog_hive = winreg.HKEY_CURRENT_USER
+    else:
+        view = winreg.KEY_WOW64_32KEY
+        steam_hive = winreg.HKEY_CURRENT_USER
+        steam_value = "SteamPath"
+        gog_hive = winreg.HKEY_LOCAL_MACHINE
 
     steam = tmp_path / "steam"
     steam_game = steam / "steamapps/common/Synthetic"
@@ -586,17 +598,11 @@ def test_windows_discovery_registry_and_environment(
 
     def open_key(hive: object, name: str, reserved: int, access: int) -> Key:
         assert not access & (winreg.KEY_SET_VALUE | winreg.KEY_CREATE_SUB_KEY)
-        if (
-            hive == winreg.HKEY_CURRENT_USER
-            and name == r"Software\Valve\Steam"
-            and access & winreg.KEY_WOW64_32KEY
-        ):
+        if not access & view:
+            raise FileNotFoundError(name)
+        if hive == steam_hive and name == r"Software\Valve\Steam":
             return Key("steam")
-        if (
-            hive == winreg.HKEY_LOCAL_MACHINE
-            and name == r"Software\GOG.com\Games"
-            and access & winreg.KEY_WOW64_32KEY
-        ):
+        if hive == gog_hive and name == r"Software\GOG.com\Games":
             return Key("gog")
         if isinstance(hive, Key) and hive.kind == "gog" and name == "1":
             return Key("game")
@@ -604,7 +610,7 @@ def test_windows_discovery_registry_and_environment(
 
     def query_value(state: context.DiscoveryContext, key: Key, name: str) -> str:
         values = {
-            ("steam", "SteamPath"): str(steam),
+            ("steam", steam_value): str(steam),
             ("game", "path"): str(gog_game),
             ("game", "gameName"): "Synthetic GOG",
         }
