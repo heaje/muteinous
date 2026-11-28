@@ -25,13 +25,28 @@ small files and a modest advantage for the largest tested small-file profile.
 Results are hardware/storage-specific and the benchmark's CPU competitor was
 synthetic, not a real application job. One hashing operation therefore has a
 clear bounded memory and thread budget, with no implicit fan-out that could
-multiply across concurrent callers. This does **not** establish an
-application-wide concurrency limit: when wired into jobs, the job owner must
-declare/occupy the appropriate queue resources for the complete physical hash
-work. Hashing is not a dispatch-time validator; validators remain quick and
-read-only, and queue resource occupancy lasts until the worker's physical
-operation stops. No future scan/job integration or speculative global
-semaphore is introduced here.
+multiply across concurrent callers. The narrow scheduled verification adapter in
+`infrastructure/sources/scheduled.py` submits sequential jobs with explicit
+`cpu` and `source-io` resources. The shared queue owns their capacities and
+holds both slots until physical work stops. Queue owners route dispatch
+validation through `validate_source_plan` with the caller's original-context
+check; validation checks location and resolved context, not asset metadata or
+content. The worker rechecks that context before hashing. The check must
+attest the selected assets as originals; paths and matching digests cannot
+establish provenance. Missing individual assets are isolated during hashing.
+The submitted asset selection and dependency maps are copied, not persisted.
+Numeric capacity defaults remain pending benchmark evidence and approval.
+
+Hashing compares path metadata with the opened file's metadata before reading,
+then compares size, modification time, available identity and byte count after
+reading and checks the path again after closing. Detectable changes reject the
+fingerprint. Check/open and check/return races and undetectable same-metadata
+changes remain possible; these checks are rejection evidence, not a snapshot.
+Cancellation is checked between reads and assets; blocked reads may delay
+physical termination. Byte progress is reported without a percentage; the
+asset count is the number attempted out of the supplied selection. Byte updates
+are throttled within a file. The existing queue rejects cancelled and late
+results. No retries or separate scheduler are introduced.
 
 ### Read size and buffer reuse
 
@@ -148,8 +163,8 @@ must be rejected by the caller. D14–D15 verified-original and backup access
 remain later M4 work. A source fingerprint is evidence of content validity
 only; it does not authorize installation or any write to user-owned content.
 
-This is a foundation only. Automatic rescanning, cache persistence, scan/preview
-workflow integration, native-format discovery/decoding, verified-original
+This is a narrow scheduled foundation only. Automatic rescanning, cache persistence,
+comprehensive scan/preview workflow integration, native-format discovery/decoding, verified-original
 resolution, installation-state management, and installation authorization are
 out of scope.
 

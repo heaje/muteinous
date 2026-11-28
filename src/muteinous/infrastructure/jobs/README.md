@@ -55,7 +55,9 @@ The [canonical decisions](../../../../docs/architecture/decisions.md) remain aut
 
 ## Remaining integration
 
-Real provider adapters and configuration/source validation, provider/model
+The narrow source verification adapter uses explicit CPU and source-I/O slots
+and caller-owned original-context validation (see [source validity](../../../../docs/source-validity.md)).
+Other provider adapters and configuration/source validation, provider/model
 safety limits and hardware-derived defaults (D90), alignment-specific budgets,
 retry and stale-result coordination (D77–D86/D102), stall warnings (D94), UI
 polling and user-facing status/actions, and application shutdown policy

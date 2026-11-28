@@ -1,8 +1,6 @@
-# Source fingerprint benchmark — Issue #17, Stage 1
+# Source fingerprint benchmark — historical #17 and #52
 
-**No production algorithm has been selected.** This benchmark is evidence for a
-maintainer recommendation only; explicit maintainer approval is required before
-choosing a default or adding any production hashing dependency. See [Issue
+**Historical note:** the original #17 experiment preceded the approved selection of BLAKE3. Production now uses locked BLAKE3 1.0.11, one internal thread and a 256 KiB buffer. #52 extends the harness to measure that implementation; numerical queue defaults remain unapproved. See [Issue
 #17](https://github.com/heaje/muteinous/issues/17), [source-validity amendment
 and D10–D15/D20](../../docs/architecture/decisions.md#amendment-2026-11-25-source-validity).
 
@@ -100,8 +98,7 @@ checksums across configurations. Runs 1–4 were checked offline across
 configurations and invocations; run 5 uses the finalized harness's in-run
 digest check.
 
-Fixtures larger than total RAM are labeled `cold` (working set larger than
-RAM, not hardware cache eviction); the 10 GB fixture is `cold` only when
+**Historical classification, not valid cold-cache evidence:** fixtures larger than total RAM were labeled `cold` (working set larger than RAM, not hardware cache eviction); the 10 GB fixture is `cold` only when
 available RAM is below 10 GB. Other workloads are labeled `warm` after
 pre-reading. The initial full run took its cache classification and initial
 pre-read at workload start, then recorded available RAM in each trial row
@@ -369,3 +366,55 @@ competitor-contended supplement must be interpreted by `run_id`; do not merge
 repeats across runs as if they were one controlled invocation. Do not begin
 Stage 2, add production dependencies, select an algorithm, merge the PR or
 close #17 as part of this benchmark.
+
+
+## #52 benchmark extension (unmeasured checkpoint)
+
+Use the locked project environment, with benchmark-only psutil installed into a
+separate environment using the locked production package, or an isolated
+benchmark environment with the same source revision on PYTHONPATH and the exact
+locked BLAKE3. Record the exact SHA, tool versions, filesystem/storage and host
+details, power/cache conditions and commands. New flags require explicit
+`--filesystem` and `--hardware` metadata.
+
+Example warm pre-read command (replace scratch/hardware/filesystem labels with
+actual values; use separate runs for each size and worker count where space is
+limited):
+
+~~~sh
+python benchmarks/fingerprinting/benchmark.py --scratch /scratch/fingerprints \
+  --storage 'actual device' --filesystem 'actual filesystem' --hardware 'actual CPU/OS' \
+  --algorithms production-blake3 blake3 --large-mb 100 1000 10000 \
+  --large-assets 4 --workers 1 2 4 8 --repeats 3
+~~~
+
+Use `--large-mb 50000` for a 50 GB asset and `--large-assets N` for N distinct
+large files of each requested size. Scratch needs N times each file size plus
+margin. Single-file workloads cannot measure concurrent independent file
+workers; omit configurations with more workers than files. Default worker
+candidates are 1, 2, 4, 8 and reported logical CPU count, deduplicated; record
+affinity/CPU limits too. Isolated BLAKE3 internal-thread configurations remain
+separate from the production one-thread-per-file configuration. The production
+benchmark calls the real fingerprint function; the benchmark's thread pool is
+not the application's shared queue. Summary rows include median/min/max rates.
+The CPU time includes the sampler and competitor; RSS and thread peaks are
+sampled, not exhaustive. Short single-pass cold runs can be noisy.
+
+Warm preparation is a pre-read, not a guarantee of residency; workloads exceeding
+available memory are labelled capacity-limited/uncontrolled. Historical `cold`
+rows are not genuine cold measurements. For cold trials, only after separate
+authorization where needed, supply `--eviction-argv` as a JSON argv array for a
+documented OS eviction procedure and `--eviction-method` describing validation
+of that procedure. The command executes without a shell before every timed
+single-pass trial, after fixture generation and any earlier trial. Nonzero exit
+aborts the run. The harness labels these rows `cold-eviction-reported`: successful
+command completion is not proof of actual cache eviction. The operator must
+verify effectiveness with appropriate OS evidence, record exact commands and
+limitations, and distinguish OS page cache from hardware/controller caching.
+No privileged operation is enabled automatically. Cold trials skip the repeated
+read-only baseline. Repeated warm reads must never be counted as cold.
+
+No new measurements are claimed at this checkpoint. Native Windows, Linux and
+macOS workloads, genuine cold conditions, competitor slowdown and the numerical
+hardware recommendation remain outstanding. Prior Windows warm and WSL2 data
+are historical and do not support a universal worker default.
